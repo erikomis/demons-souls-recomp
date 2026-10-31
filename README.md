@@ -9,10 +9,19 @@ It is not an emulator: the game's code runs as a normal x64 program.
 > need your own copy of the game, dumped from your own disc. The setup reads your disc image and
 > builds everything on your PC.
 
-**State:** playable in the areas tested so far (tutorial, Nexus, Boletarian Palace, with quick
-visits to Stonefang Tunnel, Tower of Latria and others), with sound and music, at 60 fps (or 50 on a 100 Hz screen, 30, or uncapped), with
-keyboard + mouse or an Xbox controller. Intro movies are skipped and there is no online play.
-See [docs/NOTES.md](docs/NOTES.md) for the full development log (50 fixes and counting).
+## Status
+
+**The entire game seems playable.** It runs with sound and music at 60 fps (or 50 on a 100 Hz
+screen, 30, or uncapped), with keyboard + mouse or an Xbox controller. Intro movies are skipped and
+there is no online play.
+
+I'm currently playing through the whole game to find and fix any spots that still run slower
+than they should (stutters, frame drops in heavy scenes). Boletarian Palace, the heaviest area
+tested so far, is already smooth. Expect more performance fixes as the playthrough goes on; see
+[docs/NOTES.md](docs/NOTES.md) for the full development log (50 fixes and counting).
+
+If you hit a stutter, run `PLAY_RECORD.bat`, press **F8** right after it happens, and open an
+issue with the `perf\<date>\perf.txt` it saves.
 
 ## What you need
 
