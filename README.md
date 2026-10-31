@@ -12,7 +12,7 @@ It is not an emulator: the game's code runs as a normal x64 program.
 ## Status
 
 **The entire game seems playable.** It runs with sound and music at 60 fps (or 50 on a 100 Hz
-screen, 30, or uncapped), with keyboard + mouse or an Xbox controller. Intro movies are skipped and
+screen, 30, uncapped, or any frame rate you pick), with keyboard + mouse or an Xbox controller. Intro movies are skipped and
 there is no online play.
 
 I'm currently playing through the whole game to find and fix any spots that still run slower
@@ -20,8 +20,9 @@ than they should (stutters, frame drops in heavy scenes). Boletarian Palace, the
 tested so far, is already smooth. Expect more performance fixes as the playthrough goes on; see
 [docs/NOTES.md](docs/NOTES.md) for the full development log (50 fixes and counting).
 
-If you hit a stutter, run `PLAY_RECORD.bat`, press **F8** right after it happens, and open an
-issue with the `perf\<date>\perf.txt` it saves.
+If you hit a stutter or a crash, please report it: see
+[Reporting stutters and crashes](#reporting-stutters-and-crashes). Every run is recorded, so all it
+takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
 
 ## What you need
 
@@ -66,8 +67,15 @@ Double-click **`PLAY.bat`**. The logos and first load take about a minute.
 | `PLAY_30FPS.bat` | the original 30 fps |
 | `PLAY_50FPS.bat` | 50 fps locked to a 100 Hz screen |
 | `PLAY_UNLIMITED.bat` | uncapped (up to 240 fps), no vsync, game speed stays correct |
-| `PLAY_RECORD.bat` | plays normally and records frame timing; press **F8** at a stutter (see `tools/perf_report.py`) |
+| `PLAY_CHOOSE_FPS.bat` | a menu of the above, plus **any frame rate you type in** (31–240) |
 | `PLAY_REMASTER.bat` | runs with the *PC Remaster* mod installed (see below) |
+
+**Custom frame rate.** `PLAY_CHOOSE_FPS.bat` → *6* → type a number, e.g. 45, 72, 120 or 144. The game
+runs at real speed at any of them. If your monitor's refresh rate is a whole multiple of the number
+(72 or 144 on a 144 Hz screen, 40 or 120 on 120 Hz), every frame is shown for the same number of
+refreshes and motion is perfectly even. Otherwise vsync is turned off, which looks fine on a
+G-Sync / FreeSync screen but can tear on others. The launcher says which one you got. You can also
+`set DES_FPS=<number>` before running `PLAY.bat`.
 
 **Controls.** An Xbox (XInput) controller works when plugged in (A = Cross, B = Circle, X = Square,
 Y = Triangle, LB/RB = L1/R1, LT/RT = L2/R2, Back = Select). A DualShock/DualSense needs Steam Input or
@@ -94,6 +102,31 @@ DS4Windows. Keyboard + mouse:
 At *Create Profile* a text box opens for the character name. Saves go to `gamedata/`. Each run
 writes logs to `logs/` (they grow by ~600 MB an hour; the previous run is kept as `*_prev.txt`).
 
+## Reporting stutters and crashes
+
+Every launcher records frame timing while you play (about 25 MB an hour, no visible cost; the newest
+10 sessions are kept in `perf\`). The window title shows `[RECORDING - F8 = stutter, N marked]`.
+
+1. **Press F8** in the game right after you see a stutter, hitch or slowdown. Each press puts a mark
+   in the recording at that moment, so the exact frames can be found later. Press it as often as you
+   like.
+2. **After you quit** (or right after a crash), double-click **`REPORT.bat`**. It packs the last
+   session into one zip, shows it in Explorer and opens the GitHub *New issue* page.
+3. **Open an issue** with the *Stutter / slowdown* or *Crash / bug* template, **drag the zip into
+   it**, and say where you were in the game and what you saw at each F8 press.
+
+What the zip contains (nothing else, and your Windows user name is removed from all of it):
+
+| file | what it is |
+|---|---|
+| `report.txt` | the summary from `tools/perf_report.py`: frame pacing, every hitch with its likely cause (a slow game step, shader compile, slow file read, the renderer, the GPU), and what happened just before each F8 mark |
+| `perf.txt` | the recording itself, so we can dig into the exact frames (trimmed to the minutes around your F8 marks if the session is too long for GitHub's 25 MB limit) |
+| `system.txt` | Windows version, CPU, RAM, GPU + driver, monitor resolution / refresh, the frame-rate setting and which version of this port you built |
+| `log_tail.txt` | the last 400 lines of the game's log, from the same session (shows what it was doing if it crashed) |
+
+Curious yourself? `.venv\Scripts\python tools\perf_report.py` prints the same summary for your newest
+recording. To play without recording, `set DES_RECORD=0` before running a launcher.
+
 ## Optional: PC Remaster mod
 
 The *Demon's Souls PC Remaster* mod by fromsoftserve (Nexus Mods, Demon's Souls mod 106)
@@ -111,13 +144,14 @@ files swapped in. Your normal `game/` is not changed. Play with `PLAY_REMASTER.b
 ```
 SETUP.bat / BUILD.bat        one-time setup / rebuild after code changes
 PLAY*.bat                    launchers (environment switches documented inside PLAY.bat)
+REPORT.bat                   packs the last session into a zip for a GitHub issue
 setup/setup.py, build.py     the setup pipeline and the toolchain finder + build
 project/                     CMake project: CMakeLists.txt, main.cpp, stubs.cpp
 patches/ps3recomp-local.patch   this port's changes to the ps3recomp runtime/renderer (applied to
                                 ps3recomp @ 4e8f3ca, v0.18.0)
 patches/lifted-code.patch    this port's edits to the recompiled game code (frame pacing, 60 fps
                              step, god mode, test hooks)
-tools/                       disc extraction, UDF names, SPURS job lifting, perf report, mod installer
+tools/                       disc extraction, UDF names, SPURS job lifting, perf report + issue zip, mod installer
 docs/NOTES.md                development log: every fix, why, and how it was measured
 ```
 

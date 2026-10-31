@@ -1,6 +1,6 @@
-"""Stutter report for a PLAY_DEMONS_SOULS_RECORD.bat run (NOTES fix 46).
+"""Stutter report for a recorded run (PLAY.bat records every run) (NOTES fix 46).
 
-usage: perf_report.py [perf.txt | run folder]   (default: the newest DemonsSouls\\perf\\<run>)
+usage: perf_report.py [perf.txt | run folder]   (default: the newest perf\\<run>)
        options: --from SEC --to SEC (seconds from the start of the log), --top N
 
 The log (LD_PRESENT_LOG + DES_PERF) has two kinds of lines, all on one microsecond clock:
@@ -55,7 +55,7 @@ def main():
     if not path:
         runs = sorted(glob.glob(os.path.join(here, '..', 'perf', '*', 'perf.txt')))
         if not runs:
-            sys.exit('no recordings in DemonsSouls\\perf')
+            sys.exit('no recordings in perf\\ yet (PLAY.bat records every run)')
         path = runs[-1]
     if os.path.isdir(path):
         path = os.path.join(path, 'perf.txt')
