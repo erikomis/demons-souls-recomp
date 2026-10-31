@@ -1,0 +1,6 @@
+# Patches are applied byte for byte; never let git convert their line endings.
+*.patch -text
+# Batch files are stored with CRLF: cmd.exe mis-parses labels in LF batch files.
+*.bat   -text
+*.py    text eol=lf
+*.md    text eol=lf

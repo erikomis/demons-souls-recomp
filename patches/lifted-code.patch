@@ -1,0 +1,2549 @@
+diff -ruN a/recompiled/ppu_recomp_000.cpp b/recompiled/ppu_recomp_000.cpp
+--- a/recompiled/ppu_recomp_000.cpp	2026-10-31 08:09:10.043282700 -0700
++++ b/recompiled/ppu_recomp_000.cpp	2026-10-31 08:09:15.531322300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_001.cpp b/recompiled/ppu_recomp_001.cpp
+--- a/recompiled/ppu_recomp_001.cpp	2026-10-31 08:09:10.079316900 -0700
++++ b/recompiled/ppu_recomp_001.cpp	2026-10-31 08:09:15.577880500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_002.cpp b/recompiled/ppu_recomp_002.cpp
+--- a/recompiled/ppu_recomp_002.cpp	2026-10-31 08:09:10.117827800 -0700
++++ b/recompiled/ppu_recomp_002.cpp	2026-10-31 08:09:15.623809600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_003.cpp b/recompiled/ppu_recomp_003.cpp
+--- a/recompiled/ppu_recomp_003.cpp	2026-10-31 08:09:10.152275900 -0700
++++ b/recompiled/ppu_recomp_003.cpp	2026-10-31 08:09:15.669335600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_004.cpp b/recompiled/ppu_recomp_004.cpp
+--- a/recompiled/ppu_recomp_004.cpp	2026-10-31 08:09:10.185071800 -0700
++++ b/recompiled/ppu_recomp_004.cpp	2026-10-31 08:09:15.713367800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_005.cpp b/recompiled/ppu_recomp_005.cpp
+--- a/recompiled/ppu_recomp_005.cpp	2026-10-31 08:09:10.221200500 -0700
++++ b/recompiled/ppu_recomp_005.cpp	2026-10-31 08:09:15.759639600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_006.cpp b/recompiled/ppu_recomp_006.cpp
+--- a/recompiled/ppu_recomp_006.cpp	2026-10-31 08:09:10.265578900 -0700
++++ b/recompiled/ppu_recomp_006.cpp	2026-10-31 08:09:15.809250700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_007.cpp b/recompiled/ppu_recomp_007.cpp
+--- a/recompiled/ppu_recomp_007.cpp	2026-10-31 08:09:10.299147300 -0700
++++ b/recompiled/ppu_recomp_007.cpp	2026-10-31 08:09:15.852067100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_008.cpp b/recompiled/ppu_recomp_008.cpp
+--- a/recompiled/ppu_recomp_008.cpp	2026-10-31 08:09:10.340145900 -0700
++++ b/recompiled/ppu_recomp_008.cpp	2026-10-31 08:09:15.897815300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_009.cpp b/recompiled/ppu_recomp_009.cpp
+--- a/recompiled/ppu_recomp_009.cpp	2026-10-31 08:09:10.382355200 -0700
++++ b/recompiled/ppu_recomp_009.cpp	2026-10-31 08:09:15.941515200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
+--- a/recompiled/ppu_recomp_010.cpp	2026-10-31 08:09:10.418285100 -0700
++++ b/recompiled/ppu_recomp_010.cpp	2026-10-31 08:09:15.984900100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_011.cpp b/recompiled/ppu_recomp_011.cpp
+--- a/recompiled/ppu_recomp_011.cpp	2026-10-31 08:09:10.451952400 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-10-31 08:09:16.032192200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -38897,8 +38899,176 @@
+         return;
+ }
+ 
++extern "C" unsigned long long ps3_qpc_us(void);   /* cellGcmSys.c (DES_STEP_STATS) */
++extern "C" int ps3_host_hotkey(int vk);              /* cellPad.c (god mode toggle) */
++extern "C" void ps3_host_title_suffix(const char* s);
++extern "C" void ps3_perf_note(const char* fmt, ...);   /* rsx_live_draw.c (DES_PERF) */
++extern "C" int ps3_host_pad_debug(int* rx, int* ry, int* polls, int* mdx, int* mdy);   /* cellPad.c */
++extern "C" unsigned long long ps3_thread_cpu_us(void);   /* rsx_live_draw.c */
++extern "C" void ps3_perf_step_begin(void);               /* rsx_live_draw.c (DES_PERF_STACKS) */
++extern "C" __declspec(dllimport) void __stdcall Sleep(unsigned long ms);   /* kernel32 (DES_HITCH_AT) */
++/* The window title's suffix: god mode (fix 44) and the stutter recording (fix 46). */
++static int g_des_title_god, g_des_title_marks = -1;   /* marks -1 = not recording */
++static void des_title(void) {
++    char s[128]; s[0] = 0;
++    if (g_des_title_god) strcat(s, "  [GOD MODE - F9]");
++    if (g_des_title_marks >= 0) snprintf(s + strlen(s), sizeof s - strlen(s), "  [RECORDING - F8 = stutter, %d marked]", g_des_title_marks);
++    ps3_host_title_suffix(s);
++}
+ void func_0001B8D0(ppu_context* ctx) {
+     PPU_MM_SNAP
++    /* DES_STEP_STATS=1 (PORT DEBUG): this is the game's per-step update; every 5 s print steps per
++     * real second and game seconds per real second (steps * the step float at 0x018C8DB4). */
++    { static int on = -1; static unsigned long long t0, n0; static unsigned long long n;
++      if (on < 0) on = getenv("DES_STEP_STATS") ? 1 : 0;
++      if (on) { const unsigned long long t = ps3_qpc_us(); n++;
++        if (!t0) { t0 = t; n0 = n; }
++        else if (t - t0 >= 5000000ull) {
++          const uint32_t w = vm_read32(0x018C8DB4); float step; memcpy(&step, &w, 4);
++          const double secs = (double)(t - t0) / 1e6, steps = (double)(n - n0);
++          fprintf(stderr, "[des] steps %.1f/s, game time %.3f s per real s (step %.5f)\n",
++                  steps / secs, steps * step / secs, step);
++          t0 = t; n0 = n; } } }
++    /* God mode (PORT PATCH): F9 in the game window toggles it, DES_GOD=1 starts with it on.
++     * While on, every step the player (character 10000) gets the flag the event scripts set with
++     * SetDeadMode(10000, true) -- "the player does not die" (bit 0x10 of the flags at chr+0x310) --
++     * and HP (+0x3C4, max +0x3C8) / MP (+0x3CC, max +0x3D0) / stamina (+0x3D4, max +0x3D8)
++     * are refilled to their maximum. The character comes from the lookup every lua
++     * binding uses (func_004142A8 on the object at TOC[-0x7884][-0x7F0C]). NOTES fix 44.
++     * DES_GOD_DUMP=1 (PORT DEBUG): print the player's words chr+0x380..0x47C every 5 s. */
++    { static int god = -1, clear_flag = 0, dump = -1; static unsigned long long dump_t;
++      if (god < 0) { const char* e = getenv("DES_GOD"); god = (e && *e == '1') ? 1 : 0;
++                     const char* d = getenv("DES_GOD_DUMP"); dump = d ? 1 : 0;
++                     if (god) { fprintf(stderr, "[des] god mode ON (DES_GOD)\n"); g_des_title_god = 1; des_title(); } }
++      if (ps3_host_hotkey(0x78 /* VK_F9 */)) {
++          god = !god; if (!god) clear_flag = 1;
++          fprintf(stderr, "[des] god mode %s (F9)\n", god ? "ON" : "OFF");
++          g_des_title_god = god; des_title(); }
++      const int want_dump = dump && ps3_qpc_us() - dump_t >= 5000000ull;
++      if (god || clear_flag || want_dump) {
++          const uint32_t toc = vm_read32((uint32_t)ctx->gpr[2] - 0x7884);
++          const uint32_t pp = toc ? vm_read32(toc - 0x7F0C) : 0;
++          const uint32_t obj = pp ? vm_read32(pp) : 0;
++          uint32_t chr = 0;
++          if (obj) {
++              ppu_context save = *ctx;
++              ctx->gpr[3] = obj; ctx->gpr[4] = 10000; ctx->gpr[5] = 0; ctx->gpr[6] = 0;
++              ctx->lr = 0x0001B8D0; func_004142A8(ctx); DRAIN_TRAMPOLINE(ctx);
++              chr = (uint32_t)ctx->gpr[3];
++              *ctx = save; }
++          if (chr) {
++              const uint64_t fl = vm_read64(chr + 0x310);
++              if (god) {
++                  if (!(fl & 0x10)) vm_write64(chr + 0x310, fl | 0x10);
++                  const int32_t hp = (int32_t)vm_read32(chr + 0x3C4), hp_max = (int32_t)vm_read32(chr + 0x3C8);
++                  if (hp > 0 && hp < hp_max) vm_write32(chr + 0x3C4, (uint32_t)hp_max);
++                  const int32_t mp = (int32_t)vm_read32(chr + 0x3CC), mp_max = (int32_t)vm_read32(chr + 0x3D0);
++                  if (mp >= 0 && mp < mp_max) vm_write32(chr + 0x3CC, (uint32_t)mp_max);
++                  const int32_t sp = (int32_t)vm_read32(chr + 0x3D4), sp_max = (int32_t)vm_read32(chr + 0x3D8);
++                  if (sp < sp_max) vm_write32(chr + 0x3D4, (uint32_t)sp_max);
++              } else if (clear_flag) { vm_write64(chr + 0x310, fl & ~0x10ull); clear_flag = 0; }
++              if (want_dump) { dump_t = ps3_qpc_us();
++                  fprintf(stderr, "[des] player chr %08X:", chr);
++                  for (uint32_t o = 0x380; o < 0x480; o += 4) fprintf(stderr, "%s%03X=%d", o % 0x20 ? " " : "\n  ", o, (int32_t)vm_read32(chr + o));
++                  fprintf(stderr, "\n"); }
++          } else if (clear_flag) clear_flag = 0; } }
++    /* DES_WARP_AT=<sec>:<area>,<block>,<point> (PORT DEBUG): at <sec> seconds after the first step,
++     * request the stage change the event scripts' proxy:WarpNextStage(area, block, 0, 0, point) does
++     * (lua_WarpNextStage 0x451430 -> 0x20D468 / 0x20D4A8 / 0x20D5A8: map id (area<<24 | block<<16),
++     * spawn point and the request byte of the stage manager). Archstone starts: 2,0,999 (1-1) ...
++     * 6,0,999 (5-1); see SCRIPT/m01_00_00_00.lua OnEvent_N_2. For test runs only. */
++    { static int on = -1; static unsigned long long t_at; static uint32_t map_id, point;
++      if (on < 0) { const char* e = getenv("DES_WARP_AT"); double sec; unsigned ar, bl; int pt; on = 0;
++                    if (e && sscanf(e, "%lf:%u,%u,%d", &sec, &ar, &bl, &pt) == 4) {
++                      on = 1; t_at = ps3_qpc_us() + (unsigned long long)(sec * 1e6);
++                      map_id = (ar << 24) | (bl << 16); point = (uint32_t)pt; } }
++      if (on && ps3_qpc_us() >= t_at) {
++        const uint32_t p0 = vm_read32((uint32_t)ctx->gpr[2] - 0x7B44);
++        const uint32_t p1 = vm_read32(p0 - 0x7FFC), mgr = p1 ? vm_read32(p1) : 0;
++        if (mgr) { vm_write32(mgr + 0x8, map_id); vm_write32(mgr + 0xC, point); vm_write8(mgr + 0x4, 1);
++                   fprintf(stderr, "[des] warp request map %08X point %d (stage manager %08X)\n",
++                           map_id, (int)point, mgr); on = 0; } } }
++    /* DES_PERF=1 (PORT DEBUG, PLAY_DEMONS_SOULS_RECORD.bat): every step goes to the perf log
++     * (LD_PRESENT_LOG, rsx_live_draw.c) as "# <us> step <step s> <right stick x> <y> <pad: 1 XInput,
++     * 2 keyboard+mouse> <host pad polls> <mouse dx> <dy> <CPU us this thread used since the
++     * previous step>", and F8 in the game window adds
++     * "# <us> mark <n>" -- the player presses it right after a stutter. The title counts the
++     * marks. DemonsSouls/tools/perf_report.py reads the log. NOTES fix 46. */
++    { static int on = -1;
++      if (on < 0) { const char* e = getenv("DES_PERF"); on = (e && *e == '1') ? 1 : 0;
++                    if (on) { g_des_title_marks = 0; des_title();
++                              fprintf(stderr, "[des] perf recording on (F8 marks a stutter)\n"); } }
++      if (on) {
++          ps3_perf_step_begin();   /* DES_PERF_STACKS=1: stack samples of steps that run late */
++          static int said;
++          if (!said) { said = 1;
++              const char* v[] = { "DES_FPS", "PS3_VBLANK_HZ", "PS3_CLOCK_SCALE", "LD_PRESENT_INTERVAL",
++                                  "LD_PRESENT_PACE", "DES_GAME", "DES_REFRESH" };
++              char info[512]; info[0] = 0;
++              for (unsigned i = 0; i < sizeof v / sizeof v[0]; i++) { const char* x = getenv(v[i]);
++                  snprintf(info + strlen(info), sizeof info - strlen(info), " %s=%s", v[i], x && *x ? x : "-"); }
++              ps3_perf_note("info%s", info); }
++          const uint32_t w = vm_read32(0x018C8DB4); float st; memcpy(&st, &w, 4);
++          int rx, ry, polls, mdx, mdy;
++          const int src = ps3_host_pad_debug(&rx, &ry, &polls, &mdx, &mdy);
++          static unsigned long long cpu_last;
++          const unsigned long long cpu = ps3_thread_cpu_us();
++          ps3_perf_note("step %.5f %d %d %d %d %d %d %llu", st, rx, ry, src, polls, mdx, mdy,
++                        cpu_last ? cpu - cpu_last : 0ull);
++          cpu_last = cpu;
++          if (ps3_host_hotkey(0x77 /* VK_F8 */)) {
++              g_des_title_marks++; des_title();
++              ps3_perf_note("mark %d", g_des_title_marks);
++              fprintf(stderr, "[des] perf mark %d (F8)\n", g_des_title_marks); } } }
++    /* DES_HITCH_AT=<s>:<ms>[,<s>:<ms>...] (PORT DEBUG): stall this step <ms> ms once, <s> seconds after
++     * the first step -- a repeatable stand-in for a slow step (shader compile, OS hiccup), to watch how
++     * the frame loop recovers from one. NOTES fix 50. */
++    { static int n = -1; static double at[8]; static int ms[8]; static unsigned long long t0;
++      if (n < 0) { n = 0; const char* e = getenv("DES_HITCH_AT");
++                   while (e && *e && n < 8) { double a = atof(e); const char* c = strchr(e, ':');
++                       if (!c) break; at[n] = a; ms[n] = atoi(c + 1); n++;
++                       e = strchr(c, ','); if (e) e++; } }
++      if (n > 0) { const unsigned long long t = ps3_qpc_us(); if (!t0) t0 = t;
++          for (int i = 0; i < n; i++)
++              if (ms[i] > 0 && (double)(t - t0) / 1e6 >= at[i]) {
++                  ps3_perf_note("hitch %d", ms[i]); Sleep((unsigned long)ms[i]); ms[i] = 0; } } }
++    /* DES_STEP_LOG=<file> (PORT DEBUG): "<us> <step>" for every step from DES_STEP_LOG_FROM seconds
++     * (default 180) for 60 s -- with LD_PRESENT_LOG, what each displayed frame advanced. */
++    { static int on = -1; static FILE* f; static unsigned long long t_from, t_end;
++      if (on < 0) { const char* e = getenv("DES_STEP_LOG"); on = e ? 1 : 0;
++                    if (on) { f = fopen(e, "w"); on = f ? 1 : 0; } }
++      if (on) { const unsigned long long t = ps3_qpc_us();
++        if (!t_from) { const char* e = getenv("DES_STEP_LOG_FROM"); t_from = t + (unsigned long long)((e ? atof(e) : 180.0) * 1e6); t_end = t_from + 60000000ull; }
++        if (t >= t_from && t < t_end) { const uint32_t w = vm_read32(0x018C8DB4); float st; memcpy(&st, &w, 4);
++          fprintf(f, "%llu %.6f\n", t, st); }
++        else if (t >= t_end) { fclose(f); on = 0; } } }
++    /* Adaptive step (PORT PATCH, 60 fps mode; DES_ADAPTIVE_STEP=0 = off): the 60 fps patch makes
++     * every step 1/60 s, so where the PC manages fewer than 60 steps a second the whole game runs
++     * in slow motion (Boletarian Palace: ~40 steps/s = 0.66 game seconds per second). Set the step
++     * to the real time a step takes, averaged over the last 24 steps (the game's own catch-up
++     * steps are in that average) and kept between 1/60 and 1/30 s -- the two steps the game was
++     * made for. Game time then runs at real speed anywhere from 30 to 60 fps. NOTES fix 33. */
++    { static int on = -1; static unsigned long long ring[24]; static unsigned n_ring, at; static float cur;
++      if (on < 0) { const char* e = getenv("DES_60FPS"); const char* a = getenv("DES_ADAPTIVE_STEP");
++                    on = (e && *e == '1' && !(a && *a == '0')) ? 1 : 0; }
++      if (on) {
++          const unsigned long long t = ps3_qpc_us();
++          const unsigned long long oldest = n_ring == 24 ? ring[at] : (n_ring ? ring[0] : t);
++          const unsigned m = n_ring;   /* stored steps = intervals between the oldest and now */
++          ring[at] = t; at = (at + 1) % 24; if (n_ring < 24) n_ring++;
++          if (m >= 8) {
++              float target = (float)((double)(t - oldest) / 1e6 / (double)m);
++              /* DES_MAX_FPS=<n> (default 60): the shortest step is 1/n s, so an uncapped run
++               * (PLAY_DEMONS_SOULS_UNLIMITED.bat) keeps real speed above 60 fps. NOTES fix 43. */
++              static float floor_s = 0.0f;
++              if (floor_s == 0.0f) { const char* e = getenv("DES_MAX_FPS"); const double n = e ? atof(e) : 60.0;
++                                     floor_s = (float)(1.0 / (n >= 30.0 && n <= 1000.0 ? n : 60.0)); }
++              if (target < floor_s) target = floor_s;
++              if (target > 1.0f / 30.0f) target = 1.0f / 30.0f;
++              cur = cur > 0.0f ? cur + 0.25f * (target - cur) : target;
++              uint32_t w; memcpy(&w, &cur, 4);
++              vm_write32(0x018C8DB4, w);
++          } } }
+         uint64_t _cs_29 = ctx->gpr[29];
+         uint64_t _cs_30 = ctx->gpr[30];
+         uint64_t _cs_31 = ctx->gpr[31];
+diff -ruN a/recompiled/ppu_recomp_012.cpp b/recompiled/ppu_recomp_012.cpp
+--- a/recompiled/ppu_recomp_012.cpp	2026-10-31 08:09:10.493501400 -0700
++++ b/recompiled/ppu_recomp_012.cpp	2026-10-31 08:09:16.083638500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_013.cpp b/recompiled/ppu_recomp_013.cpp
+--- a/recompiled/ppu_recomp_013.cpp	2026-10-31 08:09:10.529943400 -0700
++++ b/recompiled/ppu_recomp_013.cpp	2026-10-31 08:09:16.132503800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_014.cpp b/recompiled/ppu_recomp_014.cpp
+--- a/recompiled/ppu_recomp_014.cpp	2026-10-31 08:09:10.569222100 -0700
++++ b/recompiled/ppu_recomp_014.cpp	2026-10-31 08:09:16.183433700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_015.cpp b/recompiled/ppu_recomp_015.cpp
+--- a/recompiled/ppu_recomp_015.cpp	2026-10-31 08:09:10.605819100 -0700
++++ b/recompiled/ppu_recomp_015.cpp	2026-10-31 08:09:16.230130800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_016.cpp b/recompiled/ppu_recomp_016.cpp
+--- a/recompiled/ppu_recomp_016.cpp	2026-10-31 08:09:10.647570800 -0700
++++ b/recompiled/ppu_recomp_016.cpp	2026-10-31 08:09:16.278803100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_017.cpp b/recompiled/ppu_recomp_017.cpp
+--- a/recompiled/ppu_recomp_017.cpp	2026-10-31 08:09:10.689664500 -0700
++++ b/recompiled/ppu_recomp_017.cpp	2026-10-31 08:09:16.326900900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_018.cpp b/recompiled/ppu_recomp_018.cpp
+--- a/recompiled/ppu_recomp_018.cpp	2026-10-31 08:09:10.725627300 -0700
++++ b/recompiled/ppu_recomp_018.cpp	2026-10-31 08:09:16.373039000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_019.cpp b/recompiled/ppu_recomp_019.cpp
+--- a/recompiled/ppu_recomp_019.cpp	2026-10-31 08:09:10.760296500 -0700
++++ b/recompiled/ppu_recomp_019.cpp	2026-10-31 08:09:16.419155200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_020.cpp b/recompiled/ppu_recomp_020.cpp
+--- a/recompiled/ppu_recomp_020.cpp	2026-10-31 08:09:10.797354000 -0700
++++ b/recompiled/ppu_recomp_020.cpp	2026-10-31 08:09:16.464832500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_021.cpp b/recompiled/ppu_recomp_021.cpp
+--- a/recompiled/ppu_recomp_021.cpp	2026-10-31 08:09:10.833303300 -0700
++++ b/recompiled/ppu_recomp_021.cpp	2026-10-31 08:09:16.511581800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_022.cpp b/recompiled/ppu_recomp_022.cpp
+--- a/recompiled/ppu_recomp_022.cpp	2026-10-31 08:09:10.869889900 -0700
++++ b/recompiled/ppu_recomp_022.cpp	2026-10-31 08:09:16.559187400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_023.cpp b/recompiled/ppu_recomp_023.cpp
+--- a/recompiled/ppu_recomp_023.cpp	2026-10-31 08:09:10.906163900 -0700
++++ b/recompiled/ppu_recomp_023.cpp	2026-10-31 08:09:16.607983400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_024.cpp b/recompiled/ppu_recomp_024.cpp
+--- a/recompiled/ppu_recomp_024.cpp	2026-10-31 08:09:10.941579000 -0700
++++ b/recompiled/ppu_recomp_024.cpp	2026-10-31 08:09:16.653709900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_025.cpp b/recompiled/ppu_recomp_025.cpp
+--- a/recompiled/ppu_recomp_025.cpp	2026-10-31 08:09:10.978163400 -0700
++++ b/recompiled/ppu_recomp_025.cpp	2026-10-31 08:09:16.696481000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_026.cpp b/recompiled/ppu_recomp_026.cpp
+--- a/recompiled/ppu_recomp_026.cpp	2026-10-31 08:09:11.014340400 -0700
++++ b/recompiled/ppu_recomp_026.cpp	2026-10-31 08:09:16.740200100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_027.cpp b/recompiled/ppu_recomp_027.cpp
+--- a/recompiled/ppu_recomp_027.cpp	2026-10-31 08:09:11.051243300 -0700
++++ b/recompiled/ppu_recomp_027.cpp	2026-10-31 08:09:16.787079000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_028.cpp b/recompiled/ppu_recomp_028.cpp
+--- a/recompiled/ppu_recomp_028.cpp	2026-10-31 08:09:11.087992400 -0700
++++ b/recompiled/ppu_recomp_028.cpp	2026-10-31 08:09:16.833785200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_029.cpp b/recompiled/ppu_recomp_029.cpp
+--- a/recompiled/ppu_recomp_029.cpp	2026-10-31 08:09:11.136248400 -0700
++++ b/recompiled/ppu_recomp_029.cpp	2026-10-31 08:09:16.885638400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_030.cpp b/recompiled/ppu_recomp_030.cpp
+--- a/recompiled/ppu_recomp_030.cpp	2026-10-31 08:09:11.178221900 -0700
++++ b/recompiled/ppu_recomp_030.cpp	2026-10-31 08:09:16.927847300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_031.cpp b/recompiled/ppu_recomp_031.cpp
+--- a/recompiled/ppu_recomp_031.cpp	2026-10-31 08:09:11.217139100 -0700
++++ b/recompiled/ppu_recomp_031.cpp	2026-10-31 08:09:16.977993400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_032.cpp b/recompiled/ppu_recomp_032.cpp
+--- a/recompiled/ppu_recomp_032.cpp	2026-10-31 08:09:11.251958100 -0700
++++ b/recompiled/ppu_recomp_032.cpp	2026-10-31 08:09:17.026034900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_033.cpp b/recompiled/ppu_recomp_033.cpp
+--- a/recompiled/ppu_recomp_033.cpp	2026-10-31 08:09:11.289661600 -0700
++++ b/recompiled/ppu_recomp_033.cpp	2026-10-31 08:09:17.076501000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_034.cpp b/recompiled/ppu_recomp_034.cpp
+--- a/recompiled/ppu_recomp_034.cpp	2026-10-31 08:09:11.327325800 -0700
++++ b/recompiled/ppu_recomp_034.cpp	2026-10-31 08:09:17.125831600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_035.cpp b/recompiled/ppu_recomp_035.cpp
+--- a/recompiled/ppu_recomp_035.cpp	2026-10-31 08:09:11.366564900 -0700
++++ b/recompiled/ppu_recomp_035.cpp	2026-10-31 08:09:17.174914000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_036.cpp b/recompiled/ppu_recomp_036.cpp
+--- a/recompiled/ppu_recomp_036.cpp	2026-10-31 08:09:11.404006600 -0700
++++ b/recompiled/ppu_recomp_036.cpp	2026-10-31 08:09:17.223308800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_037.cpp b/recompiled/ppu_recomp_037.cpp
+--- a/recompiled/ppu_recomp_037.cpp	2026-10-31 08:09:11.439172500 -0700
++++ b/recompiled/ppu_recomp_037.cpp	2026-10-31 08:09:17.269300300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_038.cpp b/recompiled/ppu_recomp_038.cpp
+--- a/recompiled/ppu_recomp_038.cpp	2026-10-31 08:09:11.475296300 -0700
++++ b/recompiled/ppu_recomp_038.cpp	2026-10-31 08:09:17.315358000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_039.cpp b/recompiled/ppu_recomp_039.cpp
+--- a/recompiled/ppu_recomp_039.cpp	2026-10-31 08:09:11.515856900 -0700
++++ b/recompiled/ppu_recomp_039.cpp	2026-10-31 08:09:17.364402100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_040.cpp b/recompiled/ppu_recomp_040.cpp
+--- a/recompiled/ppu_recomp_040.cpp	2026-10-31 08:09:11.554897300 -0700
++++ b/recompiled/ppu_recomp_040.cpp	2026-10-31 08:09:17.410719700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_041.cpp b/recompiled/ppu_recomp_041.cpp
+--- a/recompiled/ppu_recomp_041.cpp	2026-10-31 08:09:11.593253200 -0700
++++ b/recompiled/ppu_recomp_041.cpp	2026-10-31 08:09:17.454176300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_042.cpp b/recompiled/ppu_recomp_042.cpp
+--- a/recompiled/ppu_recomp_042.cpp	2026-10-31 08:09:11.631251800 -0700
++++ b/recompiled/ppu_recomp_042.cpp	2026-10-31 08:09:17.501572100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_043.cpp b/recompiled/ppu_recomp_043.cpp
+--- a/recompiled/ppu_recomp_043.cpp	2026-10-31 08:09:11.669064400 -0700
++++ b/recompiled/ppu_recomp_043.cpp	2026-10-31 08:09:17.549411300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_044.cpp b/recompiled/ppu_recomp_044.cpp
+--- a/recompiled/ppu_recomp_044.cpp	2026-10-31 08:09:11.709656700 -0700
++++ b/recompiled/ppu_recomp_044.cpp	2026-10-31 08:09:17.596154200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_045.cpp b/recompiled/ppu_recomp_045.cpp
+--- a/recompiled/ppu_recomp_045.cpp	2026-10-31 08:09:11.750428600 -0700
++++ b/recompiled/ppu_recomp_045.cpp	2026-10-31 08:09:17.638855000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_046.cpp b/recompiled/ppu_recomp_046.cpp
+--- a/recompiled/ppu_recomp_046.cpp	2026-10-31 08:09:11.791250300 -0700
++++ b/recompiled/ppu_recomp_046.cpp	2026-10-31 08:09:17.688291800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_047.cpp b/recompiled/ppu_recomp_047.cpp
+--- a/recompiled/ppu_recomp_047.cpp	2026-10-31 08:09:11.832209500 -0700
++++ b/recompiled/ppu_recomp_047.cpp	2026-10-31 08:09:17.771395700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_048.cpp b/recompiled/ppu_recomp_048.cpp
+--- a/recompiled/ppu_recomp_048.cpp	2026-10-31 08:09:11.869443900 -0700
++++ b/recompiled/ppu_recomp_048.cpp	2026-10-31 08:09:17.866687500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_049.cpp b/recompiled/ppu_recomp_049.cpp
+--- a/recompiled/ppu_recomp_049.cpp	2026-10-31 08:09:11.907341400 -0700
++++ b/recompiled/ppu_recomp_049.cpp	2026-10-31 08:09:17.919581400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_050.cpp b/recompiled/ppu_recomp_050.cpp
+--- a/recompiled/ppu_recomp_050.cpp	2026-10-31 08:09:11.946464800 -0700
++++ b/recompiled/ppu_recomp_050.cpp	2026-10-31 08:09:17.966244200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_051.cpp b/recompiled/ppu_recomp_051.cpp
+--- a/recompiled/ppu_recomp_051.cpp	2026-10-31 08:09:11.986750300 -0700
++++ b/recompiled/ppu_recomp_051.cpp	2026-10-31 08:09:18.009274700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_052.cpp b/recompiled/ppu_recomp_052.cpp
+--- a/recompiled/ppu_recomp_052.cpp	2026-10-31 08:09:12.026461100 -0700
++++ b/recompiled/ppu_recomp_052.cpp	2026-10-31 08:09:18.051767800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_053.cpp b/recompiled/ppu_recomp_053.cpp
+--- a/recompiled/ppu_recomp_053.cpp	2026-10-31 08:09:12.062311900 -0700
++++ b/recompiled/ppu_recomp_053.cpp	2026-10-31 08:09:18.095151100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_054.cpp b/recompiled/ppu_recomp_054.cpp
+--- a/recompiled/ppu_recomp_054.cpp	2026-10-31 08:09:12.099573200 -0700
++++ b/recompiled/ppu_recomp_054.cpp	2026-10-31 08:09:18.141621700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_055.cpp b/recompiled/ppu_recomp_055.cpp
+--- a/recompiled/ppu_recomp_055.cpp	2026-10-31 08:09:12.211231400 -0700
++++ b/recompiled/ppu_recomp_055.cpp	2026-10-31 08:09:18.181475000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_056.cpp b/recompiled/ppu_recomp_056.cpp
+--- a/recompiled/ppu_recomp_056.cpp	2026-10-31 08:09:12.248625800 -0700
++++ b/recompiled/ppu_recomp_056.cpp	2026-10-31 08:09:18.231473700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_057.cpp b/recompiled/ppu_recomp_057.cpp
+--- a/recompiled/ppu_recomp_057.cpp	2026-10-31 08:09:12.285376600 -0700
++++ b/recompiled/ppu_recomp_057.cpp	2026-10-31 08:09:18.273659300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_058.cpp b/recompiled/ppu_recomp_058.cpp
+--- a/recompiled/ppu_recomp_058.cpp	2026-10-31 08:09:12.321368100 -0700
++++ b/recompiled/ppu_recomp_058.cpp	2026-10-31 08:09:18.321580300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_059.cpp b/recompiled/ppu_recomp_059.cpp
+--- a/recompiled/ppu_recomp_059.cpp	2026-10-31 08:09:12.357369200 -0700
++++ b/recompiled/ppu_recomp_059.cpp	2026-10-31 08:09:18.374450900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_060.cpp b/recompiled/ppu_recomp_060.cpp
+--- a/recompiled/ppu_recomp_060.cpp	2026-10-31 08:09:12.395686500 -0700
++++ b/recompiled/ppu_recomp_060.cpp	2026-10-31 08:09:18.419746800 -0700
+@@ -1,6 +1,7 @@
+ /* Auto-generated by ppu_lifter.py -- do not edit by hand. */
+ #include "ppu_recomp.h"
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <math.h>
+ 
+@@ -242,12 +243,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -47936,6 +47939,24 @@
+ 
+ void func_00A16360(ppu_context* ctx) {
+     PPU_MM_SNAP
++    /* DES_FRAME_INTERVAL=<n> (PORT PATCH, not lifted code): this sets the vblank target of the next
++     * frame to vblank_count + obj[0xB]; obj[0xB] is the frame interval in vblanks (2 = 30 fps). The
++     * override writes n there first, so 1 targets 60 fps. See DemonsSouls/NOTES.md fix 27. */
++    { static int iv = -2, said = 0;
++      if (iv == -2) { const char* e = getenv("DES_FRAME_INTERVAL"); iv = e ? atoi(e) : -1; }
++      if (iv > 0 && iv < 16) vm_write8(ctx->gpr[3] + 0xB, (uint8_t)iv);
++      { const unsigned cur = vm_read8(ctx->gpr[3] + 0xB);   /* log each change */
++        if ((int)cur != said - 1) { said = (int)cur + 1;
++          fprintf(stderr, "[des] frame interval = %u vblank(s)%s\n", cur, iv > 0 ? " (DES_FRAME_INTERVAL)" : ""); } } }
++    /* DES_60FPS=1 (PORT PATCH): the main loop (func_0001B8D0) advances the game by the float at
++     * 0x018C8DB4 every frame -- 1/30 s, a fixed step. Halve it, as RPCS3's 60 FPS patch for disc
++     * v1.00 does; run with PS3_VBLANK_HZ=120 (the frame loop takes 2 vblanks) and PS3_CLOCK_SCALE=200
++     * (the game's frame skip measures frames in guest time). See DemonsSouls/NOTES.md fix 28. */
++    { static int on = -1;
++      if (on < 0) { const char* e = getenv("DES_60FPS"); on = (e && *e == '1') ? 1 : 0; }
++      if (on == 1 && vm_read32(0x018C8DB4) == 0x3D088889u) {
++          vm_write32(0x018C8DB4, 0x3C888889u);   /* 1/60 */
++          fprintf(stderr, "[des] 60 fps step: game step 1/30 -> 1/60 s\n"); on = 2; } }
+         uint64_t _cs_30 = ctx->gpr[30];
+         ctx->gpr[0] = vm_read8(ctx->gpr[3] + 0x9);
+         ctx->gpr[11] = vm_read8(ctx->gpr[3] + 0xA);
+diff -ruN a/recompiled/ppu_recomp_061.cpp b/recompiled/ppu_recomp_061.cpp
+--- a/recompiled/ppu_recomp_061.cpp	2026-10-31 08:09:12.437077600 -0700
++++ b/recompiled/ppu_recomp_061.cpp	2026-10-31 08:09:18.474258100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_062.cpp b/recompiled/ppu_recomp_062.cpp
+--- a/recompiled/ppu_recomp_062.cpp	2026-10-31 08:09:12.475490300 -0700
++++ b/recompiled/ppu_recomp_062.cpp	2026-10-31 08:09:18.525106600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_063.cpp b/recompiled/ppu_recomp_063.cpp
+--- a/recompiled/ppu_recomp_063.cpp	2026-10-31 08:09:12.513468100 -0700
++++ b/recompiled/ppu_recomp_063.cpp	2026-10-31 08:09:18.574936000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_064.cpp b/recompiled/ppu_recomp_064.cpp
+--- a/recompiled/ppu_recomp_064.cpp	2026-10-31 08:09:12.552720800 -0700
++++ b/recompiled/ppu_recomp_064.cpp	2026-10-31 08:09:18.619914700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_065.cpp b/recompiled/ppu_recomp_065.cpp
+--- a/recompiled/ppu_recomp_065.cpp	2026-10-31 08:09:12.589948900 -0700
++++ b/recompiled/ppu_recomp_065.cpp	2026-10-31 08:09:18.666712800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_066.cpp b/recompiled/ppu_recomp_066.cpp
+--- a/recompiled/ppu_recomp_066.cpp	2026-10-31 08:09:12.631261400 -0700
++++ b/recompiled/ppu_recomp_066.cpp	2026-10-31 08:09:18.711697000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_067.cpp b/recompiled/ppu_recomp_067.cpp
+--- a/recompiled/ppu_recomp_067.cpp	2026-10-31 08:09:12.667514100 -0700
++++ b/recompiled/ppu_recomp_067.cpp	2026-10-31 08:09:18.757257500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_068.cpp b/recompiled/ppu_recomp_068.cpp
+--- a/recompiled/ppu_recomp_068.cpp	2026-10-31 08:09:12.709290200 -0700
++++ b/recompiled/ppu_recomp_068.cpp	2026-10-31 08:09:18.802479500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_069.cpp b/recompiled/ppu_recomp_069.cpp
+--- a/recompiled/ppu_recomp_069.cpp	2026-10-31 08:09:12.746370100 -0700
++++ b/recompiled/ppu_recomp_069.cpp	2026-10-31 08:09:18.844599600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_070.cpp b/recompiled/ppu_recomp_070.cpp
+--- a/recompiled/ppu_recomp_070.cpp	2026-10-31 08:09:12.784197700 -0700
++++ b/recompiled/ppu_recomp_070.cpp	2026-10-31 08:09:18.887918600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_071.cpp b/recompiled/ppu_recomp_071.cpp
+--- a/recompiled/ppu_recomp_071.cpp	2026-10-31 08:09:12.820605700 -0700
++++ b/recompiled/ppu_recomp_071.cpp	2026-10-31 08:09:18.933308900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_072.cpp b/recompiled/ppu_recomp_072.cpp
+--- a/recompiled/ppu_recomp_072.cpp	2026-10-31 08:09:12.856639100 -0700
++++ b/recompiled/ppu_recomp_072.cpp	2026-10-31 08:09:18.981497100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_073.cpp b/recompiled/ppu_recomp_073.cpp
+--- a/recompiled/ppu_recomp_073.cpp	2026-10-31 08:09:12.892917700 -0700
++++ b/recompiled/ppu_recomp_073.cpp	2026-10-31 08:09:19.029735400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_074.cpp b/recompiled/ppu_recomp_074.cpp
+--- a/recompiled/ppu_recomp_074.cpp	2026-10-31 08:09:12.931341400 -0700
++++ b/recompiled/ppu_recomp_074.cpp	2026-10-31 08:09:19.080657500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_075.cpp b/recompiled/ppu_recomp_075.cpp
+--- a/recompiled/ppu_recomp_075.cpp	2026-10-31 08:09:12.967317000 -0700
++++ b/recompiled/ppu_recomp_075.cpp	2026-10-31 08:09:19.125993600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_076.cpp b/recompiled/ppu_recomp_076.cpp
+--- a/recompiled/ppu_recomp_076.cpp	2026-10-31 08:09:13.016602300 -0700
++++ b/recompiled/ppu_recomp_076.cpp	2026-10-31 08:09:19.171661000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_077.cpp b/recompiled/ppu_recomp_077.cpp
+--- a/recompiled/ppu_recomp_077.cpp	2026-10-31 08:09:13.066985700 -0700
++++ b/recompiled/ppu_recomp_077.cpp	2026-10-31 08:09:19.219936900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_078.cpp b/recompiled/ppu_recomp_078.cpp
+--- a/recompiled/ppu_recomp_078.cpp	2026-10-31 08:09:13.113528500 -0700
++++ b/recompiled/ppu_recomp_078.cpp	2026-10-31 08:09:19.260426700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_079.cpp b/recompiled/ppu_recomp_079.cpp
+--- a/recompiled/ppu_recomp_079.cpp	2026-10-31 08:09:13.160335800 -0700
++++ b/recompiled/ppu_recomp_079.cpp	2026-10-31 08:09:19.307261400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_080.cpp b/recompiled/ppu_recomp_080.cpp
+--- a/recompiled/ppu_recomp_080.cpp	2026-10-31 08:09:13.211316500 -0700
++++ b/recompiled/ppu_recomp_080.cpp	2026-10-31 08:09:19.352140400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_081.cpp b/recompiled/ppu_recomp_081.cpp
+--- a/recompiled/ppu_recomp_081.cpp	2026-10-31 08:09:13.254049600 -0700
++++ b/recompiled/ppu_recomp_081.cpp	2026-10-31 08:09:19.400836900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_082.cpp b/recompiled/ppu_recomp_082.cpp
+--- a/recompiled/ppu_recomp_082.cpp	2026-10-31 08:09:13.299496000 -0700
++++ b/recompiled/ppu_recomp_082.cpp	2026-10-31 08:09:19.443038600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_083.cpp b/recompiled/ppu_recomp_083.cpp
+--- a/recompiled/ppu_recomp_083.cpp	2026-10-31 08:09:13.342203600 -0700
++++ b/recompiled/ppu_recomp_083.cpp	2026-10-31 08:09:19.487587400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_084.cpp b/recompiled/ppu_recomp_084.cpp
+--- a/recompiled/ppu_recomp_084.cpp	2026-10-31 08:09:13.387137800 -0700
++++ b/recompiled/ppu_recomp_084.cpp	2026-10-31 08:09:19.537108800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_085.cpp b/recompiled/ppu_recomp_085.cpp
+--- a/recompiled/ppu_recomp_085.cpp	2026-10-31 08:09:13.432236600 -0700
++++ b/recompiled/ppu_recomp_085.cpp	2026-10-31 08:09:19.581765200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
+--- a/recompiled/ppu_recomp_086.cpp	2026-10-31 08:09:13.480319400 -0700
++++ b/recompiled/ppu_recomp_086.cpp	2026-10-31 08:09:19.629756100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_087.cpp b/recompiled/ppu_recomp_087.cpp
+--- a/recompiled/ppu_recomp_087.cpp	2026-10-31 08:09:13.526678500 -0700
++++ b/recompiled/ppu_recomp_087.cpp	2026-10-31 08:09:19.673255000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_088.cpp b/recompiled/ppu_recomp_088.cpp
+--- a/recompiled/ppu_recomp_088.cpp	2026-10-31 08:09:13.568314200 -0700
++++ b/recompiled/ppu_recomp_088.cpp	2026-10-31 08:09:19.719861200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_089.cpp b/recompiled/ppu_recomp_089.cpp
+--- a/recompiled/ppu_recomp_089.cpp	2026-10-31 08:09:13.617033400 -0700
++++ b/recompiled/ppu_recomp_089.cpp	2026-10-31 08:09:19.769960800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_090.cpp b/recompiled/ppu_recomp_090.cpp
+--- a/recompiled/ppu_recomp_090.cpp	2026-10-31 08:09:13.663752500 -0700
++++ b/recompiled/ppu_recomp_090.cpp	2026-10-31 08:09:19.823804700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_091.cpp b/recompiled/ppu_recomp_091.cpp
+--- a/recompiled/ppu_recomp_091.cpp	2026-10-31 08:09:13.707576900 -0700
++++ b/recompiled/ppu_recomp_091.cpp	2026-10-31 08:09:19.874070000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_092.cpp b/recompiled/ppu_recomp_092.cpp
+--- a/recompiled/ppu_recomp_092.cpp	2026-10-31 08:09:13.754824300 -0700
++++ b/recompiled/ppu_recomp_092.cpp	2026-10-31 08:09:19.925389000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_093.cpp b/recompiled/ppu_recomp_093.cpp
+--- a/recompiled/ppu_recomp_093.cpp	2026-10-31 08:09:13.798490800 -0700
++++ b/recompiled/ppu_recomp_093.cpp	2026-10-31 08:09:19.975839400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_094.cpp b/recompiled/ppu_recomp_094.cpp
+--- a/recompiled/ppu_recomp_094.cpp	2026-10-31 08:09:13.843049400 -0700
++++ b/recompiled/ppu_recomp_094.cpp	2026-10-31 08:09:20.022450500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_095.cpp b/recompiled/ppu_recomp_095.cpp
+--- a/recompiled/ppu_recomp_095.cpp	2026-10-31 08:09:13.885722400 -0700
++++ b/recompiled/ppu_recomp_095.cpp	2026-10-31 08:09:20.063797200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_096.cpp b/recompiled/ppu_recomp_096.cpp
+--- a/recompiled/ppu_recomp_096.cpp	2026-10-31 08:09:13.924067800 -0700
++++ b/recompiled/ppu_recomp_096.cpp	2026-10-31 08:09:20.101580800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_097.cpp b/recompiled/ppu_recomp_097.cpp
+--- a/recompiled/ppu_recomp_097.cpp	2026-10-31 08:09:13.964882200 -0700
++++ b/recompiled/ppu_recomp_097.cpp	2026-10-31 08:09:20.145725100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_098.cpp b/recompiled/ppu_recomp_098.cpp
+--- a/recompiled/ppu_recomp_098.cpp	2026-10-31 08:09:14.006369600 -0700
++++ b/recompiled/ppu_recomp_098.cpp	2026-10-31 08:09:20.192529200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_099.cpp b/recompiled/ppu_recomp_099.cpp
+--- a/recompiled/ppu_recomp_099.cpp	2026-10-31 08:09:14.051594400 -0700
++++ b/recompiled/ppu_recomp_099.cpp	2026-10-31 08:09:20.238825100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_100.cpp b/recompiled/ppu_recomp_100.cpp
+--- a/recompiled/ppu_recomp_100.cpp	2026-10-31 08:09:14.093709600 -0700
++++ b/recompiled/ppu_recomp_100.cpp	2026-10-31 08:09:20.283517900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_101.cpp b/recompiled/ppu_recomp_101.cpp
+--- a/recompiled/ppu_recomp_101.cpp	2026-10-31 08:09:14.138385200 -0700
++++ b/recompiled/ppu_recomp_101.cpp	2026-10-31 08:09:20.327843400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_102.cpp b/recompiled/ppu_recomp_102.cpp
+--- a/recompiled/ppu_recomp_102.cpp	2026-10-31 08:09:14.181027700 -0700
++++ b/recompiled/ppu_recomp_102.cpp	2026-10-31 08:09:20.370817900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_103.cpp b/recompiled/ppu_recomp_103.cpp
+--- a/recompiled/ppu_recomp_103.cpp	2026-10-31 08:09:14.229006300 -0700
++++ b/recompiled/ppu_recomp_103.cpp	2026-10-31 08:09:20.411834700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_104.cpp b/recompiled/ppu_recomp_104.cpp
+--- a/recompiled/ppu_recomp_104.cpp	2026-10-31 08:09:14.277427300 -0700
++++ b/recompiled/ppu_recomp_104.cpp	2026-10-31 08:09:20.459219600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_105.cpp b/recompiled/ppu_recomp_105.cpp
+--- a/recompiled/ppu_recomp_105.cpp	2026-10-31 08:09:14.329433600 -0700
++++ b/recompiled/ppu_recomp_105.cpp	2026-10-31 08:09:20.511739800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_106.cpp b/recompiled/ppu_recomp_106.cpp
+--- a/recompiled/ppu_recomp_106.cpp	2026-10-31 08:09:14.377162100 -0700
++++ b/recompiled/ppu_recomp_106.cpp	2026-10-31 08:09:20.561922100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_107.cpp b/recompiled/ppu_recomp_107.cpp
+--- a/recompiled/ppu_recomp_107.cpp	2026-10-31 08:09:14.426754500 -0700
++++ b/recompiled/ppu_recomp_107.cpp	2026-10-31 08:09:20.604042200 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_108.cpp b/recompiled/ppu_recomp_108.cpp
+--- a/recompiled/ppu_recomp_108.cpp	2026-10-31 08:09:14.476984900 -0700
++++ b/recompiled/ppu_recomp_108.cpp	2026-10-31 08:09:20.652666900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_109.cpp b/recompiled/ppu_recomp_109.cpp
+--- a/recompiled/ppu_recomp_109.cpp	2026-10-31 08:09:14.524726000 -0700
++++ b/recompiled/ppu_recomp_109.cpp	2026-10-31 08:09:20.702193100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_110.cpp b/recompiled/ppu_recomp_110.cpp
+--- a/recompiled/ppu_recomp_110.cpp	2026-10-31 08:09:14.569870200 -0700
++++ b/recompiled/ppu_recomp_110.cpp	2026-10-31 08:09:20.751947800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_111.cpp b/recompiled/ppu_recomp_111.cpp
+--- a/recompiled/ppu_recomp_111.cpp	2026-10-31 08:09:14.612896300 -0700
++++ b/recompiled/ppu_recomp_111.cpp	2026-10-31 08:09:20.794985400 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_112.cpp b/recompiled/ppu_recomp_112.cpp
+--- a/recompiled/ppu_recomp_112.cpp	2026-10-31 08:09:14.655227700 -0700
++++ b/recompiled/ppu_recomp_112.cpp	2026-10-31 08:09:20.841885900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_113.cpp b/recompiled/ppu_recomp_113.cpp
+--- a/recompiled/ppu_recomp_113.cpp	2026-10-31 08:09:14.697443600 -0700
++++ b/recompiled/ppu_recomp_113.cpp	2026-10-31 08:09:20.885849600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_114.cpp b/recompiled/ppu_recomp_114.cpp
+--- a/recompiled/ppu_recomp_114.cpp	2026-10-31 08:09:14.743671500 -0700
++++ b/recompiled/ppu_recomp_114.cpp	2026-10-31 08:09:20.931360800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_115.cpp b/recompiled/ppu_recomp_115.cpp
+--- a/recompiled/ppu_recomp_115.cpp	2026-10-31 08:09:14.788847300 -0700
++++ b/recompiled/ppu_recomp_115.cpp	2026-10-31 08:09:20.973627000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_116.cpp b/recompiled/ppu_recomp_116.cpp
+--- a/recompiled/ppu_recomp_116.cpp	2026-10-31 08:09:14.837044000 -0700
++++ b/recompiled/ppu_recomp_116.cpp	2026-10-31 08:09:21.029538300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_117.cpp b/recompiled/ppu_recomp_117.cpp
+--- a/recompiled/ppu_recomp_117.cpp	2026-10-31 08:09:14.887421500 -0700
++++ b/recompiled/ppu_recomp_117.cpp	2026-10-31 08:09:21.079533300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_118.cpp b/recompiled/ppu_recomp_118.cpp
+--- a/recompiled/ppu_recomp_118.cpp	2026-10-31 08:09:14.936616600 -0700
++++ b/recompiled/ppu_recomp_118.cpp	2026-10-31 08:09:21.129337600 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_119.cpp b/recompiled/ppu_recomp_119.cpp
+--- a/recompiled/ppu_recomp_119.cpp	2026-10-31 08:09:14.982261400 -0700
++++ b/recompiled/ppu_recomp_119.cpp	2026-10-31 08:09:21.176890000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_120.cpp b/recompiled/ppu_recomp_120.cpp
+--- a/recompiled/ppu_recomp_120.cpp	2026-10-31 08:09:15.026549000 -0700
++++ b/recompiled/ppu_recomp_120.cpp	2026-10-31 08:09:21.224779900 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_121.cpp b/recompiled/ppu_recomp_121.cpp
+--- a/recompiled/ppu_recomp_121.cpp	2026-10-31 08:09:15.073514000 -0700
++++ b/recompiled/ppu_recomp_121.cpp	2026-10-31 08:09:21.271691100 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_122.cpp b/recompiled/ppu_recomp_122.cpp
+--- a/recompiled/ppu_recomp_122.cpp	2026-10-31 08:09:15.115181200 -0700
++++ b/recompiled/ppu_recomp_122.cpp	2026-10-31 08:09:21.315682800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_123.cpp b/recompiled/ppu_recomp_123.cpp
+--- a/recompiled/ppu_recomp_123.cpp	2026-10-31 08:09:15.166226900 -0700
++++ b/recompiled/ppu_recomp_123.cpp	2026-10-31 08:09:21.369307800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_124.cpp b/recompiled/ppu_recomp_124.cpp
+--- a/recompiled/ppu_recomp_124.cpp	2026-10-31 08:09:15.211875800 -0700
++++ b/recompiled/ppu_recomp_124.cpp	2026-10-31 08:09:21.415014700 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_125.cpp b/recompiled/ppu_recomp_125.cpp
+--- a/recompiled/ppu_recomp_125.cpp	2026-10-31 08:09:15.259830600 -0700
++++ b/recompiled/ppu_recomp_125.cpp	2026-10-31 08:09:21.456567000 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_126.cpp b/recompiled/ppu_recomp_126.cpp
+--- a/recompiled/ppu_recomp_126.cpp	2026-10-31 08:09:15.306851100 -0700
++++ b/recompiled/ppu_recomp_126.cpp	2026-10-31 08:09:21.501472300 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_127.cpp b/recompiled/ppu_recomp_127.cpp
+--- a/recompiled/ppu_recomp_127.cpp	2026-10-31 08:09:15.356252700 -0700
++++ b/recompiled/ppu_recomp_127.cpp	2026-10-31 08:09:21.547395800 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/recompiled/ppu_recomp_table.cpp b/recompiled/ppu_recomp_table.cpp
+--- a/recompiled/ppu_recomp_table.cpp	2026-10-31 08:09:15.421681700 -0700
++++ b/recompiled/ppu_recomp_table.cpp	2026-10-31 08:09:21.606792500 -0700
+@@ -242,12 +242,14 @@
+ 
+ /* Drain pending trampolines after any call that might set g_trampoline_fn.
+  * Converts cross-fragment fallthrough chains into iterative loops. */
++extern "C" void ds_toc_check(void*);
+ #define DRAIN_TRAMPOLINE(ctx) do { \
+     while (g_trampoline_fn) { \
+         void(*_tf)(void*) = g_trampoline_fn; \
+         g_trampoline_fn = 0; \
+         _tf((void*)(ctx)); \
+     } \
++    ds_toc_check((void*)(ctx)); \
+ } while(0)
+ 
+ /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+diff -ruN a/spu/spu_0000_at_01760280/spu_recomp.c b/spu/spu_0000_at_01760280/spu_recomp.c
+--- a/spu/spu_0000_at_01760280/spu_recomp.c	2026-10-31 08:09:15.439334300 -0700
++++ b/spu/spu_0000_at_01760280/spu_recomp.c	2026-10-31 08:09:21.623584400 -0700
+@@ -11180,6 +11180,13 @@
+ }
+ 
+ void spu_0000_at_01760280_spu_func_0000C1A0(spu_context* ctx) {
++        /* DS debug (hand edit, lost on relift): Edge zlib's spu_printf -- show it. */
++        { const uint32_t f = ctx->gpr[4]._u32[0] & 0x3FFFFu;
++          char s[128]; uint32_t i = 0;
++          while (i < sizeof s - 1 && f + i < 0x40000u && ctx->ls[f + i]) { s[i] = (char)ctx->ls[f + i]; i++; }
++          s[i] = 0;
++          fprintf(stderr, "[edgezlib-printf] %s  | r5=%u r6=%u r7=%u\n", s,
++                  ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0], ctx->gpr[7]._u32[0]); }
+         ctx->gpr[2] = spu_pref_u32(spu_rchcnt(ctx, SPU_RdInMbox));
+         if (ctx->gpr[2]._u32[0] != 0) { SPU_DIRECT(ctx, 0xC20C, spu_0000_at_01760280_spu_func_0000C20C); }
+         spu_ls_write128(ctx, ctx->gpr[1]._u32[0] + -0x100, ctx->gpr[4]);

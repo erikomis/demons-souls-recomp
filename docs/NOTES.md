@@ -1,0 +1,937 @@
+# Demon's Souls (BLUS-30443) — ps3recomp port notes
+
+> **Development log.** This is the running log of how the port was made, kept as written: fix by fix,
+> with the reasoning and measurements. Paths are relative to the original working folder (`port/`,
+> `tools/`, `game/` match this repo after SETUP.bat). "scratchpad" scripts are throwaway test
+> helpers that are not part of the repo. The *Recipe* section is what `setup/setup.py` automates.
+
+
+## Inputs
+- `../Demon's Souls (USA).zip` — Redump ISO, CRC32 eb51fbeb (matches redump.org/disc/16199).
+- Disc key: the one that comes with your dump (Redump page → Metadata → Disc Key, or a .dkey file);
+  SETUP.bat asks for it. Not included here.
+
+## Recipe
+```bash
+# 1. pull + disc-decrypt files straight out of the zip (AES-128-CBC, IV = sector number BE)
+MSYS_NO_PATHCONV=1 python -P tools/iso_extract.py "../Demon's Souls (USA).zip" game /PS3_GAME/USRDIR/EBOOT.BIN
+# 2. SELF -> ELF (official RPCS3 build in ../deps/rpcs3, no firmware needed)
+../deps/rpcs3/rpcs3.exe --decrypt game/PS3_GAME/USRDIR/EBOOT.BIN      # -> EBOOT.elf
+# 3. ps3recomp (../deps/ps3recomp @ 4e8f3ca, v0.18.0); run from port/
+R=../../deps/ps3recomp
+python $R/tools/ppu_loader.py game/EBOOT.ELF -o out/
+python $R/tools/gen_imports.py game/EBOOT.ELF -o out/imports_named.json
+python $R/tools/ppu_lifter.py game/EBOOT.ELF --functions out/EBOOT.functions.json \
+       --hle-stubs out/EBOOT.imports.json --output recompiled/          # ~4 min, 2.4 GB
+python $R/tools/extract_spu_images.py game/EBOOT.ELF --output spu/images
+python $R/tools/build_spu_workloads.py --images spu/images --lifted spu --out spu/spu_workloads.c --constructor
+python $R/tools/gen_hle_nids.py --all --out recompiled_hle_nids.cpp
+```
+Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their own dir.
+
+## First-lift results (2026-10-26)
+- ELF: entry 0x124c0, TOC 0x19b5040. Executable range 0x10200–0x16BB5E4 (~22.7 MB).
+  Section names are stripped; use the flags (0x6 = exec).
+- 77,283 OPD descriptors → 104,131 lifted functions (incl. 11,136 tail-entry wrappers), 48 chunks, 28.5M lines.
+  - 97,930 in exec range: **0 unhandled instructions**, 24k `.word` (inline data/jump tables).
+  - 6,201 bogus "functions" in rodata/data (0x16BB5E4+, includes the embedded SPU ELFs): 4.26M `.word` +
+    441k junk-insn TODOs. Dead weight — prune before building (most of the 2.4 GB).
+- 12 SPU ELFs (858 KB), all lifted (91–94% coverage each):
+  0 Edge zlib · 1 FromSoft SpursTaskCommandDispatcher · 2–3 FFX particle movement · 4–5 FFX cluster draw ·
+  6–8 Havok physics (solver / narrowphase / collision queries) · 9 Havok anim sampling · 10 synth2 ·
+  11 Sony MultiStream (loads DSP modules at runtime → same blocker as the Scott Pilgrim port).
+- Imports: 389 across 25 libs; ~308 have an HLE impl. Missing 81: cellSail 25 (movie player),
+  online (sys_net/sceNp/cellHttp/Avc2) ~20, cellSpurs queue funcs 5, cellAtrac 5 unnamed, cellAudioSetPortLevel,
+  cellFsAioWrite, sys_prx_register_library. List: `port/out/truly_missing.txt`.
+- Strings: Dantelion2 (`n:/dantelion2_autobuild/...`), `n:/DemonsSoul/Source/...` assert paths (168 files),
+  Havok hk550, FaceGen, Lua. RTTI mostly Havok only.
+
+## Build + boot (2026-10-26)
+- Lift with `--code-end 0x16bb5e4 --chunks 128` (no bogus data functions: 94,017 funcs, 445 MB, 53 s).
+- Project = ps3recomp template in `port/project` (name DemonsSoulsRecomp). `build.bat [target]` configures
+  `port/build` with clang-cl + portable LLVM (no CMAKE_BUILD_TYPE → template's -O1) and runs ninja.
+  Full build ~1 min on this machine. `-DDS_BOOT_HARNESS=ON` (currently ON in port/build) swaps in the
+  toolkit's instrumented `runtime/ppu/tests/boot_main.cpp` (thread dump at 8 s/15 s, WATCHDOG_AT="a,b").
+- Game data: `python -P tools/iso_extract.py <zip> game --all` (all 12,511 files, 8.0 GB, ~1 min).
+- Run: see `tools/run_capture.ps1` for the env (PS3_HDD0_ROOT, RSX_LIVE_DRAW=1); don't launch it with
+  -ExecutionPolicy Bypass (blocked) — run the same lines directly.
+
+### Fixes so far
+1. **ps3recomp lifter bug (deps/ps3recomp/tools/ppu_lifter.py, local edit, upstream-worthy):** `--hle-stubs`
+   replaced each import stub with `ps3_hle_call` but dropped the stub's `std r2,40(r1)`. GCC-built callers
+   reload r2 from that slot after the bl → TOC 0 on a fresh frame → NULL globals in static ctors.
+   Now emits the store when the original stub has it (0xF8410028).
+2. **SPURS job binaries:** not ELFs, so extract_spu_images misses them. Run with `SPU_DUMP_MISS=port/spu_miss`,
+   then `python tools/lift_spurs_jobs.py ../deps/ps3recomp port/spu_miss port/spu` (wraps at LS 0, lifts,
+   writes `spu/jobmods_register.c` keyed by raw fingerprint) and rebuild. One job so far
+   (fp BD46853E5ADE5098, 2064 B, lives in the EBOOT at 0x177B600) — runs, returns 0.
+- Debug aid: `scratchpad patch_drain.py` adds `ds_toc_check(ctx)` (stubs.cpp) to every chunk's
+  DRAIN_TRAMPOLINE; logs the first calls returning with r2 ∉ {19B5040, 19D3BAC, 19C448C}. Re-apply after relift.
+- Multi-TOC: TOC1 0x19B5040 (58k funcs), TOC2 0x19D3BAC (15k, SDK/runtime side), 0x19C448C (36);
+  linker stubs `std r2,40(r1); addis/addi r2 ±0x1EB6C; b` handle switching and lift fine.
+
+3. **GCM command buffer layout (cellGcmSys.c):** begin was ioAddress; real libgcm (and RPCS3) reserve
+   4 KB: begin = ioAddress + 0x1000, put = get = 0x1000. FromSoft's SPU command dispatcher writes `put`
+   as (current - begin) + 0x1000, so the walker sat 4 KB behind forever (HighGraphics label wait).
+   `GCM_BEGIN_AT_IO=1` restores the old layout.
+4. **Real file names (tools/udf_rename.py):** ISO9660 names on the disc are mangled ("DS_FILTER_SHADERBND.DCX",
+   31-char cuts). The script reads the UDF 2.50 tree (metadata partition) from the plain head of the image
+   and renames all 12,503 files. Run once after iso_extract --all. HDD1 cache lives in `hdd1/` (PS3_HDD1_ROOT);
+   wipe `hdd1/cache` if it was written while files were missing.
+5. **_cellSpursLFQueuePushBody (cellSpurs.c, new) + faithful _cellSpursLFQueueInitialize:** port of RPCS3's
+   cellSyncLFQueue PPU2SPU push (GetPushPointer/CompletePushPointer) under the lock-line lock, waking the
+   waiting task via m_hs1[] -> spu_taskset_signal_task. Feeds the Edge zlib inflate tasks (SPU image 1);
+   without it every .dcx stayed compressed. `LFQ_OLD_INIT=1` = old init. `LFQ_DBG=1` logs pushes/elements.
+6. **SPURS JOBLIST (cellSpurs.c jc_execute):** opcode 6 was skipped ("TODO"). FromSoft uploads shader
+   microcode to VRAM via copy jobs in a CellSpursJobList, so every fragment program slot stayed zero.
+   Plus a second runtime job binary (fp B1463A6F2DF960AC, 384 B, the DMA-copy job) lifted via lift_spurs_jobs.py.
+7. **1D textures (rsx_live_draw.c):** decode rejected dimension 1; now decoded as height-1 2D.
+- Debug switches added: LD_PSO_DBG=2/3 (hexdump / distinct FP regs), GCM_SUBCH_LOG=<n>,
+  SPU_PUTWATCH=<ea>[,len], LFQ_DBG (also dumps flag+0x80/+0x100 when an EF wait blocks).
+- All runtime edits: `patches/ps3recomp-local.patch` (re-apply after re-cloning ps3recomp).
+- Frame dumps: LD_FRAME_DUMP=<dir> LD_FRAME_DUMP_EVERY=<n> (PPM). PrintWindow/screen grabs of the D3D12
+  window come out blank -- use the dumps.
+
+8. **Zombie SPURS tasks (spu_workload.c / spu_channels.c / cellSpurs.c):** Shutdown/JoinTaskset were no-ops,
+   so tasks of destroyed Edge zlib tasksets kept running; the game reused that memory as its file read buffer
+   and the zombies wrote 0x03 bytes into compressed data (one segment in ~26 inflated 3 bytes short -> its
+   task skips the counter decrement -> loader waits forever). Now Shutdown marks the taskset, its tasks halt
+   at their next lock-line atomic (and are released from WAIT_SIGNAL), JoinTaskset waits until they're gone,
+   CreateTaskset at the same EA clears the mark. Found via SPU_ATOM_EAS per-task tracing + Edge zlib's own
+   error printf (hand-patched into spu_0000.../spu_recomp.c C1A0, lost on SPU relift).
+9. **GCM ring recycle:** `GCM_NO_TITLE_RECYCLE=1` (needed): the runtime's "title overran its ring" rescue
+   rewound put/get under FromSoft's SPU dispatcher (it wraps its own 32 KB ring) -> label wait forever.
+10. **PSN offline identity:** `PS3_NP_STRICT_OFFLINE=1` (needed): GetNpId/OnlineId/OnlineName return
+    SCE_NP_ERROR_OFFLINE when signed out (as RPCS3), + sceNpManagerGetAvatarUrl implemented. With the fake
+    "PS3Player" account the game sat on a black pre-title screen forever (17 file opens -> 98+).
+11. **cellSpursQueuePopBody** (SPU2PPU LFQueue pop, RPCS3 port). The game's pops hit a dir=0 queue
+    (q=0x181C5080, size 16 depth 250, non-blocking) -> currently returns PERM; not yet understood.
+- Stale HDD1 cache: runs that hit the bugs above left truncated cache files (ds_flver 393216/752688) ->
+  wipe `hdd1/cache` after fixing anything in the load path.
+- **RPCS3 as oracle:** firmware 2.76 from the disc's PS3UPDAT.PUP installed in deps/rpcs3
+  (`rpcs3 --installfw`). `rpcs3 --no-gui game/PS3_GAME/USRDIR/EBOOT.BIN` boots the game; its log
+  (logs/rpcs3_boot1.log) has every sys_fs_open in order -- the reference boot sequence.
+
+12. **SPURS queue layout (SUPERSEDED by 19 -- the LFQueue assumption was wrong):** `_cellSpursQueueInitialize` wrote a CellSyncLFQueue line
+    (direction at +0x24, m_bs=-1, eaSignal=taskset). The particle taskset (0x18394800) reports through
+    q=0x181C5080 (SPU2PPU, 16 B x 250) and the PPU polls it with cellSpursQueuePopBody -- on the old guessed
+    layout the direction read 0 and nothing was popped.
+13. **MultiStream / ATRAC:** MultiStream loads Sony's ATRAC decoder from /dev_flash/sys/external/flashATRAC.pic.
+    The runtime's default dev_flash is the ps3recomp author's `D:/recomp/...`; `PS3_DEV_FLASH` must point at a
+    real tree (deps/rpcs3/dev_flash after `--installfw`). The decoder is copied into LS 0x32890 at run time ->
+    "branched into unlifted LS -- ending the job" killed the MultiStream task; `SPU_INTERP_UNLIFTED=1` runs it in
+    the SPU interpreter. Even so, ATRAC-on runs stall at the BGM stream (ds_bgm_other.mowb); with no flash tree
+    MultiStream just skips ATRAC (silent music) and boot gets further. run_capture.ps1 uses the latter for now.
+14. **SPURS task identity race (cellSpurs.c CreateTask / spu_workload.c):** CreateTask stored the new task's
+    taskset/id in the shared globals g_ydkj_real_taskset_ea/taskid and spu_workload_dispatch_async read them back.
+    Havok's thread and the particle system's thread create tasks at the same time, so a particle task (image 3/4)
+    could start with Havok's TaskInfo: its parameter-block DMA used Havok's argument words, the table base came out
+    0, it read "\x7FELF" from EA 0 and hit HALT-ASSERT heqi pc=0x05508 (the dt3 run shows image 3 in taskset
+    0x179ED800 = Havok's). Now CreateTask and the task-exit restart path name the task per thread
+    (spu_workload_set_dispatch_task, thread-local) and dispatch takes it from there. 3 clean runs: no asserts,
+    images 3/4 always in their own taskset 0x18394800.
+15. **Synthetic job-chain events flood Havok's queues (cellSpurs.c jc_signal_done):** the runtime posts a
+    made-up completion event for every job-chain job into EVERY queue attached with
+    cellSpursAttachLv2EventQueue (added for Tokyo Jungle). DeS attaches one queue per Havok SPU port (q3..q11 on
+    ports 0,2..9, q12 on 10/11); its command-dispatcher chain (0x1065DE00, ~70 jobs/s) filled q5..q12 to their
+    capacity of 50 during loading. When a Havok physics task then reported on port 4 (q6) it got EBUSY, the step
+    never completed, the Havok PPU thread (tid 11) and the main thread (tid 1, cond 13) waited forever -- the
+    "run-to-run stall" at ref pos 74-101. Timing-dependent: a slow (traced) run drained in time and got to 147.
+    Fix: `SPURS_JC_EVENTS=0` turns the synthetic events off (DeS's chains send none); run_capture.ps1 sets it.
+    3 clean runs: all reach ref pos 148/148 and show the system-data auto-save notice (autosave_notice.png).
+    Diagnostics added: the watchdog now prints `in syscall N` per guest thread; SPU_EVT_LOG=1 logs every SPU
+    user-event send + result; EVT_PUSHLOG_MAX raises EVT_PUSHLOG's 200-line cap. PS3_EVQSTAT=<n> (existing)
+    showing `pending=50` was the tell.
+16. **Input + intro movie -> title screen:** pad input goes through the runtime's existing `PAD_SCRIPT`
+    ("<sec>:<mask>,...", CROSS 0x4000, START 0x0008; latched, held ~40 polls). Cross at 30 s dismisses the
+    auto-save notice; the logos follow (Atlus, SCE, Japan Studio, FromSoftware, Havok). The game then plays
+    movie/ds_advertise.pam through cellSail, which ps3recomp only stubs: it reports Boot/OpenStream done but
+    plays nothing, and the game never calls Start -- black screen for good (Start doesn't skip it). RPCS3's
+    cellSail is unimplemented too. `PS3_NO_SAIL=1` (existing switch) fails cellSailPlayerInitialize2; the game
+    retries once, gives up on the movie and goes to the title screen (title_screen.png, ~frame 1900 / 63 s).
+    Start there opens NEW GAME / LOAD GAME (title_menu.png). The game's SAIL callback (func_00FD9120) forwards
+    every event except Boot-completed to its movie thread via sys_event_port_send (func_00FDF768).
+17. **NEW GAME -> Create Profile (cellOskDialog):** after NEW GAME the game says it cannot reach the Demon's
+    Souls server (009), then "Start the game in Offline Mode" -- both just need Cross. Create Profile renders
+    (character_creation.png). The name comes from the on-screen keyboard, whose stub refused LoadAsync without
+    cellOskDialogInit (DeS never imports it) and sent no sysutil callbacks. Now LoadAsync self-initialises, answers
+    with `OSK_TEXT` (honouring the field's limit) and posts LOADED/FINISHED (0x0502/0x0503), Unload posts UNLOADED
+    (0x0504) to every sysutil slot. Down x4 + Cross on OK creates the profile; it is saved
+    (gamedata/dev_hdd0/home/00000001/savedata/BLUS30443DEMONSS005 -- next NEW GAME shows a Profile List,
+    profile_saved.png) and the tutorial level m08_00_00_00 starts loading (level_loading.png, "Old King Doran").
+18. **Taskset running-set table full (spu_workload.c TS_TRACK):** the runtime tracked running tasks for 8
+    tasksets and never released an entry. DeS creates a taskset per batch of Edge zlib work, so its particle
+    taskset (0x18394800, created later) got none: ts_running() returned NULL and the exit-time scan that starts
+    pending tasks never ran. The particle tasks create child tasks FROM THE SPU (SPU-side cellSpursCreateTask:
+    image 3 claims an enabled bit at 0x7918/0x79EC, PUTs the TaskInfo, sets pending at 0x7C2C; image 4 likewise
+    -> children elf 0x179CC00/0x17ACD00 = images 5/6). Never started, they held their ids; after ~60 frames all
+    128 ids were taken and every later CreateTask failed. Now 64 entries, released on JoinTaskset and reset on
+    CreateTaskset; images 3-6 run every frame and no id is ever exhausted.
+    Debug added: TS_SLOT_DBG=<taskset> (each id taken / exit + enabled bitset), LFQ_POPLOG=1 (every element
+    cellSpursQueuePopBody returns), SPU_ATOM_FULL=1 also prints the whole line in SPU_ATOM_EAS traces, RETURNED
+    lines name taskset/task, start-task lines show the TaskInfo args.
+19. **SPURS queue = libsre's layout, not an LFQueue (cellSpurs.c):** the particle system's level-load flush
+    (func_014C3958) waits on queue 0x181C5080 for SPU progress reports {stream, count}: object+0 / +0x70 hold
+    the two streams' item counts and the flush waits until each progress word reaches count-1. The child task
+    (image 5) does push -- but only once there is work (first time: the level load), and it saw the queue as
+    FULL because our _cellSpursQueueInitialize wrote a CellSyncLFQueue (my fix 12) and depth (+0x0C) read 0.
+    Disassembled the firmware's libsre (dev_flash/sys/external/libsre.sprx -> rpcs3 --decrypt ->
+    tools/lift_prx.py relocation -> capstone PPC; script in the tools/dis_sre.py) and ported
+    _cellSpursQueueInitialize (0x082BFB09) and cellSpursQueuePopBody (0x91066667, args queue, buffer, isPeek,
+    isBlocking) exactly: +0 pop / +4 push index (0..2*depth-1, ~v = in progress), +8 size, +0xC depth, +0x10
+    buffer, +0x18 SPU port (-1), +0x1C direction, +0x20..0x5F waiter bytes, +0x60 taskset, +0x68 spurs, +0x70
+    lv2 queue. RPCS3 has no HLE for these (it runs libsre LLE). An empty blocking pop polls instead of using
+    the lv2 queue Attach would create. Under spu_lockline_lock only raw accesses + ef_line_end: vm_write32
+    takes that lock itself -- the first non-empty pop deadlocked the render thread on it.
+    Result: 9407 pops in a 320 s run (first {1,5}); the tutorial loads (Mephistopheles card), the opening
+    narration plays as subtitles over black, and gameplay starts with the HUD (in_game_hud.png).
+    Debug added: SPU_DMATRACE_BYTES / _SKIP / _MAX / _AFTER_WATCH, SPU_DMAWATCH_EA=<ea>[,<ea>] (log a GET's
+    data when it changes), QUEUE_DBG=1, LFQ_POPLOG=1 now logs SPURS-queue pops too.
+20. **Black 3D world = exposure 0** (stopgap REMOVED -- real fix is 21): geometry, textures, lighting and the
+    shadow map all work (per-draw dumps: LD_DRAW_DUMP + RSX_DRAW_CSV(_FROM) show the silhouettes being drawn
+    in black over the clear colour). Every material shader ends in `saturate(colour * T.x / T.y)` (decoded
+    the raw ucode: MUL c.xxxx then DIV c.yyyy -- the decompiler is right). T is FromSoft's GLOBAL shader
+    parameter 0x87: each program in shader/ds_flver.shaderbnd carries a table of (param id, ucode offset)
+    pairs in front of its ucode (0x87 -> +0x3B0/+0x3D0 for the main scene shader), and the engine keeps a
+    float4 table of the globals (x4, one per command context) that its SPU command dispatcher (image 2)
+    patches into programs with NV308A inline transfers when a value changes. 0x87 = (exposure, 2, 0, 1); the
+    exposure is auto-exposure (ExposureReaderEntity / ShaderConstant_ToneMapEntity, TONE_MAP_BANK key 0.18)
+    and here it is 0 and never changes -- the reader never produces a value. Ruled out: semaphore ordering
+    (GCM_SEMA_ACQUIRE=1 changes nothing), ZPASS reports (only ZCULL stats 2/3 are read), SPU reads of the
+    scene target, NV0039 copies (only inline transfers are used). Most likely it waits on a GPU result that
+    the live-draw renderer never writes back to guest memory (no render-target write-back exists).
+    STOPGAP: LD_EXPOSURE_STOPGAP=<f> replaces x of any inline constant that is exactly (0,2,0,1);
+    run_capture.ps1 sets 3.0 -> the tutorial corridor and the opening cutscene are visible
+    (tutorial_visible.png, opening_cutscene.png; the cutscene looks over-bright). The stopgap is gone (fix 21).
+    Tools/debug added: tools/dcx.py (DCX EDGE/DFLT decompressor), LD_FPCONST=<pso>[,_FROM] (constants,
+    ucode words, copies of the program, main+local scan), LD_MEMDUMP=<dir>, GCM2D_WATCH=<ea>,<len>
+    [+_EVERY] (inline writes + FIFO address), REPORT_HIST=1, 2D-engine logs now on stderr.
+21. **Real auto-exposure (replaces the fix 20 stopgap):** the exposure is a GPU result read back by the CPU.
+    Each frame the game reduces scene luminance through F_X32 (SURFACE_FORMAT colour 0xD) targets in local
+    memory: 320x180 -> 64x64 log-lum (0x41CDF80) -> 16x16 averages (0x1377DC0, 0x1392440) -> exp2 average
+    luminance (0x1392880) -> 16x16 ADAPTED EXPOSURE (0x13AB840: clamp(lum,0.08,0.2)+0.001, 0.18/that, eased
+    toward from its own previous value -- the TONE_MAP_BANK row (0.1, 0.08, 0.2, 0.18) is in its constants).
+    ExposureReaderEntity's read routine (0x22068, message 0x8041 via 0x22908) reads that float from
+    0xC13AB840 into the tone-map constant object (+0x1A8 = x, +0x1AC = 2.0); the per-frame context builder
+    (0xBD780 -> 0xB88F8) passes it to 0x6BD38, which stores (x, 2, x, 1) = global shader param 0x87 and
+    marks it dirty. Three live-draw bugs broke the chain, all fixed in rsx_live_draw.c:
+    a) every non-FP16 render target was RGBA8 -- F_X32 now gets R32_FLOAT, F_W32Z32Y32X32 R32G32B32A32
+       (ld_surface_dxgi; the PSO key carries the RTV format as rt_fmt; LD_FP32_RT=0 = old behaviour).
+    b) nothing reached guest memory -- small FP32 targets (<= LD_RT_WRITEBACK_MAX texels, default 4096) are
+       copied to readback buffers before the present flush and stored big-endian at the guest pitch after
+       it (one flip of latency, as on the console). LD_RT_WRITEBACK=0 = off, LD_RT_WRITEBACK_DBG=1 logs.
+    c) each of these surfaces also gets an empty RGBA8 twin (same address and size, created from a
+       transient surface state). Texture lookup took the first size match (the twin), and the adaptation
+       pass's read of its OWN previous value bound the target's twin instead of the feedback copy -- the
+       exposure stuck near 0.5 + (2.2-0.5)*0.059 = 0.6. Now: of the size matches the most recently drawn
+       wins, and any twin of the current target is skipped so self-reads use surface_feedback_srv.
+    Result: exposure ramps from 0 and settles at 2.22 in the dark corridor; the opening cutscene is no
+    longer over-bright (auto_exposure.png). 26-29 fps. The RGBA8 twins themselves are still created
+    (harmless now; the transient that creates them is not chased).
+    How it was found: PPU_RWATCH on 0xC13AB840 (who reads it), PPU_WWATCH on the constant object, a
+    temporary print in the lifted func_0006BD38, and decoding the adaptation program's ucode by hand.
+    Tools/debug added: tools/dis_eboot.py (EBOOT disassembly with TOC/string annotations),
+    LD_TEXBIND_WATCH=<offset hex> (how a texture at that offset is bound), LD_FPCONST_SURF=<offset hex>
+    (the LD_FPCONST dump for draws into that surface), PPU_WVAL_MAX=<n>.
+22. **Whole frame blurred + fog missing = depth read as a colour texture:** the scene buffer (0x7A0000) is
+    sharp, but a full-screen pass (shader cc2a6349..., colour mask 0x01000000 = alpha only) reads the depth
+    buffer 0xB50000 as an A8R8G8B8 texture, rebuilds depth as dot(tex.wxy, c) -- the RSX D24S8 word read
+    as bytes: A = depth bits 23-16, R = 15-8, G = 7-0, B = stencil -- reprojects with camera matrices and
+    writes a blur amount into scene alpha; the DOF/motion-blur pass (4084c3a8...: lerp(scene, 640x360 blur,
+    saturate(scene.a * c0.x)) into 0x4260000) then blends by it. The live zeta exists only on the host, so
+    the colour read fell through to guest VRAM, alpha came out ~0.9 everywhere and the whole image was the
+    640x360 blur. The tutorial's fog volumes (soft particles) read depth the same way and were invisible.
+    Fix (rsx_live_draw.c, zdepth_argb): an A8R8G8B8 texture at the address of a zeta with host depth gets
+    the R32F depth snapshot repacked into those bytes by a compute pass (once per depth write; RGBA8 host
+    texture R = mid, G = low, B = 0, A = high byte). LD_DEPTH_AS_COLOR=0 = old behaviour.
+    Result: sharp image and visible fog (sharp_tutorial.png, blur_before_after.png); 26-27 fps.
+    Found with LD_DRAW_DUMP + new LD_DRAW_DUMP_FRAMES=<n> (dump every draw of n consecutive frames): the
+    post chain crosses the live-draw frame counter, so one frame never held the whole chain.
+23. **Red Create Profile face = fragment source precision modifiers ignored:** the skin shader (ds_flver
+    program at 0x388960; table maps its constants to globals 0x5C-0x67, 0x87, 0x8B, 0x9C) ends in a fog
+    blend lerp(colour, P67.rgb, fog * P67.w) with the fog factor from the VS ((clip w - 50) * 0.02 from VS
+    constant 103). For a character 1.4 units from the camera that factor is -0.97, and the menu's fog
+    global 0x67 is (1,1,1,1), so the blend pushed the colour AWAY from white: G/B went to 0 and the skin
+    turned dark red. On RSX the instruction reads the factor with src0_prec_mod = 4 (SRC1 bits 19-21:
+    src0, 22-24 src1, 25-27 src2; 2 = clamp [-2,2], 3 = [-1,1], 4 = [0,1]) -> 0 -> no fog. Fix
+    (rsx_fp_decompiler.c): emit those clamps on every non-branch source (RPCS3 ClampValue). Shader disk
+    cache bumped to v3. Result: natural face and body (create_profile_fixed.png); gameplay unchanged or
+    better -- the sky through the tutorial arch now shows clouds and the palace (tutorial_sky.png).
+    Found with LD_PS_OUT=<fp offset hex>:<hlsl expr> (replace one program's colour output with an
+    intermediate value), LD_HLSL_DUMP now also writes hlsl_fp<loc>_<off>.ps/.vs.txt, LD_FPCONST_VPC=<n>,<k>
+    (VS constants), vertex attributes in the LD_FPCONST dump, LD_TEXBIND_WATCH prints guest texels.
+    Reaching Create Profile needs a first-time start: move gamedata/.../savedata/BLUS30443DEMONSS005 aside
+    (then it shows Brightness Setting first; PAD_SCRIPT ...,122:0x4000,140:0x4000 gets past it).
+24. **Live input (keyboard + mouse, or an XInput pad):** the runtime already polled XInput (Xbox pads, port
+    0..3) with a keyboard fallback on port 0 when no pad is present, but the fallback's layout (arrows,
+    Z/X/A/S) had no camera stick. libs/input/cellPad.c adds PAD_KEYMAP=souls: WASD = left stick, mouse
+    (recentred each poll while the window has focus; F1 toggles; PAD_MOUSE=0 never; PAD_MOUSE_SENS=<f>,
+    default 6) and IJKL = right stick, LMB R1, Shift R2, RMB L1, Ctrl L2, Space Circle, E Cross,
+    F Triangle, R Square, Tab/MMB R3, C L3, arrows d-pad, Enter Start, Backspace Select. Test hook
+    PAD_KEY_SCRIPT="<sec>:<key>:<dur>,..." feeds the same mapping without the focus check: walking through
+    the arch, camera turn, attack (stamina drops) and roll all reach the game (keyboard_test.png).
+    Launcher: PLAY_DEMONS_SOULS.bat (project root) -- same env as run_capture.ps1, no PAD_SCRIPT, no
+    timeout, logs to logs/last_run_*.txt; DES_NAME sets the name the OSK stub answers with.
+25. **Invisible shield = S1 vertex attributes converted the D3D way:** the player's shield (a rigid
+    mesh, 438 source vertices, same skinning VS as the body) stores all-zero bone indices and weights
+    (attr7 UB256 = 0, attr1 S1 = 0 -- checked in the raw guest vertex bytes; no other copy exists).
+    The VS normalises the weights by their sum (RCP of the sum, MUL), so with exact zeros every
+    vertex collapsed to one point. The RSX converts S1 (signed normalised 16-bit) the legacy
+    NV/OpenGL way, (2c+1)/65535, so a stored 0 is 1/65535: the four weights normalise to 0.25 each
+    of bone 0 and the shield is rigidly attached. live-draw converted c/32767. Fix: one helper
+    rsx_s1_to_float() (rsx_vertex_formats.h) used by every CPU-side S1 decode (rsx_vertex_compact.c,
+    rsx_vertex_fetch.c, rsx_live_draw.c); PS3_S1_D3D=1 = old behaviour. Result: shield on the arm in
+    Create Profile and gameplay (create_profile_shield.png, shield_fixed.png). Weapons/other rigid
+    attachments with the same layout are fixed by the same change.
+    Found by diffing each draw of the Create Profile body render (draws that change 0 pixels) and new
+    debug: LD_VTXDUMP_VERTS=<n source verts>[,<c0>,<count>] (decoded attrs, raw vertex bytes, every
+    other copy of vertex 0 in memory, VS constants; needs RSX_DRAW_CSV since it runs in the CSV
+    writer), LD_VTXDUMP_SURF=<offset hex> (vertex counts of the draws into a surface),
+    LD_FPCONST_TEX0 / LD_FPCONST_VERTS (only reached when a PSO is built -- get_pso caches).
+26. **Audio (superseded -- fixed in 29), two real fixes found on the way:**
+    a) cellAudioSetNotifyEventQueue got key 0: MultiStream's mixer thread (higher priority) creates
+       the event queue (key 0x8000CAFE02460300) and its creator reads the key before it is written --
+       the race the runtime documents in sys_ppu_thread.c. PS3_PRIO_START=1 fixes it (the key
+       arrives; the mixer thread then wakes ~187x/s, once per audio block). NOT yet in the launcher.
+    b) cellAudioSetPortLevel (NID 0x56DFE179, float level in f1) was unimplemented -> added
+       (cellAudio.c audio_register_ctx, registered in ppu_sysprx.cpp).
+    With both, MultiStream (SPURS task image 12, "Skipping DSP..." strings) runs every block and
+    writes 0x2000-byte blocks to port 0 (0x58000000), but every byte is zero: its stream state
+    (16 words of 0xFFFFFFFF = free slots at 0x17B96900; the 0xC40 stream tables are zero) shows that
+    no stream is ever opened. The ATRAC decoder (flashATRAC.pic, real dev_flash) loads and runs once;
+    the old BGM boot stall is gone (ATRAC on reaches gameplay). The game's sound engine is FromSoft
+    MagicOrchestra (MOPS3SoundManager; magicorchestra2.mgs / rpcsetting.rpc / demonsmixer.momd load
+    fine) on MultiStream; the break is in that PPU-side code (no symbols). synth2.elf (SPU thread
+    image 11) fetches its args once and then spins (100% of a core). Next: find the MagicOrchestra
+    play path (MOMainThread / MOStreamingThread are busy) and why it never calls MultiStream's
+    stream open. Without dev_flash the game falls back to cellAtrac (PPU), which needs streaming
+    (GetStreamDataInfo/AddStreamData, NIDs 0x06DDB53E 0x2BFFF084 0x46CFC013 0x99EFE171 0xBE07F05E
+    imported but unnamed here).
+    Debug added: AUDIO_MUTE=1 (silence to the device, mix/AUDIO_WAV unchanged), AUDIO_PEAK ring line
+    now per port with block peak + level, SPU_DMATRACE_BYTES also shows PUT data (non-zero count).
+27. **Frame rate: optimised build (steady 31 fps), 60 not reached yet -- what limits it:**
+    - The port was built DEBUG: build.bat's CMake defaulted to CMAKE_BUILD_TYPE=Debug, so the lifted
+      PPU code and the runtime compiled /Od /RTC1. build_opt.bat builds port\build_opt with
+      CMAKE_BUILD_TYPE=Fast (a type CMake has no presets for), so the project's own -O1 applies to the
+      lifted units, the runtime keeps -O2, plus /Zi for C files (PDB for profiling). Debug 26-27 fps with
+      drops -> optimised 31.2 fps steady; the PPU threads go from 20-30% of a core to ~0.
+      PLAY_DEMONS_SOULS.bat and run_capture.ps1 now use build_opt (fall back to build).
+    - Pacing: SetFlipMode(2 = HSYNC); vblank handler func_009F7018 counts vblanks (0x1B50434) and posts
+      a semaphore once count >= target (0x1B50E34); func_00A16360 sets target = count + obj[0xB]
+      (obj = HighGraphics' frame object + 0x718). obj[0xB] is 1 the whole time, so the game asks for
+      60 fps; DES_FRAME_INTERVAL=<n> overrides it (port patch in lifted ppu_recomp_060.cpp; logs each
+      change as [des] frame interval -- keep it in patches/recompiled-port-patches.diff after a re-lift).
+    - Why 31 and not 62: PS3_FTRACE timeline (tools/ftrace_report.py) shows a serial chain per frame:
+      HighGraphics submits for ~3 ms, the FIFO then stays empty until ~11 ms (command generation
+      upstream -- SPU dispatcher image 2, spu_0001_at_0176C200, busy 100%, a third of it in
+      spu_wrch/mfc_for channel+DMA emulation), the RSX drain takes ~11-12 ms (renderer CPU: per-draw
+      CPU vertex conversion ~6 ms -- rsx_vertex_decode_element/remap/fetch -- texture_content_hash
+      ~1.8 ms), GPU fence wait ~3.6 ms/frame, one flush per frame. ~24 ms > 16.7 ms, so each frame
+      lands on the second vblank. With PS3_VBLANK_MS=8 (125 Hz) it runs at ~39 fps, i.e. the host-
+      bound rate is ~40 fps (and game speed would scale with the vblank rate -- not for play).
+    - Tried, no effect on the cap: LD_PRESENT_INTERVAL=0 (Present without vsync wait),
+      GCM_HSYNC_IMMEDIATE (now default: HSYNC flips complete when the drain reaches them -- correct
+      for mode 2/3, kept), GCM_PUMP_THREAD=1 (handlers on a dedicated delivery thread; off by default),
+      SPU_MFC_LOOKUP_CACHE=1.
+    - Next for 60: GPU-side vertex conversion (upload raw vertex buffers, decode via the input
+      layout/VS) or a vertex-conversion cache; overlap the drain with command generation; make the SPU
+      channel/MFC fast path lock-free. Also two SPU threads spin at 100% (synth2, image 2 polling).
+    - Debug/tools added: LD_FLUSH_STATS=1 (flushes/frame by reason + fence wait ms/frame),
+      LD_PRESENT_INTERVAL, PS3_VBLANK_MS (boot_main ticker), scratchpad thread_cpu.py (per-thread CPU
+      with names) and rip_sample.py (IP sampling of one thread, offline symbolisation with the PDB).
+28. **60 fps (locked, game speed correct) -- PLAY_DEMONS_SOULS.bat default; DES_FPS=30 for the original:**
+    - Why the game was 30 even with interval 1: HighGraphics' frame loop (func_00A164B8 <- 0x00ACA488) waits
+      on the vblank semaphore until the previous frame's flip has executed, then for the next vblank, so a
+      frame is always >= 2 vblanks -- the PS3 original is a 30 fps game. Its game logic is a FIXED step:
+      the main loop func_0001B8D0 passes the float at 0x018C8DB4 (1/30 s) to every subsystem as dt.
+      Unlocking alone would run everything at double speed. Same recipe as RPCS3's "60 FPS" patch
+      (Whatcookie; RPCS3 wiki, disc v1.00 BLUS30443 writes bef32 0x018c8db4 = 0.01666667, used with
+      Vblank 120 + Clocks scale 200):
+        DES_60FPS=1         port patch in lifted ppu_recomp_060.cpp (func_00A16360): step 1/30 -> 1/60
+        PS3_VBLANK_HZ=120   2 vblanks per frame = 16.7 ms
+        PS3_CLOCK_SCALE=200 new runtime knob (sys_timer.c ps3_clock_scale): timebase, system time and
+                            current time run at 2x; sleeps/timeouts stay real. Keeps the game's own
+                            frame skip (measured in guest time) seeing its native frame length.
+      DES_STEP_STATS=1 (port debug in ppu_recomp_011.cpp, func_0001B8D0) prints steps/s and game seconds
+      per real second: 60.0 steps/s x 1/60 = 1.000 at 60 fps, 30.0 x 1/30 = 1.000 at 30 fps.
+    - Host work that had to fit in 16.7 ms (all measured with PS3_FTRACE, frames timed flip to flip):
+      * Vblank ticker (boot_main.cpp) used GetTickCount64 = 15.6 ms granularity: vblanks landed 10-18 ms
+        apart. Now QPC-based with a fractional rate (PS3_VBLANK_HZ, default 60; PS3_VBLANK_MS still
+        works). 30 fps mode went from 31.2 ragged to exactly 30.0.
+      * Converted-vertex cache (rsx_live_draw.c, LD_VCACHE=0 = off, LD_VCACHE_STATS=1 = hit rates):
+        a draw's key = attribute registers, bases, batches, primitive, restart rule and the index bytes;
+        a hit re-hashes the guest vertex ranges it was converted from and uploads the stored vertices +
+        topology indices. ~70% of draws hit, ~18 MB cached. Misses use rsx_vertex_fetch_many
+        (attribute-major loops) instead of one vertex at a time. Drain 12-13 ms -> ~5 ms.
+      * Mid-frame kicks (LD_KICK_DRAWS=<n>, default 64, 0 = off): every flush was synchronous and the
+        only one per frame was at present, so the GPU started the frame after the CPU had recorded all
+        of it and the RSX thread waited ~4 ms. Kicks submit every 64 draws without waiting (own
+        allocator pool, nothing reused before the next waited flush). Fence wait 4.0 -> 1.0 ms/frame.
+      * SPU command generation ("spu job" thread, image 2 at 0x176C200): the MFC engine lookup cache
+        is now on by default (SPU_MFC_LOOKUP_CACHE=0 = off; the locked walk over every context's
+        engine was 14% + SRW traffic 14%), spu_taskset_is_down scans only up to the highest used slot
+        (shut-down tasksets stay marked, so every SPU atomic scanned 64 volatile slots). The FIFO now
+        fills ~5 ms after HighGraphics' flip instead of ~8-11 ms.
+    - Result (tutorial, scripted run, 3 s PS3_FTRACE window): 179/179 frames exactly 2 vblanks (16.7 ms),
+      [fps] 60.0-60.4; per frame the RSX drain ends ~11 ms after the flip, ~5.5 ms of slack.
+      Before: 31.3 fps with the drain ending ~24 ms in.
+      Walk test (PAD_KEY_SCRIPT 3 s of W at 188 s): the knight ends at the same spot through the arch
+      in both modes (walk_30_vs_60.png, left 60 / right 30) -- movement and physics at the right speed.
+    - Still open: "spu job" and synth2 each spin a full core; MOStreamingThread ~47% (audio, fix 26).
+      The frame skip only covers big hitches -- below 60 the game runs slightly slow (57 fps = 95%).
+    - PAD_NO_XINPUT=1 (cellPad.c): ignore Xbox pads. With a controller plugged in the keyboard layout
+      (and PAD_KEY_SCRIPT) is never polled, and a test window would read the real pad; runs.sh sets it.
+    - Debug added: SEM_TRACE=<id|-1> + SEM_TRACE_AT=<s> (sys_semaphore.c: waits/posts with three guest
+      return addresses), scratchpad bench.sh (scripted tutorial run + fps + timeline), prof.sh
+      (thread CPU + IP samples of one thread at 205 s), fscan.py (float loads by value).
+29. **Sound and music WORK -- SPU threads could not receive events:**
+    - The real audio path (fix 26 had it wrong): port 1 (8 ch, 8 blocks, 0x58200000) belongs to Sony's
+      libmixer (cellSurMixer, statically linked: threads _cellsurMixerMain / _sys_MixerChStripMain /
+      _sys_mixerSurBusReq, code ~0x1546000), fed by libsynth2 = synth2.elf, an lv2 SPU thread (image 11,
+      tid 0x2000). Port 0 (32 blocks) is opened by MagicOrchestra itself and stays silent here (it may be
+      MultiStream's for streamed ATRAC; nothing audible needs it so far).
+    - Break: synth2 takes every command with sys_spu_thread_receive_event (SPU `stop 0x110`: spuq number in
+      the out-mailbox, lv2 answers {CELL_OK, data1, data2, data3} in the in-mailbox). The runtime had no
+      such call for lifted SPU threads (only a global "pending event" hack for another title's sim SPUs),
+      and sys_spu_thread_bind_queue / unbind_queue (syscalls 193/194) were stubs. synth2 spun at 100% of a
+      core on the failing receive, MagicOrchestra never got its voices running and never opened the
+      streamed music bank (ds_bgm_other.mowb -- RPCS3 opens it at boot position 28).
+    - Fix (runtime): bind/unbind_queue record (spuq -> queue) per SPU thread (lv2_register.c);
+      spu_stop() services stop 0x110 / 0x111 (tryreceive) for lv2 SPU threads (spu_group_id != 0) via
+      lv2_spu_receive_event: waits up to 200 ms for the binding (the SPU can get there first), pops the
+      queue with sys_event_queue_pop_spu (sys_event.c, 20 ms slices, leaves on a stop request), replies
+      like RPCS3. SPU_RECV_LOG=1 logs each receive. synth2 now gets one event per audio block (~187/s,
+      data1 = a command block at 0x0FF60100) from libmixer via port 12 -> queue 14.
+    - Also needed: PS3_PRIO_START=1 (threads start in PS3 priority order; without it the audio notify
+      queue race of fix 26a leaves everything silent). Now in PLAY_DEMONS_SOULS.bat, run_capture.ps1
+      and runs.sh. The firmware ATRAC decoder (PS3_DEV_FLASH=real dev_flash) makes no difference so far;
+      the launcher keeps no_flash.
+    - Verified from the recorded mix (AUDIO_WAV, raw float32 stereo 48 kHz): menu/UI sounds (mono), the
+      character-creation theme in stereo whose spectral peaks are C2/C3/G3/Bb3/C4/Eb4/G4 at exact A440
+      pitch (so correct speed), tutorial ambience and attack/roll sounds; lag-1 autocorrelation
+      0.95-0.996 (real audio, not garbage) -- but every other block was silent, see fix 30. Same in 60 fps mode (pitch unaffected by PS3_CLOCK_SCALE: the
+      audio thread is paced by real time). menu_music.wav / tutorial_audio.wav are clips of that run.
+    - Debug added: SPU_LISTTRACE=<image> (spu_dma.h: each MFC list element), AUDIO_PEAK shows both ports.
+      Method that found it: function-entry counts of the MagicOrchestra code (temporary PPU_MM_SNAP
+      override, scratchpad fncount.py), MO init traced call by call (instr077.py), then IP sampling of
+      the spinning synth2 thread -> its lifted loop is the stop 0x110 receive.
+30. **Choppy audio FIXED -- cellAudio mixed in bursts:**
+    - Symptom (user, 60 fps mode): sound "super choppy". Fix 29's check (pitch, autocorrelation) missed it:
+      the recorded mix alternates sound / silence in 5.3 ms blocks, 8 of every 15 blocks sounding
+      (scratchpad gaps.py: all-zero 256-sample blocks between sounding ones, ~150 a second).
+    - Cause: libmixer's _cellsurMixerMain (0x015480F0, readable copy lua_bindings_015480F0.cpp) waits on the
+      cellAudio notify queue (q16, capacity 2), reads port 1's read index and writes its block AT that index,
+      so each block must be mixed within one 5.33 ms period after its event. The runtime's mix thread was
+      paced by WASAPI room: the shared-mode engine wakes it every 10 ms, so it mixed 1-2 blocks back to back
+      and pushed their events microseconds apart. PS3_FTRACE showed the mixer waking every 10.0 ms (100/s)
+      with ~1 ms of work: the second block of each burst was read before anything wrote it.
+    - Fix (libs/audio/cellAudio.c): blocks mixed on an even QPC clock (5.333 ms, Sleep(1) under
+      timeBeginPeriod(1) then SwitchToThread to the mark), device buffer pre-filled half with silence and
+      kept between 1/4 and 3/4 full by stretching/shrinking the period 1/16; > 50 ms behind = restart the
+      schedule instead of a burst. AUDIO_DEVICE_PACED=1 = old loop.
+    - Result (sandbox, 60 fps mode, 139 s title -> character creation): mixer wakes 187.5/s spaced 5.3 ms,
+      1 dropout in 139 s (was ~150/s), AUDIO_RATE 0 underruns / 0 dropped. Clip: audio_fixed.wav.
+31. **Black screen / garbage / stretched triangles after quit-to-title + reload FIXED -- stale RT write-back:**
+    - User: after Save & Quit (Start, L2, Cross, Up, Cross) and loading again in the same process the intro
+      was pixelated, fog blocky, HUD tilted; earlier a "vertex explosion" after the archstone warp. Sandbox
+      repro (PAD_SCRIPT load -> quit -> reload, user save copied into testenv savedata): after the second
+      loading screen every frame is exactly 0, HUD included, though the scene target 0x7A0000 is complete.
+    - Chain: the final copy (draw into display buffer 0x3D0000, pso 1bbada28a104aa23) draws a full-screen quad
+      at RSX local 0xD0; its vertex 0 w read -11.809 instead of 1 (LD_FPCONST dump, now with attr loc/off).
+      PPU_WWATCH=C00000D0 (now prints r3/r4/r27-r31; PPU_WWATCH_STACK=1 = stack on every hit): the writer is
+      the game's own DLRegularHeap free (func_00AC8CC8) on heap 0x1AD6370 = the local-memory heap (base
+      0xC0000000, 0xF800000 bytes, bucket heads at 0xC0000000..0xB8, first block 0xC00000C0 = that quad).
+      Its free lists held luminance floats as links (-11.8 = 0xC13CED98 looks like a local pointer).
+    - Cause: fix 21's render-target write-back stored EVERY small FP32 surface in the surface cache to guest
+      memory at every present. After quit the game frees the luminance targets and its heap reuses them for
+      block headers; the renderer kept writing the old session's surfaces over them. LD_RT_WRITEBACK=0 run:
+      no heap write into the quad after reload.
+    - Fix (rsx_live_draw.c ld_rt_writeback_record): only surfaces written (draw/clear/copy, swin_wgen)
+      since their last write-back are stored -- the GPU only writes memory it renders to.
+    - Result: quit -> reload in the sandbox plays the intro and the corridor with HUD; brightness as before
+      (frame means 16.7 fresh / 15.0-16.6 after reload); only the boot writes touch the quad.
+32. **Closing the window now ends the game; F12 frame capture; Boletaria fps findings:**
+    - Exit: a closed window left the process "Not Responding" on ~4 cores (twice in user sessions). With
+      RSX_LIVE_DRAW=1 the window belongs to rsx_null_backend.c (not the D3D12 backend). Both window
+      procedures now call rsx_window_closing(): 3 s after WM_CLOSE the process flushes (on a side thread,
+      at most 1 s -- fflush(NULL) can block on a stream another thread holds) and TerminateProcess-es.
+      Sandbox test: WM_CLOSE to the TEST window -> gone at t+3 s, "[exit] window closed" logged.
+    - LD_F12_CAPTURE=<dir> (now set in PLAY_DEMONS_SOULS.bat -> DemonsSouls\captures): F12 with the game
+      window in front records the next present interval: every draw's target before the draw
+      (draw_f<frame>_i<idx>_<surf>.ppm) and draws.csv, in <dir>\f<frame>. LD_CAPTURE_AT=<frame> = the same
+      without a key. For glitches that cannot be scripted (the Nexus / cutscene white-and-green shapes).
+    - Boletaria (user: fps tanks): sandbox load of the user's character at the m02 archstone = ~30 fps.
+      Thread CPU: spu job 103%, HighGraphics 77%, synth2 62%, MOStreamingThread 48%, live-draw thread 45%.
+      HighGraphics works ~15 ms then usleep-polls ~25 ms per frame; RSX drains come in bursts with gaps
+      (waiting for FIFO data). vcache ~24% misses (~143 conversions/frame); texture_content_hash 11% of the
+      live-draw thread. spu job samples: spu_wrch 16%, lockline 10%, MFC ~10% -- channel/DMA emulation.
+      Not fixed yet.
+    - Gotchas: a sandbox run still alive locks port\build_opt\DemonsSoulsRecomp.exe, so the link fails and
+      the old binary gets retested -- wait for the test process to end before rebuilding. Git Bash heredocs
+      here halve backslashes: write patch scripts with the Write tool, not `python - <<EOF`.
+33. **Boletarian Palace: slow motion fixed (adaptive step), SPU lock contention cut; still ~32-40 fps:**
+    - User: "fps tanked" in Boletaria. Sandbox (user's save, profile 3) at the m02 archstone: ~31 fps and,
+      worse, DES_STEP_STATS = 39.5 steps/s x 1/60 = 0.66 game seconds per real second -- slow motion.
+    - Adaptive step (port patch, ppu_recomp_011.cpp func_0001B8D0, on with DES_60FPS; DES_ADAPTIVE_STEP=0 =
+      off): the step float at 0x018C8DB4 = the mean real time of the last 24 steps, clamped to 1/60..1/30,
+      smoothed 1/4 per step. Result: Boletaria 39.4 steps/s, step 0.0254, game time 1.000; tutorial still
+      60.0 steps/s, step 1/60, 1.000. Walk test (3 s of W at 160 s, adaptive 60 vs DES_FPS=30): same spot.
+    - Lock-line lock: SPU_JOB_STATS=1 (spu_workload.c; per-image async task counts/time + lock stats every 5 s)
+      showed 7.2 M acquisitions/s, 690 k/s contended, 726 ms/s spent waiting; SPU_LOCK_SITES=<file> (callers by
+      return address, rip_sample.py format) put 98% on SPU_WrEventAck -- SPURS kernels/dispatchers ack events
+      in their poll loops. event_status updates are interlocked OR/AND already, so the lock there protected
+      nothing: removed (SPU_EVENTACK_LOCK=1 = old). Now 1.7 M/s, 29 ms/s waiting; img7 tasks ~30% cheaper.
+      fps barely moved (30 -> 32), so contention was real but not the limit.
+    - Where a Boletaria frame goes (PS3_FTRACE, now with a busy span per async SPU task, who = 64 + image;
+      scratchpad chain.py draws HG / per-image SPU rows / RSX): per HighGraphics cycle ~50 ms =
+      ~13 ms cond_wait while the SPU animation tasks run (img10 = Havok LtSpuAnim, img5 ~7 ms single task,
+      img3/4/6), ~13 ms HighGraphics own work, ~24 ms waiting at 0x00ACB0A0 for SpursTaskCommandDispatcher's
+      reply (polls 0x1B50FD0, written by SPU DMA) while it builds the command stream and the live-draw thread
+      drains it in bursts (that thread idles ~1/3 of the time waiting for commands). Tutorial: the same reply
+      comes in 0.03 ms. 60 fps here needs all three stages ~3x faster -- a project, not a fix.
+    - Ruled out: SPU_DMA_REPEAT_BACKOFF_MS (no change), thread spawning per SPU task (~20/frame, ~2 ms),
+      LBP_SPU_SERIAL (off), runtime -O level (already -O2 + SSE4.1; lifted PPU is -O1).
+34. **Boletarian Palace ~40 -> ~56 steps/s (presents ~60): lifted SPU code was built without SSE4.1:**
+    - Frame chain, measured: HighGraphics pushes ~37k commands per frame to SpursTaskCommandDispatcher
+      (img2), ~780k/s. SPU_MFC_STATS=1 / SPU_MFC_PCS=2 (spu_channels.c): per command one GETLLAR (LS
+      0x4618) + PUTLLC + 128-byte GET (0x4694) and one small PUT (0xC408, 45 B avg); 5.5 M GETLLAR/s more
+      are its idle loop (0x5120). At ~0.8 us a command the dispatcher fell ~17 ms behind HighGraphics' 13 ms
+      of pushing -- the "reply wait" at 0xACB0A0. Timeline tools: scratchpad chain2.py (every PPU thread +
+      SPU tasks + dispatcher idle + RSX), qphase.py (drain coverage inside the reply waits),
+      stack_sample.py (samples charged to the lifted function on the stack), SPU_IDLE_STATS=1,
+      GCM_STREAM_STATS=1, LD_FLUSH_STATS=1.
+    - THE fix: port/project/CMakeLists.txt gave the lifted SPU sources "-O2" only; the runtime library has
+      -msse4.1, these did not, so spu_helpers.h compiled every SSE helper to its fallback -- spu_shufb as a
+      byte loop called out of line 1,558 times in the dispatcher alone. Now "-O2;/GS-;-msse4.1" (and
+      spu_shufb always_inline). Dispatcher idle 38% -> 50%, SPU anim tasks ~7 ms -> ~4.5 ms, Boletaria
+      42 -> 56 steps/s, game time 1.00; tutorial 60.0. Audio (synth2 is SPU) checked: 0 dropouts in 195 s.
+    - Smaller, kept: channel fast path for lifted code (spu_helpers.h, SPU_NO_CHANNEL_FAST=1 = off:
+      MFC_LSA/EAH/EAL/Size/TagID/WrTagMask writes and RdTagStat/RdAtomicStat reads inline; mfc_for 8% ->
+      0.7%); 4-lane texture_content_hash (renderer 481 -> 380 ms/s draining); GCM streaming (cellGcmSys.c,
+      GCM_STREAM=0 = off): `get` published every 256 words, a pass picks up a `put` that moved while it ran
+      (<= GCM_STREAM_MS, 4), an SPU DMA of `put` kicks the present thread. The last did not move fps on its
+      own (the dispatcher was the limit) but removes the walker's 4 ms naps.
+    - Left: HighGraphics' own ~14 ms CPU per frame (lifted PPU, -O1, no SSE4.1 -- the PPU headers have no
+      SSE-conditional code, so the flag alone would not help much); per-op cost of emulated atomics/DMA
+      (~45% of the dispatcher: debug-switch checks in mfc_do_transfer / spu_mfc_atomic, lockline, coherency).
+35. **Nexus / cutscene "lighting bug" (huge white, salmon, green, grey rectangles) FIXED:**
+    - Repro (sandbox): with a profile already on the system, NEW GAME -> profile slots full -> OK -> overwrite
+      slot 4 -> create -> "Would you like to play the journey to the Nexus?" NO -> the Nexus intro cutscene.
+      Without any save the question is never asked (straight to the tutorial). LD_CAPTURE_AT now takes a
+      list of frames (rsx_live_draw.c), since captures slow the run and the glitch frame drifts.
+    - scratchpad drawdiff.py on the capture: the shapes are single blended quads drawn after the scene,
+      each sampling a 64x64 texture of format 0x9E = D8R8G8B8 (local 0x24BA380 / 0x24BE400 / 0x24C2480) --
+      the lens-flare / glare sprites. The live renderer had no case for D8R8G8B8, so the span was 0, the
+      decode failed and the white fallback was bound: each flare became a solid quad in its vertex colour.
+      Fix: ld_tex_base_fmt() decodes it as A8R8G8B8 (same layout; the D3D12/Vulkan backends already map
+      both to B8G8R8A8). The cutscene now shows proper flares (rings, discs, starburst) and the in-game
+      Nexus is no longer washed grey. The Boletaria intro uses the same sprites (not re-checked).
+36. **Boletarian Palace ~56 -> ~58 steps/s (57-60, real speed): AVX2 SPU floats, present-first frames:**
+    - -mavx2 for the lifted SPU sources (port/project/CMakeLists.txt; patches/port-project-CMakeLists.txt):
+      spu_helpers.h's vector paths for the SPU float ops, estimates and conversions are under __AVX2__,
+      so every lane went through the exact scalar emulation. No -mfma. Image 5 (FFX cluster draw) tasks
+      207 -> 147 ms/s, longest 6.2 -> 4.2 ms. PS3_REQUIRE_AVX2=1 (now in the PLAY bat) makes
+      boot_main.cpp stop with a message box on a CPU without AVX2 (the user's 7950X3D has it).
+    - Present-first (rsx_live_draw.c, LD_PIPELINE=1, the default): the present flush submits, Present()
+      hands the frame to the swap chain, THEN the walker waits for the GPU and stores the write-back. The
+      GPU is still idle at every frame start. The allocator / upload arena / retired list are double-
+      buffered for it (ld_pipe_present). LD_PIPELINE=0 = the old order.
+    - LD_PIPELINE=2 = full pipelining (next frame recorded while the GPU finishes this one, write-back
+      copies taken early -- ld_kick_after_draw when drawing moves off a small FP32 target -- and kicked,
+      so a present waits only for those). Steady 60.0 in Boletaria, BUT the tutorial's exposure got stuck
+      at a flat black / grey / olive screen in about one run in two (race not found; the D3D12 debug
+      layer reports nothing once the kick runs after the sampled surfaces' transitions back, and its
+      slower timing hides the bug). Bisect results: synchronous GPU + deferred write-back = fine; async
+      GPU = broken even with the write-back disabled or committed early. Experimental only.
+    - Found on the way: ld_kick_after_draw ran before a draw's sampled surfaces went back to
+      RENDER_TARGET (now after); 2.16 M PPU stores/s go through the lock-line path, 1.9 M of them to the
+      dispatcher queue's control line 0x01B51080 with only 0.07 SPUs actually holding it (SPU_COH_STATS=1,
+      spu_coherency.c) -- about a third of HighGraphics' busy time; making those stores lock-free needs a
+      PUTLLC that commits only its changed words (not done). The lock-acquire counter is now only kept
+      under SPU_JOB_STATS; idle SPU event polls pause 16x (SPU_IDLE_PAUSE) -- neither moved fps.
+    - Tried, no gain: -O2 for HighGraphics' 11 hottest lifted PPU units (DS_PPU_O2_UNITS, kept, harmless);
+      LD_KICK_DRAWS=16 (worse GPU tail).
+    - Tools: scratchpad all_sample.py (every thread; misses per-task SPU threads), capalign.py (two
+      captures aligned by draw signature), blackframes.py; LD_PRESENT_DBG=1 (scanned-out surface),
+      LD_CAPTURE_AT=<f1,f2,...>. Verified: tutorial x3, Boletaria standing + walking + a fight, save &
+      quit -> reload, the Nexus cutscene.
+37. **Boletarian Palace judder ("60 fps but not smooth") -- present pacing:**
+    - Measured with DES_STEP_LOG=<file> (port debug in ppu_recomp_011.cpp func_0001B8D0: "<us> <step>"
+      per game step) + LD_PRESENT_LOG=<file> (rsx_live_draw.c: "<us> <frame>" per Present), both on the
+      ps3_qpc_us clock, 60 s windows from *_FROM seconds; scratchpad jitter.py. Boletaria: 64.5
+      presents/s, present-interval sd 8.4 ms, 12% of presents under 4 ms apart then 25-40 ms gaps --
+      when the game falls behind, HighGraphics renders two frames back to back and the walker reaches
+      both flips together: 30 fps with doubled motion, though the counter says ~60.
+    - LD_PRESENT_PACE=<fraction> (rsx_live_draw.c, before Present; set to 0.85 in the PLAY bat; off by
+      default in the runtime): a present arriving sooner than fraction x the running average interval
+      waits until then (<= 20 ms; stalls over 50 ms do not enter the average). Boletaria: present sd
+      8.4 -> 3.3 ms, no sub-4 ms presents, 59.1-59.8 steps/s; tutorial sd 1.7 ms at 59.8. 0.93 was too
+      tight (sd 2.5 but 47-57 steps/s -- the walker waits while the FIFO backs up).
+    - Not it: DES_FRAME_INTERVAL=2 (flips capped at 60 on the 120 Hz vblank) -- worse, 54 steps/s.
+    - The user's monitor runs at ~100 Hz (3440x1440): 60 fps cannot be even there without VRR (frames
+      alternate 1 and 2 refreshes). G-SYNC for windowed mode, or 60 / 120 Hz, fixes that part.
+38. **Lens flares "way too bright" -- real ZPASS occlusion counts:**
+    - The flare code (LensFlareDrawEntity, readable copy; reads the count through cellGcmGetReport)
+      draws an invisible 24x24 probe quad 300 units out along the light between ZPASS
+      CLEAR_REPORT_VALUE (0x17C8) and GET_REPORT type 1 (0x1800), with SET_ZPASS_PIXEL_COUNT_ENABLE
+      (0x17CC) on, and sets visibility = count / (w x h) (floats at +0x50/+0x54). The GCM walker
+      answered every ZPASS report with 0xFFFF: ~114x full strength, never occluded (the orb trails and
+      white blow-outs in the Nexus intro, the burst through solid rock at the Stonefang archstone).
+    - rsx_live_draw.c ld_occ_*: per-draw D3D12 occlusion queries while 0x17CC is set, summed from the
+      last clear, ResolveQueryData before every Close (present flush and mid-frame kicks), stored once
+      that submit's fence passes (cellGcmSys.c gcm_report_store_value; g_gcm_zpass_by_host makes the
+      walker leave type-1 values alone). One frame late at most -- the game checks its own label and
+      reads the previous value meanwhile. LD_OCCLUSION=0 = old 0xFFFF; LD_OCC_DBG=1 logs reports;
+      LD_CAPTURE_ON_ZPASS=<n> captures the frame after the n-th report.
+    - Verified by reading back the depth plane at the probe (debug code since removed): in Stonefang
+      and the Nexus intro the probe always sits behind real geometry (stored depth 0.97-0.998 vs the
+      probe's 0.9997), sky pixels hold depth above the probe, so 0 there is the right answer. No spot
+      with the sun in open sky found yet to see a flare drawn at its proper strength.
+    - Gotcha: NV4097 0x1D84 is ZCULL_EN, 0x1D7C AA control, 0x1D8C ZSTENCIL_CLEAR_VALUE -- the ZPASS
+      enable is 0x17CC.
+39. **Frame rate across the five worlds (60 fps mode, LD_PRESENT_PACE=0.85, sandbox):**
+    - DES_WARP_AT=<sec>:<area>,<block>,<point> (port debug in ppu_recomp_011.cpp func_0001B8D0): sets the
+      stage manager's next map / spawn point / request byte the way the event scripts'
+      proxy:WarpNextStage does (lua_WarpNextStage 0x451430). World starts (SCRIPT/m01_00_00_00.lua):
+      2,0,999 Boletaria 1-1; 3,1,999 Shrine of Storms; 4,0,999 Tower of Latria; 5,0,999 Valley of
+      Defilement; 6,0,999 Stonefang Tunnel; 998/997/996 = later blocks. Scratchpad area.sh.
+    - steps/s and present-interval sd over 60 s: Latria 57.7-59.7 (sd 1.2 ms without the frame dump),
+      Valley 59.3-59.9 (1.7), Stonefang 59.8-60.0 (1.1), Shrine 56.2-59.2 (1.3); Boletaria 59.1-59.8 (fix 37).
+    - Remaining unevenness is the game: a step runs 25-40 ms about once a second in Latria/Shrine, the
+      next frame repeats (the graphics thread presents with no new step). The render thread is not it:
+      Present averages 0.25 ms, the GPU wait 0.5 ms (LD_PRESENT_LOG now logs pace / Present / GPU wait).
+    - First visit to an area compiles 12-18 new pixel shaders (scratch\rsx_shader_cache_v3), 0.1-0.25 s
+      hitches when they first come into view; none on later visits. LD_FRAME_DUMP adds a ~37 ms hitch
+      per dump -- keep it off when measuring pacing.
+    - Seen here, fixed in 40: coloured static over the whole screen after dying in Shrine of Storms.
+40. **Coloured static after dying / black world = live-draw surface table full:**
+    - Shrine of Storms, after a death: the whole scene under coloured 8x8-pixel static, the HUD clean;
+      one run also had the world black with only the character drawn. Not soul form itself (the test
+      character was already in soul form before it died and looked fine).
+    - rsx_live_draw.c kept 64 colour surfaces (MAX_SURFACES) and never freed one. The game moves its
+      post-processing chain to new local-memory addresses after map loads (Nexus -> Shrine, the reload
+      after a death), so the table filled with dead entries and every new target was dropped
+      ("[surfsz] surface table full (64); dropping ...", draws logged drop_surface). Dropped: the two
+      160x90 bloom targets -> the final composite (0x7A0000, reads the bloom as t1) sampled raw guest
+      memory nothing had rendered = the static; in another run the 16x16 exposure targets too -> the
+      tone map used garbage, the world came out black.
+    - Fix: surface_t.used_frame (set when bound as a target in current_surface and when sampled);
+      when the table is full surface_get recreates the slot unused longest, if idle for
+      LD_SURF_EVICT_FRAMES (default 120; 0 = old drop behaviour), never the last presented / drawn
+      target or one with a write-back pending. Logged as "[surfsz] surface table full; slot N (...,
+      idle F frames) reused for ...". Sandbox: Shrine, two deaths, no static, world normal, all 403
+      draws of a soul-form frame execute, ~58 steps/s (soul_static_fix.png).
+    - The zeta table (also 64) was not near full: 6 entries in the same run.
+    - Capture aid: draws.csv rows now carry fp=<loc>_<offset> (matches LD_HLSL_DUMP's hlsl_fp files;
+      the PSO-key file names drift with per-frame constants). LD_F12_CAPTURE wants an absolute path --
+      the sandbox runs from testenv, a relative one silently writes nothing.
+41. **Character name typed in a text box (cellOskDialog):** the OSK stub answered every request at
+    once with OSK_TEXT, and PLAY_DEMONS_SOULS.bat always set it (DES_NAME, default "Slayer").
+    - Now LoadAsync posts LOADED and opens a small Win32 window on its own thread (the game's prompt,
+      "Entry Character Name"; an edit box with the initial text, limited to the field's length -- 16;
+      OK / Cancel = Enter / Esc; OK disabled while empty). OK posts FINISHED with the text (UTF-16, so
+      any character the edit box takes; whether the game's font has it is another matter); Cancel /
+      closing it reports CANCELED (untested what DeS does then). OSK_TEXT (or SetDefaultResponse) still
+      answers at once with no window: the sandbox runs.sh defaults it to Slayer; the launcher only sets it
+      when DES_NAME is set by hand.
+    - cellPad's focus test counted any window of the process as the game, so typing in the box would
+      also have pressed E = Cross / Enter = Start: pad_host_window_focused() is false while
+      g_osk_host_window_open. cellSysutilQueueEvent gained a producer lock (the box posts from its thread).
+    - Sandbox check: OSK_BOX_AUTO=<text>[|<file.bmp>] (TEST) makes the box type <text>, save a picture of
+      itself and press OK after 1.5 s. "Tester" -> log "text box open (limit 16 chars)", "typed Tester",
+      Create Profile shows Name Tester, the profile saved with it, the Nexus intro follows
+      (name_entry.png). FindWindow from a separate tool process cannot see the sandboxed game's windows,
+      hence the in-process hook.
+42. **"Lag" turning the camera in Boletarian Palace = 60 fps on a 100 Hz monitor -> 50 fps display lock:**
+    - User's save (testenv/save_user_1029, profile 4 = Palace; scratchpad bol.sh restores it, KEYS= key
+      script). Holding L (camera right) 15 s: ~57 steps/s, presents a steady 60 -- the counters look fine.
+    - LD_PRESENT_LOG now also logs the swap chain's frame statistics (last present count, the present
+      count + vblank of the last frame that reached the screen); scratchpad cadence.py turns that into
+      refreshes per frame. Primary display = 3440x1440 at 99.97 Hz (modes 50/60/85/100 only): frames
+      stayed up 1 refresh 19.5%, 2 74.5%, 3 6.0% -- 10 / 20 / 30 ms on screen, judder in every pan. Plus
+      ~57 steps for 60 presents = ~6 repeated frames a second.
+    - 50 fps mode: PS3_VBLANK_HZ=100 (2-vblank game loop = 50), PS3_CLOCK_SCALE=167, LD_PRESENT_INTERVAL=2
+      (each frame at least 2 refreshes), LD_PRESENT_PACE=0; the adaptive step goes to 0.02. Same spin:
+      2 refreshes 98.2% (1: 0.8%, 3: 0.9%), game time 0.999-1.000 s per real s. User watched the test
+      window: "BUTTERY". PLAY bat: DES_FPS unset -> 50 when WMI CurrentRefreshRate is 95-105, else 60;
+      DES_FPS=60/50/30 forces a mode.
+    - Also measured: shader-compile freezes the first time an effect appears (walking forward: 8 new pixel
+      shaders = 302 + 261 ms). LD_PSO_TIME=1 logs per new PSO: D3DCompile vs ~120 ms (up to 300),
+      ps ~30 ms, CreateGraphicsPipelineState ~0.5 ms. fxc flags do not help (L0 same, skip-opt halves vs
+      but slows ps; scratchpad fxc_time.py). The disk cache (scratch\rsx_shader_cache_v3) keeps them for
+      later runs; the user's last Palace session compiled none. Async compile would remove the rest.
+    - Gotcha: LD_FRAME_DUMP_EVERY=60 adds a 37 ms hitch every 60 frames -- use a huge value for timing runs.
+43. **Frame-rate launchers: PLAY_DEMONS_SOULS_30FPS.bat / _50FPS.bat / _UNLIMITED.bat (project root):**
+    each sets DES_FPS (30 / 50 / unlimited) and calls PLAY_DEMONS_SOULS.bat, which stays auto (50 on a
+    ~100 Hz monitor, else 60).
+    - Uncapped: DES_60FPS=1, PS3_VBLANK_HZ=480 (2-vblank loop = up to 240 fps), PS3_CLOCK_SCALE=200,
+      LD_PRESENT_INTERVAL=0, LD_PRESENT_PACE=0, and DES_MAX_FPS=240 -- new port patch: the adaptive step's
+      floor was a fixed 1/60 s (above 60 steps/s the game would run fast); now 1/DES_MAX_FPS
+      (ppu_recomp_011.cpp, default 60; saved in patches/recompiled-port-patches.diff).
+    - Sandbox, user's Palace save: uncapped 67.6 steps/s, ~79 presents/s, game time 1.000 (the 60 cap was
+      not all CPU: 68 > 57); on the 100 Hz screen frames show 1-3 refreshes (uneven, as expected without
+      VRR). Title screen alone ran 240. 30 fps: 30.0 steps/s, step 1/30, game time 0.99-1.00, frames
+      3 / 4 refreshes (100 Hz cannot show 30 evenly either).
+    - Test gotcha: uncapped boots faster, so bol.sh's PAD_SCRIPT Down at 85 s landed on the title menu
+      (NEW GAME -> "profile slots full"); use PADS without 85:0x0040 there.
+44. **God mode (F9 toggle; DES_GOD=1 = on from the start):** port patch at the top of func_0001B8D0
+    (ppu_recomp_011.cpp; patches/recompiled-port-patches.diff), runs every game step on the main thread.
+    - The event scripts' own "player does not die" switch: proxy:SetDeadMode(10000, true) (m08 tutorial,
+      Shift-JIS comment). lua_SetDeadMode (0x44AB30): chr = func_004142A8(*(TOC[-0x7884] - 0x7F0C), id, 0, 0),
+      then bit 0x10 of the doubleword at chr+0x310. lua_GetHp / GetHpRate: HP chr+0x3C4, max +0x3C8.
+      PlayerRecover (0x4392B0) is an empty stub in retail.
+    - Player stats seen with DES_GOD_DUMP=1 (chr+0x380..0x47C every 5 s; user's soul-form char):
+      +3C4 HP 174, +3C8 max 276 (soul form = half of +3DC 552), +3CC MP 7, +3D0 max MP 106, +3D4 / +3D8
+      stamina 91 / 91, +3E0 / +3E4 base MP / stamina. The HUD's blue bar matched MP 7/106.
+    - While on: the flag is set, HP -> max, MP -> max, stamina (+3D4 -> +3D8) -> max each step; F9 off clears the flag (also a script-set
+      one -- harmless outside the tutorial). The patch calls the lifted lookup with a saved/restored
+      ppu_context. Runtime helpers (cellPad.c): ps3_host_hotkey(vk) = edge-triggered, game window in front
+      (or PAD_KEY_SCRIPT, which now knows F9); ps3_host_title_suffix(s) sets "<title>  [GOD MODE - F9]"
+      from a helper thread (SetWindowText waits for the window's thread).
+    - Sandbox (user's Palace save): F9 at 160 s -> HP 174 -> 276, MP 7 -> 106 (bar full), off at 180 s.
+      Stamina: 10 s of W + SPACE (sprint) with it off 91 -> 54 -> 6; the same sprint with it on stays 91.
+      Not tested: an actual killing blow, falls (kill planes may bypass the flag).
+45. **"Demon's Souls PC Remaster" mod (fromsoftserve, Nexus mod 106) -- PLAY_DEMONS_SOULS_REMASTER.bat:**
+    - Made for RPCS3 (relit models, normal / specular maps, cubemap armour, shadows; "the whole game").
+      The user downloaded "PC Remaster" (file name says 0.95, 2026-07-31, 400 MB) to Downloads; the
+      optional ReShade preset is for RPCS3's Vulkan and was not used. Nexus needs a login to download.
+    - DemonsSouls\game_remaster = `cp -al game` (hard links, ~0 extra space) + the mod: 618 files replaced,
+      145 added (new OBJ/o0001.. objbnds the modded MSBs reference, MAPSTUDIO .msb files, drawparams, mtd,
+      menu). Install script (session ca3b5f74 scratchpad, remaster_install.py): matches the
+      mod's lowercase paths to the game's case, REMOVES each existing file before writing (it is a hard
+      link into DemonsSouls\game -- writing through it would change the normal game), and checks no
+      replaced file still shares an inode with game\. List in game_remaster\REMASTER_INSTALLED.txt.
+      To remove: delete game_remaster (the normal game keeps its own links).
+    - PLAY bat: DES_GAME=<folder under DemonsSouls> (default game) picks the EBOOT path, and with it the
+      VFS root (boot_main derives it from the EBOOT path); title "... - PC Remaster mod". Saves, hdd1
+      cache and the shader disk cache are shared. Sandbox runs.sh takes DES_GAME too.
+    - Sandbox, user's Palace save: VFS root game_remaster, 54-61 fps, no pso-fail / surface-table lines;
+      remaster_compare.png / remaster_compare2.png (normal above, mod below): same scene, the character
+      now shaded by the room's lights. Not compared against RPCS3, other worlds not visited.
+46. **Stutter recording -- PLAY_DEMONS_SOULS_RECORD.bat + tools\perf_report.py (2026-10-30):**
+    - The user still saw stutters in Boletaria (camera pans, near geometry) that scripted test runs may not
+      hit, so the player records and the log gets analysed. The bat = PLAY_DEMONS_SOULS.bat + DES_PERF=1,
+      LD_PRESENT_LOG=DemonsSouls\perf\<date_time>\perf.txt, LD_PRESENT_LOG_FROM=0, LD_PRESENT_LOG_SECS=0
+      (new: 0 = whole run; default still 60 s), DES_REFRESH (monitor Hz). ~25 MB/hour, flushed every second.
+      F8 in the game window = "mark" (the player saw a stutter); title shows [RECORDING - F8 = stutter, N marked].
+      (Not F10: that opens the window menu.)
+    - One file, one clock: present lines (+ col 10 = render-thread CPU us since the previous present) and
+      "# <us> <kind>" notes from ps3_perf_note() (rsx_live_draw.c, SRW-locked): step (011.cpp: step s,
+      right stick, pad source 1 XInput / 2 kb+mouse, host polls, mouse dx/dy, game-thread CPU us via
+      ps3_thread_cpu_us = QueryThreadCycleTime / TSC rate), mark, pso (compile >= 1 ms), read (ppu_fs.cpp
+      cellFsRead / AIO reads >= 2 ms with path). cellPad: ps3_host_pad_debug(); "F8" key-script name.
+      God-mode and recording share the title suffix (des_title() in 011.cpp).
+    - perf_report.py [perf.txt | folder] (default newest perf\*): display Hz + refreshes-per-frame
+      histogram, present/step interval percentiles, every hitch (frame up longer than usual, or present
+      > 1.5x median) with causes (shader compile, slow reads, game step late + thread busy/waiting by CPU
+      time, Present blocked, GPU wait, renderer late), F8 marks with the hitches in the 3 s before,
+      worst N, hitches per 10 s, camera-input stats. --from/--to seconds, --top N.
+    - Sandbox (user's Palace save, 50 fps, IJKL camera spin): display 99.75% at 2 refreshes, ~40 hitches/min
+      by the CPU-side rule; most are "game step late ~40 ms, game thread WAITING (CPU ~6 ms)" -- the
+      game thread blocked on something (SPU jobs / flip / RSX?) -- next lead; a few busy 160-200 ms steps
+      (loads) and a 240 ms render-thread spike (161 ms CPU) at 113 s.
+    - Boletaria 1-1 gate question (not a bug): m02_00_00_00.lua has THREE levers. Event 10 (lever o2211_01,
+      entity 1005) and event 50 (o2211_08, 1006) open the right / left gate-tower doors (o2241 / o2251 at
+      ground level, y~33). The main gate (o2221, 1001) opens only from event 0, lever o2211_00 (1000) at
+      (16.3, 70.5, -37.3) -- ~37 m up, right above the gate by the gear o2160 -- which plays remo 20001
+      (scn020001, "the main gate opens") and turns on the fog walls. The user had pulled the two tower levers.
+47. **Stutter: every ~0.75 s a repeated frame + a lost frame -- double present of one flip (2026-10-30):**
+    - Found with the fix 46 recorder + new stack sampling (DES_PERF_STACKS=1: a sampler thread suspends the
+      main thread -- and DES_PERF_STACK_THREADS=<guest names>, and "rsx" -- every 4 ms once a step is
+      DES_PERF_STACK_MS (28) ms old and logs exe RVAs; symbolise with llvm-symbolizer + the PDB; scratchpad
+      stacks.py) and flip events in the perf log (cellGcmSys.c: vb, vbh = vblank handler delivered,
+      fdone, flipreq <buf> <in_fifo>, flipexec).
+    - Chain: late steps sat in sys_cond_wait under func_00D1E228 (Class0187CB90 vf12 posts a message to
+      HighGraphics and waits); HighGraphics sat in HighGraphics_FrameLoop's DLSingleSignal semaphore,
+      which the vblank handler posts. The event timeline showed: at every repeat, a 2nd Present 1-3 ms
+      after the real one with no flipreq and ~0.3 ms render CPU, then 18-23 ms GPU wait (its sync-
+      interval-2 Present queues behind the previous flip), and NO vblank ticks for ~39 ms -- the
+      vblank ticker is the same thread (boot_main vblank_ticker). The game's frame loop missed its
+      vblank target and lost a whole frame: on screen a repeated picture, then a jump.
+    - Cause: the ticker presents on two signals -- cellGcm_take_flip_pending() (before the drain) and
+      a flip-count change (bottom of the loop). gcm_flip_request set the pending flag BEFORE bumping
+      the count, so the pending path could present, record the old count, and the count check then
+      presented the same frame again.
+    - Fix: boot_main present_pending(): the count decides, the flag only triggers a look (one present
+      per flip; PS3_PRESENT_ONCE=0 = old); gcm_flip_request bumps the count, MemoryBarrier, then sets
+      the flag. Sandbox, Palace camera spin, 75 s window:
+        50 fps: repeated frames 97/min -> 0.8/min, steps 48.4 -> 50.0/s, worst step 54 -> 31 ms.
+        60 fps (A/B with PS3_PRESENT_ONCE=0): repeats 149 -> 11/min, steps 58.1 -> 60.0/s, steps
+        > 30 ms 77/min -> 0.
+      Fix 37's "paired catch-up presents" (LD_PRESENT_PACE) were very likely these duplicates; pacing
+      left on. GCM_PUMP_THREAD=1 was tried first: no effect (delivery wasn't the problem).
+    - perf_report.py now prints "repeated frames", counted by flip: each present shows the latest flipreq
+      before it; "same flip shown twice" = this bug, "flip with no new step" = the game repeating. (The
+      first version compared presents with step notes directly and miscounted when a step started ~2 ms
+      after a present -- 8.8/min false repeats in Shrine.)
+    - Other worlds (sandbox, user's 50 fps / 100 Hz settings, scratchpad area50.sh: profile 3, warp at
+      160 s, walk + camera turns, 75 s window), same flip shown twice per minute old -> new:
+        Shrine 49.8 -> 0, Latria 114 -> 0, Valley 57 -> 0, Stonefang 62 -> 0; steps 48.1-49.0 -> 49.7-50.0/s;
+        hitches 61-92/min -> 2-21/min. Left on the fixed build: first-time pixel-shader compiles 25-70 ms
+        (new to the sandbox cache; cached on disk after), the test's own frame dumps (~22 ms render CPU),
+        and one 175 ms busy game step in Valley that a rerun with stack sampling did not reproduce
+        (rerun: 1.6 hitches/min, worst frame 33 ms).
+48. **User's first recording after fix 47 (2026-10-30, 34 min, 50 fps / 100 Hz):**
+    - 49.9 fps, 99.0% of frames up exactly 2 refreshes, same flip shown twice 3 in 34 min (fix 47 holds).
+      Two F8 marks at the end, in Boletarian Palace 1-1 by the wooden scaffolding: no long frames, but
+      uneven pacing -- render-thread CPU alternated ~3 / ~23 ms per frame (whole session median 6.5 ms),
+      presents 13-28 ms apart; now and then a frame missed its refresh (3 then 1 refresh).
+    - Reproduced from a copy of the user's save (testenv/save_user_1030, scratchpad bol2.sh SAVE=...):
+      render CPU steady ~15 ms per frame there (1-2 ms on the title / load screens). New sampler mode
+      DES_PERF_STACK_EVERY=<ms> samples the watched non-main threads ("rsx", named guest threads)
+      continuously; scratchpad cmpstk.py / hotlines.py summarise. Renderer thread there, self time:
+      sink_end_impl ~20% (memcpy of each draw's converted vertices into the upload ring, line ~8519),
+      ld_vc_hash ~8% (vertex-cache mutation hash of guest vertex data every draw), texture_content_hash
+      ~7% (per-texture hash every frame), get_pso fnv1a ~4%, vertex remap/fetch ~4%, idle ~22%.
+      I.e. per-draw re-upload + re-hash of all geometry every frame; scales with draw count.
+    - Possible fixes (not done): keep vertex-cache hits in GPU-resident buffers instead of re-copying;
+      replace per-frame hashing with guest write tracking or spread it over frames; cheaper PSO key.
+    - perf_report.py: F8 marks now look back 10 s and show present-interval spread and render CPU.
+49. **Renderer CPU cut ~35% in heavy scenes (2026-10-30, follow-up to 48):**
+    - LD_RSTATS=1 prints per-frame renderer work every 300 frames. By the Boletaria 1-1 scaffolding
+      (user's save): ~800 draws a frame; every frame it re-hashed 54 MB of textures and ~22 MB of
+      vertex/index source and copied 46 MB of cached converted vertices into the upload ring.
+    - (a) GPU-resident vertex cache (LD_VC_GPU=0 = old): cached draws' converted vertices + indices
+      are written once into a 256 MB persistently mapped upload-heap arena (~110 MB used by the
+      scaffolding; when full, entries not drawn for 4 frames are evicted and that draw uses malloc) (power-of-two blocks
+      256 B..16 MB, split on demand; frees wait in a pending ring for the fence covering all work
+      recorded at free time) and bound in place -- ring copy 46 MB -> 0. Indices start 16-byte
+      aligned after the vertices. Arena data is write-only (write-combined; never read back).
+    - (b) Adaptive texture checks (LD_TEX_HASH_EVERY=1 = old): a texture unchanged for 8 full hashes
+      gets a sparse probe per frame (64 B of every 4 KB + the last 64; textures < 32 KB always
+      full) and a full hash every 16th frame staggered by slot; probe mismatch -> full hash now.
+    - (c) Adaptive vertex-source checks (LD_VC_HASH_EVERY=1 = old): a cache entry is checked once
+      per frame (repeat draws of the key reuse it); stable entries get a sparse probe (ranges
+      <= 4 KB in full, else 32 B of every 1 KB + last 32) and a full check every 16th frame.
+      Hashing 76 MB -> ~8 MB a frame.
+    - (d) get_pso: vertex-program length / FNV hash / texture-fetch mask memoised on (start slot,
+      rsx_dispatch_vp_generation -- a global bumped on every vp[] write in rsx_dispatch.c). Same
+      key values (shader disk cache unaffected); was a byte-wise FNV over the program twice a draw.
+    - Render-thread CPU at the scaffolding, median: 14.3 ms -> 9.5 ms (a: 11.8, +b/c: 10.0, +d: 9.5).
+      Other worlds (area50.sh, 75 s): Shrine 5.4 -> 4.1, Latria 7.6 -> 5.4, Valley 6.0 -> 4.7, Stonefang 7.1 -> 4.9 ms; one 981 ms game-thread wait in one Stonefang run did not reproduce on a rerun (worst step 31 ms).
+      A/B frame dumps (all three switches off vs on, same frames, standing still): identical but
+      for the random embers / fire flicker. Remaining: ~2.5 ms/frame waiting for the GPU at the
+      present (not CPU), ~125 vertex-cache misses a frame whose key changes every frame (dynamic
+      geometry: misses land in slots not used last frame) -> full conversion each frame.
+50. **Seconds-long judder after a late frame: the game's catch-up frames + a display wait on the drain
+    thread (2026-10-30, user's 2nd recording after fix 49, 19 min, 50 fps / 100 Hz):**
+    - Mostly smooth (99% of frames up exactly 2 refreshes), but F8 marks 3 and 4 sit in 3-4 s stretches
+      (589-593 s, 944-947 s, 966-970 s) where presents alternate ~38 ms / ~3 ms: 45 presents/s, frames
+      up 1-4 refreshes. Every step still has its own flip, but each pair is a full frame (~10-12 ms
+      render CPU) and, 0.6 ms after it, a frame the game drew without its 3D scene -- its catch-up
+      frame after a late one (sandbox draw counts: ~150-180 draws vs ~850; HUD / post). ~25 real
+      pictures a second. Onset at 588.8 s: one late step (8 ms game-thread CPU, started 18 ms late).
+    - What kept it going: after a pair's catch-up present, the walker's post-Present wait (LD_PIPELINE=1
+      waits for the frame's fence) took 7-9 ms -- the fence came after the copy into the swap chain
+      buffer, and with sync interval 2 and two presents 3 ms apart that copy waits on the GPU until
+      the display gives a buffer back. The walker is the thread that drains the guest FIFO, so the next
+      frame's commands sat for those ms, that frame came out late too, and the game made another
+      catch-up frame. In the locked state the same wait was ~3 ms a frame in the user's log -- slack the
+      drain did not have. (Vblank ticks were on time throughout; the game's DLSingleSignal post only
+      fires when the semaphore is 0, so no queued wake-ups either.)
+    - Fix (rsx_live_draw.c, LD_PRESENT_SPLIT=0 = old): with LD_PIPELINE=1 the present records the
+      render-target write-back, submits the frame (ld_kick_now, factored out of ld_kick_after_draw) and
+      notes that fence, then records the swap-chain copy and presents; after Present it waits only for
+      the frame's fence. The copy still waits for the display, on the GPU queue, not on the walker.
+      Post-Present wait, sandbox: scaffolding 1.52 -> 0.46 ms mean (frames waiting > 3 ms: 389 -> 0),
+      Latria 3.11 -> 0.21 ms; render CPU, cadence and pictures unchanged.
+    - Not reproduced in the sandbox: the user's save (testenv/save_user_1030b; profile list is most-
+      recent first = no DOWN keys) loads mid-fight in the torch hall; forced late steps
+      (new DES_HITCH_AT=<s>:<ms>,... port debug in ppu_recomp_011.cpp: Sleep on the main thread once)
+      at the scaffolding, at the Palace start and pinned to one CCD (scratchpad runs.sh AFF=FFFF) all
+      recovered after one pair. Their stretches need heavier moments than the tests reach (combat).
+    - Perf log: last column = draws recorded for the frame. perf_report.py counts "game catch-up
+      frames" (a light frame < 17 ms after the previous one; by draws, else by render CPU) with the
+      longest alternating stretch, and per F8 mark (user's log: 608, longest 64 in a row = 2.6 s;
+      marks 3 / 4: 86 / 59 in the 10 s before). Marks 1, 2, 5, 6: single frames up 3 refreshes.
+    - Test-script gotcha found here: area50.sh / spot.sh / bol.sh set DES_FPS=50 but start the exe
+      directly, and DES_FPS is read only by PLAY_DEMONS_SOULS.bat -- so they ran WITHOUT DES_60FPS
+      (fixed 1/30 step, "game time 1.666 s per real s"): fix 47's world checks and fix 49's timings
+      had the game logic at 1.67x. Renderer numbers stand; pacing results there are not the user's.
+      scratchpad spot2.sh sets S60=1 (DES_60FPS=1) by default.
+- **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
+  user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
+  gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
+  PAD_MOUSE=0 and no live keyboard.
+- **Methodology:** every run is killed, and a run killed mid-copy leaves truncated files in hdd1/cache that the
+  next run trusts -- this caused much of the run-to-run variation. Wipe hdd1/cache before every run
+  (run_capture.ps1 does). `logs/ref_order.txt` = RPCS3's 148 distinct disc files in boot order; compare a run's
+  last `/dev_bdvd` open against it.
+- Debug switches added this round: SPU_ATOM_EAS=<ea,...> (per-task lock-line trace), SPURS_TASK_WATCH_ELF=<hex>,
+  LFQ_DBG also dumps the polled queue line.
+
+### Where it stands (2026-10-27)
+New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
+with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:
+- Sound and music work (fix 29: SPU thread receive_event + PS3_PRIO_START). 60 fps locked with correct game speed (fix 28;
+  DES_FPS=30 for the original);
+  shield fixed (fix 25). ATRAC on (real dev_flash) no longer stalls boot. Movies skipped (PS3_NO_SAIL). Live input works (fix 24,
+  PLAY_DEMONS_SOULS.bat); not yet tested with a physical controller or a long play session.
+
+### Readable copy (2026-10-27)
+`readable\` is a separate, buildable copy of the lifted PPU code for reading (README.md there). Its tools
+only read port\recompiled; the playable build is untouched.
+- analyze.py follows register constants: TOC -> per-module constant pool in .data -> literal (SNC reaches
+  strings through pools, not straight from the TOC). An epilogue's `rN = _cs_N` restore must not count
+  as a new value, or every pool base is lost (fixing that took string refs 8.9k -> 25k). Strings are
+  ASCII / UTF-16BE / UTF-8 / Shift-JIS (Japanese only if real kana/kanji: debug-menu labels).
+- collect_names.py: 44,302 of 94,017 functions named -- Lua binding tables (687), Havok RTTI vtables,
+  all vtables in 0x1852338-0x18C82A8, vptr-storing ctor/dtors, imports, assert strings, names\manual.tsv,
+  and the game's own classes via Dantelion runtime classes: a class's static initialiser loads a
+  pointer-to-static X, then the class name (ASCII + UTF-16) and stores both into *X (+0x1C/+0x20); the
+  class vtable's slot 0 (GetRuntimeClass) and the runtime-class get-or-create function (stores the
+  DLRuntimeClassImpl vtable) also use X. 685 game classes named this way (ExposureReaderEntity =
+  vtable 0x01852800, checked by hand; all 747 named game vtables sit within 0x20000 of their
+  initialiser). Methods inherited by more than 3 vtables are Shared_vfNN.
+- Later the same day: 57,041 named. Runtime-class rule refined -- the class static is the .bss global
+  with 2-12 users in the 40 lines before the name; DLRuntimeClassImpl<T> vtables always have 13 slots
+  (others a user stores are the class's own, the largest one a constructor stores); manager classes
+  have GetRuntimeClass in slot 2; a name must exist as UTF-16 too and be CamelCase; a vtable more than
+  0x40000 from its initialiser is rejected. 840 game classes (PlayerIns, ChrIns, EnemyIns, ChrCtrl...),
+  RuntimeClass_<T>_Init/_Get, Name_SubXXXXXXXX for tied classes without their own runtime class,
+  thunks (11k) and single-caller helpers.
+- Compilation units recovered (tools\units.py): every SNC unit has its own constant pool, so a
+  function's most-read pool base names its unit; 2,052 of 2,110 pools are one contiguous run.
+  readable\recompiled is now 2,589 unit files (PlayerIns.cpp, EzStateMapState.cpp, ...) + ppu_prelude.h;
+  a method inherited by several vtables goes to the sharing class whose unit defines it.
+  Full build 4m45s; same sandbox result.
+- Control flow recovered (tools\structure.py, run by apply_names): shared return blocks copied to
+  each exit, SNC's out-of-line else blocks moved back, then if/else, do-while, while, for(;;) with
+  break/continue; compare shown as a comment on each branch. Gotos 471,344 -> 164,163; 80,956 of
+  94,017 functions have none. Each rewritten function is checked by walking both control-flow graphs
+  side by side; planted bugs (lost negation, then/else swap, dropped statement, do vs while) are caught.
+  Bug found on the way: 'if (CR_EQ(cr7)) return;' (conditional blr, ~900 lines) ends in "return;"
+  but is NOT an exit -- treating it as one copied blocks wrongly and the game hung at boot with
+  black frames; the checker now has its own exit test. Sandbox: 30 fps, frame 6000 same tutorial
+  spot, same null-write messages as the playable build. Leftover gotos: mostly loops SNC enters in
+  the middle (goto to the test at the bottom).
+- Control flow, round 2: loops entered in the middle (also behind an early-return guard) ->
+  for(;;)/while; gotos to a block's join point -> inverted if, moving (or, up to 4 plain lines,
+  copying) the code before the join into an else when that removes a goto; search loops (goto to
+  the "found" code) -> break with the exit block copied in; out-of-line blocks reached from a nested
+  if; guard clauses; dead code after return dropped. Gotos 164,163 -> 128,294; goto-free functions
+  80,956 -> 85,260; for(;;) 2,174 -> 7,233; else 15,779 -> 21,212. Check caught one real bug
+  (func_0036DA58): a new inner loop wrapped an outer loop's `continue`; loops are no longer formed
+  around an outer break/continue. 14 planted bugs for the new rules all rejected. Left: rotated
+  while loops whose `continue` jumps to the duplicated top test (needs a provably-idempotent
+  re-compare) and big crossing diamonds. Regenerate 48 s, build exit 0; sandbox (own copy of
+  testenv): 30.0 fps, frame 6000 same tutorial spot (mean diff 5.2, fog), null writes only from
+  guest-fn 0x00A9DD58 like the playable runs (count varies run to run: 1-4).
+- apply_names.py writes readable\recompiled with r3/f1/LR, cmpwi(cr7,..), CR_EQ(cr7), CALL() macros
+  (readable.h, each expands to the lifter's text). readable\build.bat -> readable\build builds clean;
+  the scripted new-game run matches the playable build (same 627 file opens, 30.0 fps, identical menu
+  frames, same tutorial spot: readable\playable_vs_readable.png).
+
+### Where it stood (2026-10-26, night)
+Clean-cache runs reached ref pos ~100 at best; the particle assert (fix 14) and the Havok queue flood (fix 15)
+were the two blockers.
+
+### Where it stood (2026-10-26, late)
+**First visible screen** (first_screen.png): the real "Now Loading" screen (Demon's Souls logo + soul orbs)
+renders from frame ~120 while the game loads fonts, msg/param banks, sound banks, menus, nowloading*.drb,
+envlight/lensflare and parts/*.partsbnd. Loading then stops after parts/bd_f_0000.partsbnd.dcx (99 opens;
+RPCS3 continues with bd_f_0000_l, lg_*, common_ghost, fc_m_9900...) and the screen goes black ~frame 660.
+Next: find what the 99th-open stall waits on (likely the dir=0 SPURS queue the game polls with
+QueuePopBody, or another SPU workload), using the RPCS3 log as the reference.
+Unresolved NIDs still seen: cellAudioSetPortLevel, cellSpursLFQueueDetachLv2EventQueue,
+cellSpursTaskAttributeSetExitCodeContainer, sceNpBasicGetMatchingInvitationEntryCount.

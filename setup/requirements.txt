@@ -1,0 +1,4 @@
+# SETUP.bat installs these into .venv (the ps3recomp tools themselves need only the standard library)
+cryptography>=41     # disc decryption (AES) in tools/iso_extract.py
+cmake>=3.24
+ninja>=1.11
