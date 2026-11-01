@@ -849,6 +849,98 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       (fixed 1/30 step, "game time 1.666 s per real s"): fix 47's world checks and fix 49's timings
       had the game logic at 1.67x. Renderer numbers stand; pacing results there are not the user's.
       scratchpad spot2.sh sets S60=1 (DES_60FPS=1) by default.
+51. **Showcase capture (LD_VIDEO) + launcher features + the 2026-10-31 recording (2026-10-31):**
+    - LD_VIDEO=<out.mkv> (rsx_live_draw.c ldv_frame, called after the LD_RECORD block in present): the
+      presented surface is copied into a ring of 4 readback buffers (fence = fence_value + 1: both Signal
+      sites submit g.list first), picked up at a later present once the fence passed, memcpy'd into a
+      12-deep queue; a writer thread puts frames on an LD_VIDEO_FPS grid (default 60) by present time
+      (frames that stayed up longer repeat) and pipes rawvideo rgba to ffmpeg (LD_VIDEO_FFMPEG, default
+      "ffmpeg"; LD_VIDEO_ENC default h264_nvenc p6 cq 18). Matroska survives the sandbox's hard kill
+      (remux with -c copy). Sandbox run: 19,815 presents, 0 dropped, 60.0 fps held while capturing.
+      ffmpeg = imageio-ffmpeg wheel from PyPI in the session scratchpad (ffvenv), NVENC included.
+    - DES_WARP_AT now takes a list "<s>:<a>,<b>,<p>;..." (up to 16, ppu_recomp_011.cpp);
+      PAD_STICK_SEQ="<from>:<until>:lx,ly,rx,ry;..." (cellPad.c, up to 32 holds, stick re-centred when a
+      hold ends -- the first version left it deflected and the camera kept turning).
+    - Showcase (scratchpad showcase.sh): user's save copy (testenv/save_user_1031, loads in Stonefang),
+      60 fps mode, DES_GOD=1, warps 160 s Boletaria (2,0,999) / 205 Shrine (3,1,999) / 250 Latria
+      (4,0,999) / 295 Valley (5,0,999), 12 s pans at rx=200 (~45 deg/s) at 128/183/228/273/318 s
+      (pad clock = video time). Pans: 60.0 fps everywhere except Boletaria 57.0, game time 1.002.
+      Cut: DemonsSouls\showcase\demons_souls_recomp_showcase.mp4 (72 s, 720p60, x264 crf 17), full
+      capture showcase_full_capture.mkv.
+    - Launchers (user's + public repo): every run records (DES_PERF, perf\<ts>, newest 10 kept,
+      DES_RECORD=0 = off; the RECORD bat keeps its own LD_PRESENT_LOG); DES_FPS=<31-240> custom rate:
+      vblank 2N, clock N/30 (max 200), DES_MAX_FPS=N above 60, vsync with interval R/N when the
+      refresh R (or R+1: Windows rounds 99.98 down) is a multiple of N, else vsync off;
+      PLAY_DEMONS_SOULS_CHOOSE_FPS.bat menu; DemonsSouls\REPORT.bat + tools\make_report.py (zip for a
+      GitHub issue: perf.txt, perf_report summary, system specs, log tail; user name scrubbed; trimmed
+      to +-90 s around F8 marks over 24 MB). Custom 45: game time 1.000; 144: 1.000 at the cap, ~1.02
+      when CPU-bound below it (Palace ~66 fps).
+    - The user's 08:06 recording (14 min, 15 F8 marks): marks 4/5 and 8/11 line up with my own all-core
+      jobs on the same PC (test lift 08:07-08:09, clean-room SETUP build 08:14-08:22) -- not the port.
+      The last 2 min (717-839 s = 08:18:35-08:20:38: 9 fps, 1 draw per frame, game time 0.17) = a
+      loading screen starved by that build: sandbox repro (save_user_1031, walk back into the Stonefang
+      lava pit with DES_GOD=1): HP stays 552 at 50 fps, the pit has no way out; F9 off -> HP 0 -> death ->
+      respawn, its 1-draw loading screen 1.6 s at full speed (122 s in the user's run, then quit).
+      God mode needs no change; in the lava pit, F9 off is the way out.
+52. **PLAY_DEMONS_SOULS_VIDEO.bat -- gameplay video with sound (2026-10-31):** sets LD_VIDEO
+    (videos\<ts>ideo.mkv, fix 51), LD_VIDEO_FFMPEG = DemonsSouls	oolsfmpegfmpeg.exe (the
+    imageio-ffmpeg build, NVENC) and AUDIO_WAV (raw f32 stereo 48 kHz final mix), then calls
+    PLAY_DEMONS_SOULS.bat, which sets LD_VIDEO_FPS to the game's frame rate (unlimited -> 60).
+    Both now log their first sample on the QPC us clock ([video] first frame qpc_us=,
+    [audio-wav] first block qpc_us=); tools\make_video.py offsets the sound by the difference
+    (-itsoffset / -ss), muxes AAC 192k + the H.264 copy into videos\<ts>.mp4 and deletes the
+    intermediates. Sandbox: 150 s, sound 0.10 s after the first frame, mean -23.7 dB, 2:29.7 both.
+53. **Guest vblank clock locked to the display (2026-10-31, user's 10:40 recording, 10 min, 3 F8 marks):**
+    - Clean recording (no jobs of mine): 49.8 fps, 99.0% of frames up exactly 2 refreshes. The 3 marks
+      have nothing in the 4-10 s before them (steps exactly 20.0 ms, every frame 2 refreshes, no
+      catch-up frames) -- not explained by timing; next: record with PLAY_DEMONS_SOULS_VIDEO.bat + F8.
+    - What the log does show: bursts of frames presented on time but up 3 / 1 refreshes ("no CPU-side
+      delay", 180-182 s, 234-249 s, 418-424 s). Guest vblank ticker = QPC timer at exactly 100.000 Hz,
+      display 99.99 Hz: the clocks drift past each other, and every time the hand-over lands on a
+      refresh boundary the 2/2 cadence breaks for a second or two.
+    - Fix: rsx_live_draw.c starts a thread after the swap chain (ldvb_thread): IDXGIOutput::WaitForVBlank
+      on the window's output (re-queried every 5 s), least-squares fit of the last 256 vblank times
+      (outliers > 1 ms dropped) -> rsx_live_draw_display_vblank(vb_us, period_us). boot_main's ticker,
+      after each tick, snaps next_tick to the nearest grid point when its rate is a whole multiple
+      (1..8, within 1.5%) of the display's -- 50 fps on 100 Hz, 60 on 120 / 60 Hz, custom N on 2N Hz.
+      Not locked (logged once): 60 fps mode on 100 Hz, uncapped. LD_VBLANK_LOCK=0 = free-running,
+      LD_VBLANK_LOCK_PHASE=<0..1> = tick offset after the vblank (default 0).
+    - Sandbox A/B, user's save in Stonefang, 50 fps / 100 Hz, 120-480 s: free-running 26 frames not up
+      2 refreshes incl. a burst 213-220 s (17), display-locked 16, only isolated 3+1 pairs (single late
+      game steps), 2-refresh frames 99.74% -> 99.91%, "no CPU-side" hitches 11 -> 2; ticks 99.9717 Hz.
+54. **Fire-breath slowdown: VMX float ops through fmaf() -> SSE4.1 + FMA fast path (2026-10-31):**
+    - User's 18:40 recording, F8 at the Dragon God's breath hitting the player: 264-268 s and 274-276 s at
+      36-40 fps; render CPU fell (fewer draws), main-thread step CPU 4.4 -> 21-23 ms. Same with and
+      without god mode (not the death loop of fix 51).
+    - Sandbox repro (below): every breath = ~2.5 s of 21-27 ms steps. DES_PERF_STACKS=1
+      DES_PERF_STACK_MS=3 DES_PERF_STACK_THREADS=HighGraphics + scratchpad hotcmp.py (heavy vs normal
+      steps): main thread in func_0032FB08 -> 011B84D0 -> 01271520 (recursive tree walk) -> 0107E040 ->
+      010630E8 -> 0128AB90 / 0128D280 / 0128CF68 (the breath's collision queries, presumably): 177
+      vmaddfp, 73 vaddfp, 48 vsubfp, 21 vnmsubfp in those functions. ppu_vmx.h did each lane in scalar
+      with vmx_flush / vmx_fix and fmaf() -- a library call (the lifted PPU code has no -mfma).
+    - Fix (ppu_vmx.h): vmx_vmaddfp / vnmsubfp / vaddfp / vsubfp take an SSE4.1 + FMA path (big-endian
+      load via pshufb, NJ flush as a blend, NaN -> 0x7FC00000, vadd/vsub keep the A-then-B quieted-NaN
+      rule, vnmsubfp = -(fmsub) so an exact zero is -0 like -fmaf(x,z,-y)). Functions carry
+      __attribute__((target("ssse3,sse4.1,fma"))), so the PPU units need no new flags; ppu_vmx_fma
+      (ppu_hle.cpp, set at static init: CPUID SSSE3 + SSE4.1 + FMA and PF_AVX2 for the OS AVX state) picks
+      it per call, PPU_VMX_FAST=0 = scalar. Scratchpad vmxtest/vmxtest.cpp: 16 M random + special-value
+      ops (denormals, NaN payloads, inf, +-0, x-x, a*c==b) fast vs scalar, NJ on/off, -O1 and -O2:
+      0 mismatches. Full build_opt rebuild 3.5 min.
+    - Result (same sandbox breath, 50 fps): breath steps median 23.0 -> 14.1 ms (max 28.7 -> 18.0),
+      frames over 25 ms 325 -> 0; ordinary steps 4.2 -> 3.7 ms.
+    - The Dragon God report that led here was not a bug (the rubble on the lower walkway is broken by
+      the player's own hits: OnSimpleDamage(.., obj, 10000 = attacker)). Tools made for it:
+      - DES_LUA_PRINT=1 (ppu_recomp_070.cpp func_00C02C78 = the game's print(), a no-op in retail): the
+        event scripts' print() -> stderr "[lua] ...". Lua API: 0xC9E170 lua_gettop, 0xCA0570 lua_tostring.
+      - Scripts are read from script/mXX.luabnd.dcx.sdat (BND3 of Lua *source*), not the loose .lua.
+        Scratchpad luabnd.py (BND3 repack + DCX EDGE writer) and mk_game_dbg.py build
+        DemonsSouls\game_dbg (cp -al game + a debug m06 luabnd: timer fires ballista 1, change-only trace
+        prints of the requests the fight script sends; MSB copy with point 2889 moved onto the floor of
+        breath region 2430 -- region boxes sit below the floor, a Warp() into one falls through).
+        Run with DES_GAME=game_dbg SAVE=save_user_1031c (loads at the fog gate).
+      - m06_02 layout (MSB): punch regions 2420-2429 on the upper path, breath regions 2430-2436 on the
+        lower walkway (y -98), ballistas 2410 (x 95.8) / 2411 (x 193.6), wall 1445 beside ballista 1 is
+        removed by OnEvent_6413 at the end of cutscene 60200.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

@@ -196,9 +196,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-diff -ruN a/recompiled/ppu_recomp_011.cpp b/recompiled/ppu_recomp_011.cpp
---- a/recompiled/ppu_recomp_011.cpp	2026-10-31 08:09:10.451952400 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-10-31 08:09:16.032192200 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-10-31 19:24:46.413288900 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-10-31 19:25:04.105357400 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -214,7 +213,7 @@ diff -ruN a/recompiled/ppu_recomp_011.cpp b/recompiled/ppu_recomp_011.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,176 @@
+@@ -38897,8 +38899,181 @@
          return;
  }
  
@@ -296,17 +295,22 @@ diff -ruN a/recompiled/ppu_recomp_011.cpp b/recompiled/ppu_recomp_011.cpp
 +     * (lua_WarpNextStage 0x451430 -> 0x20D468 / 0x20D4A8 / 0x20D5A8: map id (area<<24 | block<<16),
 +     * spawn point and the request byte of the stage manager). Archstone starts: 2,0,999 (1-1) ...
 +     * 6,0,999 (5-1); see SCRIPT/m01_00_00_00.lua OnEvent_N_2. For test runs only. */
-+    { static int on = -1; static unsigned long long t_at; static uint32_t map_id, point;
-+      if (on < 0) { const char* e = getenv("DES_WARP_AT"); double sec; unsigned ar, bl; int pt; on = 0;
-+                    if (e && sscanf(e, "%lf:%u,%u,%d", &sec, &ar, &bl, &pt) == 4) {
-+                      on = 1; t_at = ps3_qpc_us() + (unsigned long long)(sec * 1e6);
-+                      map_id = (ar << 24) | (bl << 16); point = (uint32_t)pt; } }
-+      if (on && ps3_qpc_us() >= t_at) {
++    /* Several warps: "<sec>:<area>,<block>,<point>;<sec>:..." (up to 16, each <sec> from the first
++     * step) -- a showcase capture visiting every world in one run (NOTES fix 51). */
++    { static int n = -1, next; static unsigned long long t_at[16]; static uint32_t map_id[16], point[16];
++      if (n < 0) { const char* e = getenv("DES_WARP_AT"); n = 0; next = 0;
++                   const unsigned long long t0 = ps3_qpc_us();
++                   while (e && *e && n < 16) { double sec; unsigned ar, bl; int pt;
++                     if (sscanf(e, "%lf:%u,%u,%d", &sec, &ar, &bl, &pt) != 4) break;
++                     t_at[n] = t0 + (unsigned long long)(sec * 1e6);
++                     map_id[n] = (ar << 24) | (bl << 16); point[n] = (uint32_t)pt; n++;
++                     e = strchr(e, ';'); if (e) e++; } }
++      if (next < n && ps3_qpc_us() >= t_at[next]) {
 +        const uint32_t p0 = vm_read32((uint32_t)ctx->gpr[2] - 0x7B44);
 +        const uint32_t p1 = vm_read32(p0 - 0x7FFC), mgr = p1 ? vm_read32(p1) : 0;
-+        if (mgr) { vm_write32(mgr + 0x8, map_id); vm_write32(mgr + 0xC, point); vm_write8(mgr + 0x4, 1);
++        if (mgr) { vm_write32(mgr + 0x8, map_id[next]); vm_write32(mgr + 0xC, point[next]); vm_write8(mgr + 0x4, 1);
 +                   fprintf(stderr, "[des] warp request map %08X point %d (stage manager %08X)\n",
-+                           map_id, (int)point, mgr); on = 0; } } }
++                           map_id[next], (int)point[next], mgr); next++; } } }
 +    /* DES_PERF=1 (PORT DEBUG, PLAY_DEMONS_SOULS_RECORD.bat): every step goes to the perf log
 +     * (LD_PRESENT_LOG, rsx_live_draw.c) as "# <us> step <step s> <right stick x> <y> <pad: 1 XInput,
 +     * 2 keyboard+mouse> <host pad polls> <mouse dx> <dy> <CPU us this thread used since the
@@ -1468,9 +1472,8 @@ diff -ruN a/recompiled/ppu_recomp_069.cpp b/recompiled/ppu_recomp_069.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-diff -ruN a/recompiled/ppu_recomp_070.cpp b/recompiled/ppu_recomp_070.cpp
---- a/recompiled/ppu_recomp_070.cpp	2026-10-31 08:09:12.784197700 -0700
-+++ b/recompiled/ppu_recomp_070.cpp	2026-10-31 08:09:18.887918600 -0700
+--- a/recompiled/ppu_recomp_070.cpp	2026-10-31 19:24:18.881769100 -0700
++++ b/recompiled/ppu_recomp_070.cpp	2026-10-31 19:25:04.261273200 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -1486,6 +1489,29 @@ diff -ruN a/recompiled/ppu_recomp_070.cpp b/recompiled/ppu_recomp_070.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -14790,6 +14792,22 @@
+ 
+ void func_00C02C78(ppu_context* ctx) {
+     PPU_MM_SNAP
++    /* DES_LUA_PRINT=1 (PORT DEBUG): the game registers this as the scripts' print() and it
++     * writes nowhere in retail. Copy its arguments to stderr as "[lua] ..." first. Lua API as
++     * luaB_print (0xCA5230) uses it: 0xC9E170 = lua_gettop, 0xCA0570 = lua_tostring. */
++    { static int on = -1; if (on < 0) on = getenv("DES_LUA_PRINT") ? 1 : 0;
++      if (on) { const ppu_context save = *ctx; const uint32_t L = (uint32_t)ctx->gpr[3];
++        ctx->lr = 0x00C02C78; func_00C9E170(ctx); DRAIN_TRAMPOLINE(ctx);
++        const int n = (int)(int32_t)ctx->gpr[3]; char line[600]; size_t k = 0;
++        for (int i = 1; i <= n && i <= 8; i++) {
++          ctx->gpr[3] = L; ctx->gpr[4] = (uint64_t)(int64_t)i; ctx->gpr[5] = 0;
++          ctx->lr = 0x00C02C78; func_00CA0570(ctx); DRAIN_TRAMPOLINE(ctx);
++          const uint32_t sp = (uint32_t)ctx->gpr[3];
++          if (i > 1 && k < sizeof line - 1) line[k++] = ' ';
++          if (!sp) { const char* t = "<?>"; while (*t && k < sizeof line - 1) line[k++] = *t++; }
++          else for (uint32_t a = sp; k < sizeof line - 1; a++) { const char c = (char)vm_read8(a); if (!c) break; line[k++] = c; } }
++        line[k] = 0; fprintf(stderr, "[lua] %s\n", line);
++        *ctx = save; } }
+         uint64_t _cs_19 = ctx->gpr[19];
+         uint64_t _cs_20 = ctx->gpr[20];
+         uint64_t _cs_21 = ctx->gpr[21];
 diff -ruN a/recompiled/ppu_recomp_071.cpp b/recompiled/ppu_recomp_071.cpp
 --- a/recompiled/ppu_recomp_071.cpp	2026-10-31 08:09:12.820605700 -0700
 +++ b/recompiled/ppu_recomp_071.cpp	2026-10-31 08:09:18.933308900 -0700

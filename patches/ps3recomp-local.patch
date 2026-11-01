@@ -1,5 +1,5 @@
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index 02b751b..0e3b783 100644
+index 02b751b..c972287 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -477,8 +477,9 @@ static void audio_mix_one_block(void)
@@ -96,9 +96,17 @@ index 02b751b..0e3b783 100644
          }
          blocks++;
          /* Mix and submit one block */
-@@ -623,6 +657,10 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -621,8 +655,17 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+         /* AUDIO_WAV=<file>: append the final mix as raw f32le stereo 48 kHz
+          * (ffmpeg -f f32le -ar 48000 -ac 2 -i <file>). */
          { static FILE* _wf = (FILE*)-1;
-           if (_wf == (FILE*)-1) { const char* e = getenv("AUDIO_WAV"); _wf = e ? fopen(e, "wb") : NULL; }
+-          if (_wf == (FILE*)-1) { const char* e = getenv("AUDIO_WAV"); _wf = e ? fopen(e, "wb") : NULL; }
++          if (_wf == (FILE*)-1) { const char* e = getenv("AUDIO_WAV"); _wf = e ? fopen(e, "wb") : NULL;
++            /* first block's time on the QPC microsecond clock LD_VIDEO also logs, so a muxer can line
++             * the two up (Demon's Souls PLAY_DEMONS_SOULS_VIDEO.bat, NOTES fix 52) */
++            if (_wf) { LARGE_INTEGER f, c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c);
++                       fprintf(stderr, "[audio-wav] first block qpc_us=%llu\n",
++                               (unsigned long long)((double)c.QuadPart * 1e6 / (double)f.QuadPart)); } }
            if (_wf) fwrite(s_mix_buffer, sizeof(float), CELL_AUDIO_BLOCK_SAMPLES * 2, _wf); }
 +        /* AUDIO_MUTE=1: the device gets silence (the mix, AUDIO_WAV and AUDIO_PEAK are unchanged) --
 +         * for background test runs on a machine someone is using. */
@@ -107,7 +115,7 @@ index 02b751b..0e3b783 100644
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
          /* AUDIO_RATE=1: blocks mixed vs real time, and frames dropped. */
          { static int on = -1; if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
-@@ -934,6 +972,33 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -934,6 +977,33 @@ s32 cellAudioPortStop(u32 portNum)
      return CELL_OK;
  }
  
@@ -142,7 +150,7 @@ index 02b751b..0e3b783 100644
  {
      uint32_t tag_ea = (uint32_t)(uintptr_t)tag;
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..20a80d9 100644
+index afdd93d..0769373 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -268,8 +268,12 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
@@ -399,6 +407,31 @@ index afdd93d..20a80d9 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
+@@ -1015,6 +1208,24 @@ skip_inject: ;
+       if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
+                   hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
+                   hs->connected = 1; }
++      /* PAD_STICK_SEQ="<from>:<until>:lx,ly,rx,ry;..." (up to 32 holds): PAD_STICK with several timed
++       * windows -- scripted camera pans at chosen deflections for a showcase capture (Demon's Souls
++       * NOTES fix 51), where one hold cannot cover several areas. Same clock as PAD_STICK. */
++      { static int sq_n = -1; static double sq_a[32], sq_b[32]; static unsigned char sq_v[32][4];
++        if (sq_n < 0) { const char* e = getenv("PAD_STICK_SEQ"); sq_n = 0;
++          while (e && *e && sq_n < 32) { double a, b; int v0, v1, v2, v3;
++            if (sscanf(e, "%lf:%lf:%d,%d,%d,%d", &a, &b, &v0, &v1, &v2, &v3) != 6) break;
++            sq_a[sq_n] = a; sq_b[sq_n] = b; sq_v[sq_n][0] = (unsigned char)v0; sq_v[sq_n][1] = (unsigned char)v1;
++            sq_v[sq_n][2] = (unsigned char)v2; sq_v[sq_n][3] = (unsigned char)v3; sq_n++;
++            e = strchr(e, ';'); if (e) e++; } }
++        static int sq_in;            /* the stick values stick: centre them when a hold ends */
++        int in = 0;
++        for (int i = 0; i < sq_n; i++)
++          if (pad_clock(s_t0) >= sq_a[i] && pad_clock(s_t0) < sq_b[i]) {
++              hs->analog_lx = sq_v[i][0]; hs->analog_ly = sq_v[i][1];
++              hs->analog_rx = sq_v[i][2]; hs->analog_ry = sq_v[i][3]; hs->connected = 1; in = 1; break; }
++        if (!in && sq_in) { hs->analog_lx = hs->analog_ly = hs->analog_rx = hs->analog_ry = 128; }
++        sq_in = in; }
+       /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
+        * deflections instead of holding one. Guessing a single stick position and
+        * re-running costs ~5 minutes a try; a sweep answers "can input move the
 diff --git a/libs/misc/cellOskDialog.c b/libs/misc/cellOskDialog.c
 index 17e7c67..ecda035 100644
 --- a/libs/misc/cellOskDialog.c
@@ -1897,10 +1930,10 @@ index cfb9685..a211601 100644
          /* Inline constant: any CONST source pulls the next 16 bytes as a
           * float4 literal and advances past it. */
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 2579117..5f743a3 100644
+index 2579117..9c65150 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
-@@ -1,10554 +1,12523 @@
+@@ -1,10554 +1,12805 @@
 -/*
 - * ps3recomp - Track B live NV4097 draw path (implementation)
 - *
@@ -2048,6 +2081,7 @@ index 2579117..5f743a3 100644
 +void* rsx_live_draw_get_present_thread_handle(void) { return NULL; }
 +u32  rsx_live_draw_get_last_draws(void) { return 0; }
 +double rsx_live_draw_get_present_fps(void) { return 0.0; }
++int  rsx_live_draw_display_vblank(unsigned long long* vb_us, double* period_us) { (void)vb_us; (void)period_us; return 0; }
 +void rsx_live_draw_dump_present_samples(void) {}
 +void rsx_live_draw_a010_probe_begin(void) {}
 +int  rsx_live_draw_a010_probe_active(void) { return 0; }
@@ -2075,6 +2109,7 @@ index 2579117..5f743a3 100644
 +
 +#include <ctype.h>
 +#include <intrin.h>
++#include <math.h>
 +#include <stdarg.h>
 +#include <stdio.h>
 +#include <stdlib.h>
@@ -22413,6 +22448,109 @@ index 2579117..5f743a3 100644
 +    return 0;
 +}
 +
++/* Display vblank source (Demon's Souls NOTES fix 53). The guest vblank clock (boot_main's ticker)
++ * ran on its own QPC timer: 100.000 Hz against a monitor at 99.99 Hz. The two drift past each other,
++ * and each time the frame hand-over lands on a display refresh boundary the frames come out 3 / 1
++ * refreshes for a second or two instead of an even 2 / 2 -- short judder bursts with every frame on
++ * time. This thread waits for the window's real vblanks (IDXGIOutput::WaitForVBlank) and keeps a
++ * least-squares fit of their times (period + phase) over the last 256; the ticker places its ticks
++ * on that grid when its own rate is a whole multiple of the display's. LD_VBLANK_LOCK=0 = off. */
++#define LDVB_N 256
++static struct {
++    SRWLOCK lock;
++    double t[LDVB_N]; long long k[LDVB_N]; int n, head;   /* samples: QPC us, refresh index */
++    double base_us, period_us; int valid;                  /* fitted grid: a vblank at base, every period */
++    long long idx; double last_t;
++} g_ldvb;
++
++static double ldvb_now_us(void)
++{
++    static LARGE_INTEGER f; LARGE_INTEGER c;
++    if (!f.QuadPart) QueryPerformanceFrequency(&f);
++    QueryPerformanceCounter(&c);
++    return (double)c.QuadPart * 1e6 / (double)f.QuadPart;
++}
++
++static void ldvb_fit(void)
++{
++    /* two passes: fit, drop samples more than 1 ms off the line (late wake-ups), fit again */
++    double sk = 0, st = 0, skk = 0, skt = 0, a = 0, b = 0; int m = 0;
++    for (int pass = 0; pass < 2; pass++) {
++        sk = st = skk = skt = 0; m = 0;
++        const double k0 = (double)g_ldvb.k[(g_ldvb.head - g_ldvb.n + LDVB_N) % LDVB_N];
++        for (int i = 0; i < g_ldvb.n; i++) {
++            const int j = (g_ldvb.head - g_ldvb.n + i + LDVB_N) % LDVB_N;
++            const double k = (double)g_ldvb.k[j] - k0, t = g_ldvb.t[j];
++            if (pass && fabs(t - (a + b * k)) > 1000.0) continue;
++            sk += k; st += t; skk += k * k; skt += k * t; m++;
++        }
++        const double d = m * skk - sk * sk;
++        if (m < 32 || d <= 0) return;
++        b = (m * skt - sk * st) / d; a = (st - b * sk) / m;
++        if (!pass) continue;
++        const double kn = (double)g_ldvb.k[(g_ldvb.head - 1 + LDVB_N) % LDVB_N] - k0;
++        AcquireSRWLockExclusive(&g_ldvb.lock);
++        g_ldvb.period_us = b; g_ldvb.base_us = a + b * kn;   /* the grid point of the newest sample */
++        g_ldvb.valid = b > 2000.0 && b < 50000.0;
++        ReleaseSRWLockExclusive(&g_ldvb.lock);
++    }
++}
++
++static DWORD WINAPI ldvb_thread(LPVOID unused)
++{
++    (void)unused;
++    IDXGIOutput* out = NULL;
++    double next_query = 0;
++    for (;;) {
++        const double now = ldvb_now_us();
++        if (!out || now >= next_query) {           /* the window may move to another monitor */
++            if (out) { out->lpVtbl->Release(out); out = NULL; }
++            if (FAILED(g.swap->lpVtbl->GetContainingOutput(g.swap, &out))) { out = NULL; Sleep(100); continue; }
++            next_query = now + 5e6;
++        }
++        if (FAILED(out->lpVtbl->WaitForVBlank(out))) { out->lpVtbl->Release(out); out = NULL; Sleep(10); continue; }
++        const double t = ldvb_now_us();
++        if (g_ldvb.n && g_ldvb.period_us > 0) {     /* whole refreshes since the last sample (missed waits) */
++            long long steps = (long long)floor((t - g_ldvb.last_t) / g_ldvb.period_us + 0.5);
++            if (steps < 1) steps = 1;
++            if (steps > 100000) { g_ldvb.n = 0; steps = 1; }   /* long stall / monitor change: start over */
++            g_ldvb.idx += steps;
++        } else g_ldvb.idx++;
++        g_ldvb.last_t = t;
++        g_ldvb.t[g_ldvb.head] = t; g_ldvb.k[g_ldvb.head] = g_ldvb.idx;
++        g_ldvb.head = (g_ldvb.head + 1) % LDVB_N;
++        if (g_ldvb.n < LDVB_N) g_ldvb.n++;
++        if (g_ldvb.period_us <= 0 && g_ldvb.n >= 8) {   /* first estimate before the fit has samples */
++            const int j0 = (g_ldvb.head - g_ldvb.n + LDVB_N) % LDVB_N;
++            g_ldvb.period_us = (t - g_ldvb.t[j0]) / (double)(g_ldvb.idx - g_ldvb.k[j0]);
++        }
++        if (g_ldvb.n >= 32 && (g_ldvb.idx % 16) == 0) ldvb_fit();
++    }
++}
++
++/* The fitted display grid: a recent vblank time (QPC us) and the refresh period. 0 until locked. */
++int rsx_live_draw_display_vblank(unsigned long long* vb_us, double* period_us)
++{
++    AcquireSRWLockShared(&g_ldvb.lock);
++    const int ok = g_ldvb.valid;
++    if (ok) {
++        if (vb_us) *vb_us = (unsigned long long)g_ldvb.base_us;
++        if (period_us) *period_us = g_ldvb.period_us;
++    }
++    ReleaseSRWLockShared(&g_ldvb.lock);
++    return ok;
++}
++
++static void ldvb_start(void)
++{
++    const char* e = getenv("LD_VBLANK_LOCK");
++    if (e && e[0] == '0') return;
++    InitializeSRWLock(&g_ldvb.lock);
++    HANDLE th = CreateThread(NULL, 0, ldvb_thread, NULL, 0, NULL);
++    if (th) { SetThreadPriority(th, THREAD_PRIORITY_TIME_CRITICAL); CloseHandle(th); }
++    fprintf(stderr, "[vblank-lock] display vblank source %s\n", th ? "started" : "FAILED");
++}
++
 +int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
 +                       rsx_live_guest_ptr_fn guest_fn, void* guest_user)
 +{
@@ -22568,6 +22706,7 @@ index 2579117..5f743a3 100644
 +    }
 +    sc1->lpVtbl->QueryInterface(sc1, &IID_IDXGISwapChain3, (void**)&g.swap);
 +    sc1->lpVtbl->Release(sc1);
++    if (g.swap) ldvb_start();   /* NOTES fix 53 */
 +    factory->lpVtbl->Release(factory);
 +
 +    /* RTV heap: [0..1] backbuffers, [2..] surface cache */
@@ -23343,6 +23482,181 @@ index 2579117..5f743a3 100644
 +    return nonblack;
 +}
 +
++/* LD_VIDEO=<out.mkv>: a showcase capture of the presented frames that does not slow the game
++ * (Demon's Souls NOTES fix 51). LD_RECORD reads every frame back behind a blocking flush; here the
++ * copy goes into a ring of readback buffers, is picked up a few presents later once the GPU has
++ * passed its fence, and a writer thread pipes it to ffmpeg. Frames land on a fixed LD_VIDEO_FPS grid
++ * (default 60) by their present time -- a frame that stayed up longer is repeated -- so the video
++ * shows the pacing a viewer saw. LD_VIDEO_FFMPEG=<ffmpeg.exe> (default "ffmpeg" on PATH),
++ * LD_VIDEO_ENC=<ffmpeg output codec args> (default NVENC H.264, constant quality 18). Matroska
++ * output stays playable when the process is killed instead of exiting. */
++#define LD_VIDEO_RING 4
++#define LD_VIDEO_QUEUE 12
++static struct {
++    int on;                       /* 0 unread, 1 on, 2 start at the next frame, -1 off */
++    u32 w, h, src_pitch, fmt;     /* fixed by the first frame */
++    int fp16, bgra;
++    struct { ID3D12Resource* rb; u64 fence; u64 t_us; int busy; } ring[LD_VIDEO_RING];
++    struct { u8* px; u64 t_us; } q[LD_VIDEO_QUEUE];
++    u32 q_head, q_tail;           /* producer writes tail, writer reads head */
++    SRWLOCK lock; CONDITION_VARIABLE cv;
++    FILE* pipe;
++    double fps;
++    u64 frames, dropped, written;
++} g_ldv;
++
++static u64 ldv_now_us(void)
++{
++    static LARGE_INTEGER f; LARGE_INTEGER c;
++    if (!f.QuadPart) QueryPerformanceFrequency(&f);
++    QueryPerformanceCounter(&c);
++    return (u64)((double)c.QuadPart * 1e6 / (double)f.QuadPart);
++}
++
++static DWORD WINAPI ldv_writer(LPVOID unused)
++{
++    (void)unused;
++    const size_t fb = (size_t)g_ldv.w * g_ldv.h * 4;
++    u8* last = (u8*)malloc(fb); u8* conv = (u8*)malloc(fb);
++    u64 last_t = 0; double grid = 0; int have = 0;
++    const double step = 1e6 / g_ldv.fps;
++    for (;;) {
++        AcquireSRWLockExclusive(&g_ldv.lock);
++        while (g_ldv.q_head == g_ldv.q_tail)
++            SleepConditionVariableSRW(&g_ldv.cv, &g_ldv.lock, INFINITE, 0);
++        const u32 k = g_ldv.q_head % LD_VIDEO_QUEUE;
++        ReleaseSRWLockExclusive(&g_ldv.lock);
++        u8* px = g_ldv.q[k].px; const u64 t = g_ldv.q[k].t_us;
++        if (!have) fprintf(stderr, "[video] first frame qpc_us=%llu\n", (unsigned long long)t);
++        if (have) {                      /* the previous frame was on screen from last_t until t */
++            if (grid < (double)last_t) grid = (double)last_t;
++            while (grid < (double)t) {
++                if (fwrite(last, 1, fb, g_ldv.pipe) != fb) { fprintf(stderr, "[video] ffmpeg pipe closed\n"); return 0; }
++                g_ldv.written++; grid += step;
++            }
++        }
++        /* rows tightly packed, 4 bytes a pixel, in the pix_fmt ffmpeg was told */
++        for (u32 y = 0; y < g_ldv.h; y++) {
++            const u8* srow = px + (size_t)y * g_ldv.src_pitch;
++            u8* drow = last + (size_t)y * g_ldv.w * 4;
++            if (!g_ldv.fp16) memcpy(drow, srow, (size_t)g_ldv.w * 4);
++            else for (u32 x = 0; x < g_ldv.w; x++) { ld_dump_texel_rgb(srow + x * 8, 1, drow + x * 4); drow[x * 4 + 3] = 255; }
++        }
++        (void)conv;
++        last_t = t; have = 1;
++        AcquireSRWLockExclusive(&g_ldv.lock);
++        g_ldv.q_head++;
++        ReleaseSRWLockExclusive(&g_ldv.lock);
++        if ((g_ldv.written % 600) < 2 && g_ldv.written)
++            fprintf(stderr, "[video] %llu frames presented, %llu written, %llu dropped\n",
++                    (unsigned long long)g_ldv.frames, (unsigned long long)g_ldv.written,
++                    (unsigned long long)g_ldv.dropped);
++    }
++}
++
++static int ldv_start(const surface_t* sf)
++{
++    const char* out = getenv("LD_VIDEO");
++    const char* ff = getenv("LD_VIDEO_FFMPEG");
++    const char* enc = getenv("LD_VIDEO_ENC");
++    const char* fe = getenv("LD_VIDEO_FPS");
++    g_ldv.fps = fe ? atof(fe) : 60.0; if (g_ldv.fps < 1) g_ldv.fps = 60.0;
++    g_ldv.w = sf->w; g_ldv.h = sf->h;
++    g_ldv.fp16 = sf->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
++    g_ldv.bgra = sf->fmt == DXGI_FORMAT_B8G8R8A8_UNORM || sf->fmt == DXGI_FORMAT_B8G8R8X8_UNORM;
++    g_ldv.fmt = (u32)sf->fmt;
++    g_ldv.src_pitch = (sf->w * (g_ldv.fp16 ? 8u : 4u) + 255) & ~255u;
++    char cmd[MAX_PATH * 4];
++    snprintf(cmd, sizeof cmd,
++             "\"\"%s\" -loglevel error -y -f rawvideo -pix_fmt %s -s %ux%u -r %g -i - %s \"%s\"\"",
++             ff && ff[0] ? ff : "ffmpeg", g_ldv.bgra ? "bgra" : "rgba", sf->w, sf->h, g_ldv.fps,
++             enc && enc[0] ? enc : "-c:v h264_nvenc -preset p6 -rc vbr -cq 18 -b:v 0 -pix_fmt yuv420p", out);
++    g_ldv.pipe = _popen(cmd, "wb");
++    fprintf(stderr, "[video] %s -> %s (%ux%u fmt %d, %g fps grid)\n", g_ldv.pipe ? "ffmpeg" : "FAILED to start ffmpeg",
++            out, sf->w, sf->h, (int)sf->fmt, g_ldv.fps);
++    if (!g_ldv.pipe) return 0;
++    const size_t sz = (size_t)g_ldv.src_pitch * g_ldv.h;
++    for (int i = 0; i < LD_VIDEO_QUEUE; i++) g_ldv.q[i].px = (u8*)malloc(sz);
++    InitializeSRWLock(&g_ldv.lock); InitializeConditionVariable(&g_ldv.cv);
++    HANDLE th = CreateThread(NULL, 0, ldv_writer, NULL, 0, NULL);
++    if (th) CloseHandle(th);
++    return th != NULL;
++}
++
++/* At each present, with the presented surface: hand finished copies to the writer, then record
++ * this frame's copy into a free ring slot. Never waits on the GPU. */
++static void ldv_frame(const surface_t* sf)
++{
++    if (!g_ldv.on) { const char* e = getenv("LD_VIDEO"); g_ldv.on = (e && e[0]) ? 2 : -1; }
++    if (g_ldv.on < 0 || !sf || !sf->tex) return;
++    if (g_ldv.on == 2) { g_ldv.on = ldv_start(sf) ? 1 : -1; if (g_ldv.on < 0) return; }
++    const u64 done = g.fence->lpVtbl->GetCompletedValue(g.fence);
++    const size_t sz = (size_t)g_ldv.src_pitch * g_ldv.h;
++    for (;;) {                                   /* oldest finished copy first, in present order */
++        int best = -1;
++        for (int i = 0; i < LD_VIDEO_RING; i++)
++            if (g_ldv.ring[i].busy && (best < 0 || g_ldv.ring[i].t_us < g_ldv.ring[best].t_us)) best = i;
++        if (best < 0 || g_ldv.ring[best].fence > done) break;
++        ID3D12Resource* rb = g_ldv.ring[best].rb;
++        AcquireSRWLockExclusive(&g_ldv.lock);
++        const int full = g_ldv.q_tail - g_ldv.q_head >= LD_VIDEO_QUEUE;
++        ReleaseSRWLockExclusive(&g_ldv.lock);
++        if (full) g_ldv.dropped++;
++        else {
++            u8* px = NULL; D3D12_RANGE rr = {0, (SIZE_T)sz};
++            if (SUCCEEDED(rb->lpVtbl->Map(rb, 0, &rr, (void**)&px))) {
++                const u32 k = g_ldv.q_tail % LD_VIDEO_QUEUE;
++                memcpy(g_ldv.q[k].px, px, sz); g_ldv.q[k].t_us = g_ldv.ring[best].t_us;
++                D3D12_RANGE wr = {0, 0}; rb->lpVtbl->Unmap(rb, 0, &wr);
++                AcquireSRWLockExclusive(&g_ldv.lock);
++                g_ldv.q_tail++;
++                ReleaseSRWLockExclusive(&g_ldv.lock);
++                WakeConditionVariable(&g_ldv.cv);
++            }
++        }
++        g_ldv.ring[best].busy = 0;
++    }
++    g_ldv.frames++;
++    if (sf->w != g_ldv.w || sf->h != g_ldv.h || (u32)sf->fmt != g_ldv.fmt) { g_ldv.dropped++; return; }
++    int slot = -1;
++    for (int i = 0; i < LD_VIDEO_RING; i++) if (!g_ldv.ring[i].busy) { slot = i; break; }
++    if (slot < 0) { g_ldv.dropped++; return; }
++    if (!g_ldv.ring[slot].rb) {
++        D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_READBACK;
++        D3D12_RESOURCE_DESC bd = {0};
++        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = sz;
++        bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
++        bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
++        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++        if (FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
++                D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&g_ldv.ring[slot].rb)))
++            { g_ldv.ring[slot].rb = NULL; g_ldv.dropped++; return; }
++    }
++    D3D12_RESOURCE_BARRIER b = {0};
++    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++    b.Transition.pResource = sf->tex;
++    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
++    b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++    D3D12_TEXTURE_COPY_LOCATION src = {0}, dst = {0};
++    src.pResource = sf->tex; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    dst.pResource = g_ldv.ring[slot].rb; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    dst.PlacedFootprint.Footprint.Format = sf->fmt;
++    dst.PlacedFootprint.Footprint.Width = sf->w;
++    dst.PlacedFootprint.Footprint.Height = sf->h;
++    dst.PlacedFootprint.Footprint.Depth = 1;
++    dst.PlacedFootprint.Footprint.RowPitch = g_ldv.src_pitch;
++    g.list->lpVtbl->CopyTextureRegion(g.list, &dst, 0, 0, 0, &src, NULL);
++    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
++    b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++    /* the list this copy sits in is submitted before the next Signal, which is fence_value + 1 */
++    g_ldv.ring[slot].fence = g.fence_value + 1;
++    g_ldv.ring[slot].t_us = ldv_now_us();
++    g_ldv.ring[slot].busy = 1;
++}
++
 +#if !defined(YZ_PERF_CLEAN)
 +static void ld_parity_capture_surface(
 +    const char* directory, const char* phase, u32 serial,
@@ -23650,6 +23964,7 @@ index 2579117..5f743a3 100644
 +          g_ld_record_to = NULL;
 +          fflush(rec);
 +      } }
++    ldv_frame(&g.surfaces[target]);   /* LD_VIDEO, NOTES fix 51 */
 +    const u32 current = current_surface();
 +    surface_t* presented_surface = &g.surfaces[target];
 +    /* LD_PRESENT_DBG=1: is this surface actually finished? A surface whose last
@@ -25127,6 +25442,35 @@ index f73907c..37b3db0 100644
          err = CELL_OK;
      }
      if (getenv("PS3_FSLOG"))
+diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
+index 15d4ef6..a1bde9a 100644
+--- a/runtime/ppu/ppu_hle.cpp
++++ b/runtime/ppu/ppu_hle.cpp
+@@ -153,6 +153,24 @@ extern "C" __attribute__((weak)) void ppu_gcm_pump(void);
+ extern "C" void flow_spurs_kernel_spawn_postinit(void) __attribute__((weak));
+ extern "C" void flow_spurs_kernel_spawn_postinit(void) {}
+ #include "../platform/win32_backtrace.h"   /* RtlCaptureStackBackTrace / GetModuleHandleA on POSIX */
++
++/* ppu_vmx.h's SSE4.1 + FMA float ops (Demon's Souls NOTES fix 54): on when the CPU has SSSE3,
++ * SSE4.1 and FMA and the OS saves the AVX state (PF_AVX2 implies it); PPU_VMX_FAST=0 = scalar. */
++#if defined(_WIN32) && (defined(__x86_64__) || defined(_M_X64))
++#include <intrin.h>
++extern "C" int ppu_vmx_detect_fma(void)
++{
++    const char* e = getenv("PPU_VMX_FAST");
++    if (e && e[0] == '0') return 0;
++    int r[4]; __cpuid(r, 1);
++    const int ok = (r[2] & (1 << 9)) && (r[2] & (1 << 19)) && (r[2] & (1 << 12)) &&
++                   IsProcessorFeaturePresent(40 /* PF_AVX2_INSTRUCTIONS_AVAILABLE */);
++    return ok ? 1 : 0;
++}
++extern "C" { int ppu_vmx_fma = ppu_vmx_detect_fma(); }
++#else
++extern "C" { int ppu_vmx_fma = 0; }
++#endif
+ #include "ps3emu/log_first.h"
+ 
+ /* An unresolved NID is a firmware import we never registered. Returning
 diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
 index 9309f2d..5eb859d 100644
 --- a/runtime/ppu/ppu_loader.cpp
@@ -25229,8 +25573,111 @@ index 9cb5040..f28469b 100644
      /* sys_net offline model (NIDs from PSL1GHT libnet exports). Covers every
       * sys_net NID LBP imports so none fall to the unresolved-NID default. */
      ps3_hle_register_ctx(0x6005CDE1u, "_sys_net_errno_loc",     hle_net_errno_loc);
+diff --git a/runtime/ppu/ppu_vmx.h b/runtime/ppu/ppu_vmx.h
+index 35052c6..56e782d 100644
+--- a/runtime/ppu/ppu_vmx.h
++++ b/runtime/ppu/ppu_vmx.h
+@@ -254,6 +254,68 @@ VMX_INL void vmx_vsro(VMX_D, VMX_A, VMX_B) { VMX_ARGS_PREP; int n = (b[15] >> 3)
+  * floating point
+  * ==================================================================== */
+ 
++/* ---- SSE4.1 + FMA fast path for the float ops hot in game math (Demon's Souls NOTES fix 54) ----
++ * Same bits as the scalar code below: inputs / outputs flushed to signed zero under NJ, NaN results
++ * replaced by 0x7FC00000 (vaddfp / vsubfp: a NaN in A, then B, comes out quieted instead), vmaddfp
++ * one rounding like fmaf, vnmsubfp = -(a*c - b) (so +0 - +0 negates to -0, as -fmaf(x, z, -y)).
++ * The scalar forms called fmaf() per lane -- a library call without -mfma -- and were 60% of the
++ * main thread in the Dragon God's fire breath. Chosen at run time: ppu_vmx_fma (ppu_hle.cpp) is set
++ * when the CPU has SSSE3, SSE4.1, FMA and AVX2 (= the OS saves the AVX state); PPU_VMX_FAST=0 = off. */
++#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64))
++#define VMX_HAVE_FAST 1
++#include <immintrin.h>
++extern int ppu_vmx_fma;
++#define VMX_TGT static inline __attribute__((target("ssse3,sse4.1,fma")))
++VMX_TGT __m128 vmxq_ld(const void* p) {      /* 4 big-endian words -> host floats */
++    const __m128i sw = _mm_set_epi8(12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3);
++    return _mm_castsi128_ps(_mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)p), sw));
++}
++VMX_TGT void vmxq_st(void* p, __m128 v) {
++    const __m128i sw = _mm_set_epi8(12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3);
++    _mm_storeu_si128((__m128i*)p, _mm_shuffle_epi8(_mm_castps_si128(v), sw));
++}
++VMX_TGT __m128 vmxq_flush(__m128 v, uint32_t vscr) {   /* exponent 0 -> signed zero, under NJ */
++    if (!(vscr & VMX_NJ)) return v;
++    const __m128i x = _mm_castps_si128(v);
++    const __m128i z = _mm_cmpeq_epi32(_mm_and_si128(x, _mm_set1_epi32(0x7F800000)), _mm_setzero_si128());
++    return _mm_castsi128_ps(_mm_blendv_epi8(x, _mm_and_si128(x, _mm_set1_epi32((int)0x80000000u)), z));
++}
++VMX_TGT __m128 vmxq_fix(__m128 r) {                     /* NaN -> 0x7FC00000 */
++    return _mm_blendv_ps(r, _mm_castsi128_ps(_mm_set1_epi32(0x7FC00000)), _mm_cmpunord_ps(r, r));
++}
++VMX_TGT __m128 vmxq_nan2(__m128 r, __m128 a, __m128 b) {  /* NaN in A, else B, quieted; else fix(r) */
++    const __m128i m = _mm_set1_epi32(0x7FFFFFFF), inf = _mm_set1_epi32(0x7F800000), q = _mm_set1_epi32(0x7FC00000);
++    const __m128i ai = _mm_castps_si128(a), bi = _mm_castps_si128(b);
++    const __m128i na = _mm_cmpgt_epi32(_mm_and_si128(ai, m), inf), nb = _mm_cmpgt_epi32(_mm_and_si128(bi, m), inf);
++    __m128i o = _mm_castps_si128(vmxq_fix(r));
++    o = _mm_blendv_epi8(o, _mm_or_si128(bi, q), nb);
++    o = _mm_blendv_epi8(o, _mm_or_si128(ai, q), na);
++    return _mm_castsi128_ps(o);
++}
++VMX_TGT void vmx_vmaddfp_fast(void* d, const void* a, const void* b, const void* c, uint32_t vscr) {
++    const __m128 x = vmxq_flush(vmxq_ld(a), vscr), y = vmxq_flush(vmxq_ld(b), vscr), z = vmxq_flush(vmxq_ld(c), vscr);
++    vmxq_st(d, vmxq_flush(vmxq_fix(_mm_fmadd_ps(x, z, y)), vscr));
++}
++VMX_TGT void vmx_vnmsubfp_fast(void* d, const void* a, const void* b, const void* c, uint32_t vscr) {
++    const __m128 x = vmxq_flush(vmxq_ld(a), vscr), y = vmxq_flush(vmxq_ld(b), vscr), z = vmxq_flush(vmxq_ld(c), vscr);
++    const __m128 r = _mm_xor_ps(_mm_fmsub_ps(x, z, y), _mm_castsi128_ps(_mm_set1_epi32((int)0x80000000u)));
++    vmxq_st(d, vmxq_flush(vmxq_fix(r), vscr));
++}
++VMX_TGT void vmx_vaddfp_fast(void* d, const void* a, const void* b, uint32_t vscr) {
++    const __m128 x = vmxq_flush(vmxq_ld(a), vscr), y = vmxq_flush(vmxq_ld(b), vscr);
++    vmxq_st(d, vmxq_flush(vmxq_nan2(_mm_add_ps(x, y), x, y), vscr));
++}
++VMX_TGT void vmx_vsubfp_fast(void* d, const void* a, const void* b, uint32_t vscr) {
++    const __m128 x = vmxq_flush(vmxq_ld(a), vscr), y = vmxq_flush(vmxq_ld(b), vscr);
++    vmxq_st(d, vmxq_flush(vmxq_nan2(_mm_sub_ps(x, y), x, y), vscr));
++}
++#define VMX_FAST2(name) if (ppu_vmx_fma) { name##_fast(d_, a_, b_, vscr); return; }
++#define VMX_FAST3(name) if (ppu_vmx_fma) { name##_fast(d_, a_, b_, c_, vscr); return; }
++#else
++#define VMX_FAST2(name)
++#define VMX_FAST3(name)
++#endif
++
+ #define VMX_FBIN(name, op, flush_in) \
+ VMX_INL void name(VMX_D, VMX_A, VMX_B, uint32_t vscr) { VMX_ARGS_PREP; \
+     for (int i = 0; i < 4; i++) { uint32_t x = vmx_w(a, i), y = vmx_w(b, i); \
+@@ -270,21 +332,25 @@ VMX_INL float vmx_minf(float x, float y) {
+     if (x == 0 && y == 0) return signbit(x) ? x : y;      /* min(-0,+0) = -0 */
+     return x < y ? x : y;
+ }
+-VMX_FBIN(vmx_vaddfp, vmx_f(x) + vmx_f(y), 1)
+-VMX_FBIN(vmx_vsubfp, vmx_f(x) - vmx_f(y), 1)
++VMX_FBIN(vmx_vaddfp_ref, vmx_f(x) + vmx_f(y), 1)
++VMX_FBIN(vmx_vsubfp_ref, vmx_f(x) - vmx_f(y), 1)
++VMX_INL void vmx_vaddfp(VMX_D, VMX_A, VMX_B, uint32_t vscr) { VMX_FAST2(vmx_vaddfp) vmx_vaddfp_ref(d_, a_, b_, vscr); }
++VMX_INL void vmx_vsubfp(VMX_D, VMX_A, VMX_B, uint32_t vscr) { VMX_FAST2(vmx_vsubfp) vmx_vsubfp_ref(d_, a_, b_, vscr); }
+ VMX_FBIN(vmx_vmaxfp, vmx_maxf(vmx_f(x), vmx_f(y)), 0)
+ VMX_FBIN(vmx_vminfp, vmx_minf(vmx_f(x), vmx_f(y)), 0)
+ 
+-VMX_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) { VMX_ARGS_PREP; const uint8_t* c = (const uint8_t*)c_;
++VMX_INL void vmx_vmaddfp_ref(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) { VMX_ARGS_PREP; const uint8_t* c = (const uint8_t*)c_;
+     for (int i = 0; i < 4; i++) {
+         float x = vmx_f(vmx_flush(vmx_w(a, i), vscr)), y = vmx_f(vmx_flush(vmx_w(b, i), vscr)),
+               z = vmx_f(vmx_flush(vmx_w(c, i), vscr));
+         vmx_sw(r, i, vmx_flush(vmx_fix(vmx_u(fmaf(x, z, y))), vscr)); } VMX_OUT; }
+-VMX_INL void vmx_vnmsubfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) { VMX_ARGS_PREP; const uint8_t* c = (const uint8_t*)c_;
++VMX_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) { VMX_FAST3(vmx_vmaddfp) vmx_vmaddfp_ref(d_, a_, b_, c_, vscr); }
++VMX_INL void vmx_vnmsubfp_ref(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) { VMX_ARGS_PREP; const uint8_t* c = (const uint8_t*)c_;
+     for (int i = 0; i < 4; i++) {
+         float x = vmx_f(vmx_flush(vmx_w(a, i), vscr)), y = vmx_f(vmx_flush(vmx_w(b, i), vscr)),
+               z = vmx_f(vmx_flush(vmx_w(c, i), vscr));
+         vmx_sw(r, i, vmx_flush(vmx_fix(vmx_u(-fmaf(x, z, -y))), vscr)); } VMX_OUT; }
++VMX_INL void vmx_vnmsubfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) { VMX_FAST3(vmx_vnmsubfp) vmx_vnmsubfp_ref(d_, a_, b_, c_, vscr); }
+ 
+ #define VMX_FUN(name, expr, flush_in, nanmode) \
+ VMX_INL void name(VMX_D, VMX_B, uint32_t vscr) { const uint8_t* b = (const uint8_t*)b_; uint8_t r[16]; \
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb0..38be616 100644
+index a55afb0..80a08b4 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -73,7 +73,7 @@ void     ps3_load_prx_modules(void) {}
@@ -25293,7 +25740,15 @@ index a55afb0..38be616 100644
      }
      AcquireSRWLockExclusive(&s_env_lock);
      const char* val = NULL; int found = 0;
-@@ -485,17 +485,53 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -323,6 +323,7 @@ extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
+ extern "C" void  rsx_live_draw_present(uint32_t buffer_id);
+ extern "C" uint32_t rsx_live_draw_get_frames(void);
+ extern "C" uint32_t rsx_live_draw_get_last_draws(void);
++extern "C" int   rsx_live_draw_display_vblank(unsigned long long* vb_us, double* period_us);
+ extern "C" int   rsx_null_backend_init(uint32_t w, uint32_t h, const char* title);
+ extern "C" int   rsx_null_backend_pump_messages(void);
+ extern "C" void* rsx_null_backend_get_hwnd(void);
+@@ -485,17 +486,53 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -25351,7 +25806,7 @@ index a55afb0..38be616 100644
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -503,18 +539,13 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -503,18 +540,33 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * right now is exactly the completed frame. Presenting on a raw
               * flip-count change after the drain raced the guest's next-frame
               * writes and showed empty or mixed batches. */
@@ -25369,10 +25824,30 @@ index a55afb0..38be616 100644
              if (rsx_ok) cellGcm_rsx_process_fifo();
 -            next_tick += 16;                 /* ~60 Hz */
 +            next_tick += vb_period_us;
++            /* Lock to the display (NOTES fix 53): when this clock runs a whole number of ticks per
++             * display refresh (100 Hz ticks on a 99.99 Hz monitor), put the next tick on the
++             * nearest point of the real vblank grid (rsx_live_draw.c fits it from WaitForVBlank).
++             * Free-running, the two clocks drifted past each other and every crossing came out as
++             * a second of 3 / 1-refresh frames. LD_VBLANK_LOCK=0 = free-running;
++             * LD_VBLANK_LOCK_PHASE=<0..1> = tick that fraction of a tick period after the vblank. */
++            { static int lock = -1; static double phase = 0; static int said = 0;
++              if (lock < 0) { const char* e = getenv("LD_VBLANK_LOCK"); lock = !(e && e[0] == '0');
++                              const char* f = getenv("LD_VBLANK_LOCK_PHASE"); phase = f ? atof(f) : 0.0; }
++              unsigned long long vb; double dp;
++              if (lock && rsx_live_draw_display_vblank(&vb, &dp)) {
++                  const double n = dp / vb_period_us, ni = floor(n + 0.5);
++                  if (ni >= 1 && ni <= 8 && fabs(n - ni) < 0.015 * ni) {
++                      const double pg = dp / ni, g0 = (double)vb + phase * pg;
++                      next_tick = g0 + floor((next_tick - g0) / pg + 0.5) * pg;
++                      if (said != 1) { said = 1; fprintf(stderr, "[vblank-lock] guest ticks locked to the display: "
++                          "%.0f per refresh, display %.4f Hz -> %.4f Hz ticks\n", ni, 1e6 / dp, 1e6 / pg); }
++                  } else if (said != 2) { said = 2; fprintf(stderr, "[vblank-lock] not locking: %.3f Hz ticks vs "
++                      "%.4f Hz display is not a whole multiple\n", 1e6 / vb_period_us, 1e6 / dp); }
++              } }
              fired++;
          }
          if (fired >= 240) next_tick = now;   /* fell too far behind -> resync */
-@@ -523,10 +554,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -523,10 +575,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
           * at 16ms per fence wave's six passes paced the guest to ~7 fps.
           * The real RSX writes those fences in microseconds. */
          if (rsx_ok) {
@@ -25384,7 +25859,7 @@ index a55afb0..38be616 100644
              cellGcm_rsx_process_fifo();
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
-@@ -934,45 +962,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,45 +983,45 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -25459,7 +25934,7 @@ index a55afb0..38be616 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1085,6 +1113,17 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
+@@ -1085,6 +1134,17 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
  
  int main(int argc, char** argv)
  {
