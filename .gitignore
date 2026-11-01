@@ -10,6 +10,8 @@
 /logs/
 /perf/
 /captures/
+/textures/dump/
+/textures/replace/
 /.venv/
 /setup/local_config.json
 *.iso

@@ -2412,10 +2412,10 @@ index e55bcc1..5a0e68d 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 2579117..5d8b31f 100644
+index 2579117..6c1ffaf 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
-@@ -1,10554 +1,13021 @@
+@@ -1,10554 +1,13375 @@
 -/*
 - * ps3recomp - Track B live NV4097 draw path (implementation)
 - *
@@ -10084,6 +10084,7 @@ index 2579117..5d8b31f 100644
 +#include <dxgi1_4.h>
 +#include <d3dcompiler.h>
 +#include "rsx_vertex_formats.h"
++#include "rsx_tex_pack.h"   /* texture dump / replace (NOTES fix 60) */
 +#include <sys/stat.h>
 +
 +#pragma comment(lib, "d3d12.lib")
@@ -10265,6 +10266,11 @@ index 2579117..5d8b31f 100644
 +    u64 last_use_serial;
 +    u64 sample_hash;    /* texture_sample_hash at the last full hash */
 +    u32 stable;         /* consecutive full hashes that found no change */
++    int tp_idx;         /* texture pack slot (rsx_tex_pack.h) when tp_state != 0 */
++    u8  tp_state;       /* 0 none, 1 replacement still loading, 2 tex IS the replacement */
++    u8  refreshes;      /* content changes since it last held still (saturating); dumps stop after 2 */
++    u8  tp_lod;         /* tp_state 2: log2(replacement width / guest width), see sampler_slot_tp */
++    u8  rearms;         /* times refreshes was reset for new art (saturating; dumps re-arm at most 8 times) */
 +} texcache_t;
 +typedef struct {
 +    u32 location, offset, format, width, height, pitch;
@@ -11715,6 +11721,39 @@ index 2579117..5d8b31f 100644
 +    g.smp_keys[g.n_samplers++] = key;
 +    return slot;
 +}
++/* Sampler for a texture pack replacement `lod` mip levels larger than the guest texture (NOTES fix 60).
++ * The guest's LOD range counts guest levels, and a texture without mips is clamped to level 0 -- which
++ * on a 4x replacement drawn at the original size samples the 4x level minified, shimmering, with the
++ * generated mips unused. Here the range may go `lod` levels further down (level lod is the guest's
++ * level 0) and keeps its top open for the extra detail; no-mip textures filter between the levels. */
++static u32 sampler_slot_tp(const rsx_dsp_texture* t, u32 lod)
++{
++    const u64 key = sampler_key(t) | (1ull << 42) | ((u64)(lod & 15) << 43);
++    for (u32 i = 0; i < g.n_samplers; i++)
++        if (g.smp_keys[i] == key) return 1 + i;
++    if (g.n_samplers >= SMP_CACHE_SLOTS) return SMP_DEFAULT;
++    D3D12_SAMPLER_DESC sd = decode_sampler(t);
++    const u32 minf = (t->filter >> 16) & 0x7;
++    const u32 min_lod_fx = (t->control0 >> 19) & 0xFFF;
++    if (minf >= 3) {   /* guest mips: same range, shifted down by lod, top open unless clamped */
++        sd.MinLOD = min_lod_fx ? (float)min_lod_fx / 256.0f + (float)lod : 0.0f;
++        sd.MaxLOD += (float)lod;
++    } else {
++        const int min_linear = (minf == 2 || minf == 4 || minf == 6);
++        const int mag_linear = ((t->filter >> 24) & 0x7) == 2;
++        sd.Filter = D3D12_ENCODE_BASIC_FILTER(
++            min_linear ? D3D12_FILTER_TYPE_LINEAR : D3D12_FILTER_TYPE_POINT,
++            mag_linear ? D3D12_FILTER_TYPE_LINEAR : D3D12_FILTER_TYPE_POINT,
++            D3D12_FILTER_TYPE_LINEAR, D3D12_FILTER_REDUCTION_TYPE_STANDARD);
++        sd.MinLOD = 0.0f;
++        sd.MaxLOD = (float)lod;
++    }
++    if (sd.MaxLOD < sd.MinLOD) sd.MaxLOD = sd.MinLOD;
++    const u32 slot = 1 + g.n_samplers;
++    g.dev->lpVtbl->CreateSampler(g.dev, &sd, smp_cpu(slot));
++    g.smp_keys[g.n_samplers++] = key;
++    return slot;
++}
 +static D3D12_GPU_DESCRIPTOR_HANDLE sampler_table(const u32 slots[SMP_TABLE_SIZE])
 +{
 +    for (u32 i = 0; i < g.smp_ring_used; i++) {
@@ -12862,8 +12901,27 @@ index 2579117..5d8b31f 100644
 +    return result;
 +}
 +
++static u32 tp_dxgi_of(const texcache_t* entry);
 +static void write_texture_srv(u32 index, const texcache_t* entry)
 +{
++    if (entry->tp_state == 2) {   /* texture pack replacement: drawn as stored, see tp_lookup */
++        if (tp_dxgi_of(entry) == DXGI_FORMAT_BC4_UNORM) {   /* one channel: grey, alpha 1 */
++            D3D12_SHADER_RESOURCE_VIEW_DESC desc = {0};
++            desc.Format = DXGI_FORMAT_BC4_UNORM;
++            desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
++            desc.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
++                D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
++                D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
++                D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
++                D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1);
++            desc.Texture2D.MipLevels = (UINT)-1;
++            g.dev->lpVtbl->CreateShaderResourceView(g.dev, entry->tex, &desc,
++                                                    srv_cpu(SRV_TEXTURE_BASE + index));
++        } else {
++            srv_write(SRV_TEXTURE_BASE + index, entry->tex);
++        }
++        return;
++    }
 +    const u32 base_fmt = ld_tex_base_fmt(entry->format);
 +    const int compressed = base_fmt == TEX_FMT_DXT1 ||
 +                           base_fmt == TEX_FMT_DXT23 ||
@@ -12918,6 +12976,272 @@ index 2579117..5d8b31f 100644
 +    }
 +}
 +
++/* ---------------------------------------------------------------------------
++ * texture packs, GPU half (NOTES fix 60; files, keys and threads in
++ * rsx_tex_pack.c). A replacement is uploaded once and kept here with one
++ * reference; every cache entry drawing it holds its own, so dropping ours
++ * (tp_trim, over LD_TEX_REPLACE_MB) never pulls a texture out from under a draw.
++ * -----------------------------------------------------------------------*/
++static ID3D12Resource** g_tp_res;   /* per pack slot: the uploaded replacement */
++static u32* g_tp_used;              /* frame it was last bound */
++static u64* g_tp_size;
++static u32* g_tp_w;                 /* its width and DXGI format (sampler LOD shift, BC4 view) */
++static u32* g_tp_dxgi;
++static u32* g_tp_ask;               /* frame tp_resident last asked for it (READY sweep) */
++static u32* g_tp_retry;             /* after a failed upload: frame to try again */
++static u32 g_tp_sweep_frame;
++static u64 g_tp_bytes, g_tp_cap;
++static u32 g_tp_upload_frame;
++static u64 g_tp_frame_bytes;
++
++static int tp_gpu_ready(void)
++{
++    static int st = -1;
++    if (st >= 0) return st;
++    st = 0;
++    if (!texpack_replace_on()) return st;
++    const int n = texpack_count();
++    g_tp_res = (ID3D12Resource**)calloc((size_t)n, sizeof *g_tp_res);
++    g_tp_used = (u32*)calloc((size_t)n, sizeof *g_tp_used);
++    g_tp_size = (u64*)calloc((size_t)n, sizeof *g_tp_size);
++    g_tp_w = (u32*)calloc((size_t)n, sizeof *g_tp_w);
++    g_tp_dxgi = (u32*)calloc((size_t)n, sizeof *g_tp_dxgi);
++    g_tp_ask = (u32*)calloc((size_t)n, sizeof *g_tp_ask);
++    g_tp_retry = (u32*)calloc((size_t)n, sizeof *g_tp_retry);
++    if (!g_tp_res || !g_tp_used || !g_tp_size || !g_tp_w || !g_tp_dxgi || !g_tp_ask || !g_tp_retry) {
++        fprintf(stderr, "[texpack] out of memory -- replacements off\n");
++        return st;
++    }
++    const char* e = getenv("LD_TEX_REPLACE_MB");
++    g_tp_cap = (u64)((e && atoi(e) > 0) ? atoi(e) : 4096) << 20;
++    st = 1;
++    return st;
++}
++
++/* Own upload buffer per replacement (retired with the frame like any texture):
++ * a 4096x4096 RGBA chain is 85 MB, more than the shared upload ring holds. */
++static ID3D12Resource* tp_upload(const texpack_image* im, u64* size_out)
++{
++    D3D12_RESOURCE_DESC rd = {0};
++    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
++    rd.Width = im->w; rd.Height = im->h; rd.DepthOrArraySize = 1;
++    rd.MipLevels = (u16)im->n_levels; rd.Format = (DXGI_FORMAT)im->dxgi; rd.SampleDesc.Count = 1;
++    D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp[TEXPACK_MAX_LEVELS];
++    UINT rows[TEXPACK_MAX_LEVELS];
++    UINT64 row_size[TEXPACK_MAX_LEVELS], total = 0;
++    g.dev->lpVtbl->GetCopyableFootprints(g.dev, &rd, 0, im->n_levels, 0, fp, rows, row_size, &total);
++    if (!total || total == (UINT64)-1) return NULL;
++    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++    ID3D12Resource* tex = NULL;
++    if (FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
++                                                      D3D12_RESOURCE_STATE_COPY_DEST, NULL,
++                                                      &IID_ID3D12Resource, (void**)&tex)))
++        return NULL;
++    D3D12_HEAP_PROPERTIES up = {0}; up.Type = D3D12_HEAP_TYPE_UPLOAD;
++    D3D12_RESOURCE_DESC bd = {0};
++    bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = total; bd.Height = 1;
++    bd.DepthOrArraySize = 1; bd.MipLevels = 1; bd.SampleDesc.Count = 1;
++    bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++    ID3D12Resource* buf = NULL;
++    u8* mapped = NULL;
++    D3D12_RANGE none = {0, 0};
++    if (FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &up, D3D12_HEAP_FLAG_NONE, &bd,
++                                                      D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
++                                                      &IID_ID3D12Resource, (void**)&buf)) ||
++        FAILED(buf->lpVtbl->Map(buf, 0, &none, (void**)&mapped))) {
++        if (buf) buf->lpVtbl->Release(buf);
++        tex->lpVtbl->Release(tex);
++        return NULL;
++    }
++    for (u32 m = 0; m < im->n_levels; m++) {
++        const u32 n = rows[m] < im->lev[m].rows ? rows[m] : im->lev[m].rows;
++        const size_t bytes = row_size[m] < im->lev[m].row_bytes ? (size_t)row_size[m] : im->lev[m].row_bytes;
++        for (u32 y = 0; y < n; y++)
++            memcpy(mapped + fp[m].Offset + (size_t)y * fp[m].Footprint.RowPitch,
++                   im->lev[m].data + (size_t)y * im->lev[m].row_bytes, bytes);
++    }
++    buf->lpVtbl->Unmap(buf, 0, NULL);
++    for (u32 m = 0; m < im->n_levels; m++) {
++        D3D12_TEXTURE_COPY_LOCATION src = {0}, dst = {0};
++        src.pResource = buf; src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++        src.PlacedFootprint = fp[m];
++        dst.pResource = tex; dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++        dst.SubresourceIndex = m;
++        g.list->lpVtbl->CopyTextureRegion(g.list, &dst, 0, 0, 0, &src, NULL);
++    }
++    D3D12_RESOURCE_BARRIER b = {0};
++    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; b.Transition.pResource = tex;
++    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
++    b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++    retire_texture(buf);   /* released once this frame's commands have run */
++    *size_out = total;
++    return tex;
++}
++
++/* Over the cap: drop our reference to the least recently bound replacements
++ * that no cache entry holds any more (dropping a held one frees nothing and a
++ * second entry with that key would upload a second copy). They reload from
++ * disk if needed. */
++static void tp_trim(int keep)
++{
++    const int n = texpack_count();
++    while (g_tp_bytes > g_tp_cap) {
++        int victim = -1;
++        for (int i = 0; i < n; i++) {
++            if (!g_tp_res[i] || i == keep || g_tp_used[i] == g_ld_frames) continue;
++            if (victim >= 0 && g_tp_used[i] >= g_tp_used[victim]) continue;
++            const ULONG refs = g_tp_res[i]->lpVtbl->AddRef(g_tp_res[i]);
++            g_tp_res[i]->lpVtbl->Release(g_tp_res[i]);
++            if (refs > 2) continue;   /* ours + the probe = 2; more = still drawn (or retiring) */
++            victim = i;
++        }
++        if (victim < 0) break;
++        g_tp_res[victim]->lpVtbl->Release(g_tp_res[victim]);
++        g_tp_res[victim] = NULL;
++        g_tp_bytes -= g_tp_size[victim];
++        g_tp_size[victim] = 0;
++        texpack_set_state(victim, TEXPACK_IDLE);
++    }
++}
++
++/* The uploaded replacement for pack slot idx, or NULL while it loads (asks for
++ * the load the first time). At most 64 MB of uploads per frame, so walking into
++ * a big new area does not hitch for every texture at once. */
++static ID3D12Resource* tp_resident(int idx)
++{
++    g_tp_ask[idx] = g_ld_frames;
++    const int st = texpack_state(idx);
++    if (st == TEXPACK_RESIDENT && g_tp_res[idx]) { g_tp_used[idx] = g_ld_frames; return g_tp_res[idx]; }
++    if (st == TEXPACK_IDLE || st == TEXPACK_RESIDENT) {
++        if (g_tp_retry[idx] && g_ld_frames < g_tp_retry[idx]) return NULL;
++        texpack_set_state(idx, TEXPACK_IDLE);
++        texpack_request(idx);
++        return NULL;
++    }
++    if (st != TEXPACK_READY) return NULL;   /* queued, loading or failed */
++    const texpack_image* im = texpack_image_get(idx);
++    if (g_tp_upload_frame != g_ld_frames) { g_tp_upload_frame = g_ld_frames; g_tp_frame_bytes = 0; }
++    if (g_tp_frame_bytes && g_tp_frame_bytes + im->bytes > (64ull << 20)) return NULL;   /* next frame */
++    u64 size = 0;
++    ID3D12Resource* r = tp_upload(im, &size);
++    if (!r) {
++        fprintf(stderr, "[texpack] GPU upload failed: %s (%ux%u, %u levels, DXGI %u) -- retrying in 10 s\n",
++                texpack_path(idx), im->w, im->h, im->n_levels, im->dxgi);
++        g_tp_retry[idx] = g_ld_frames + 600;   /* out of video memory, most likely: not for good */
++        texpack_image_release(idx, TEXPACK_IDLE);
++        return NULL;
++    }
++    g_tp_frame_bytes += im->bytes;
++    static u32 nlog; static int all = -1;   /* LD_TEX_LOG=1: every load, not the first 32 */
++    if (all < 0) { const char* e = getenv("LD_TEX_LOG"); all = (e && *e == '1'); }
++    if (++nlog <= 32 || all || (nlog & 255) == 0)
++        fprintf(stderr, "[texpack] loaded %s (%ux%u, %u levels) -- %u so far, %.0f MB\n",
++                texpack_path(idx), im->w, im->h, im->n_levels, nlog,
++                (double)(g_tp_bytes + size) / (1 << 20));
++    g_tp_w[idx] = im->w;
++    g_tp_dxgi[idx] = im->dxgi;
++    g_tp_retry[idx] = 0;
++    texpack_image_release(idx, TEXPACK_RESIDENT);
++    g_tp_res[idx] = r;
++    g_tp_size[idx] = size;
++    g_tp_bytes += size;
++    g_tp_used[idx] = g_ld_frames;
++    tp_trim(idx);
++    return r;
++}
++
++static u32 tp_dxgi_of(const texcache_t* entry) { return g_tp_dxgi ? g_tp_dxgi[entry->tp_idx] : 0; }
++
++static u8 tp_lod_of(int idx, u32 guest_w)
++{
++    u8 lod = 0;
++    while (lod < 15 && guest_w && ((u64)guest_w << (lod + 1)) <= g_tp_w[idx]) lod++;
++    return lod;
++}
++
++/* Loads finished for an entry that stopped asking (its content changed, it was
++ * evicted, it is drawn only now and then) would keep their decoded image in RAM
++ * for good: upload those not asked for in 2 s, so the RAM copy goes and the
++ * next bind finds them ready (tp_trim drops them again when over the cap and
++ * nothing draws them). Every 64 frames, within the per-frame upload budget. */
++static void tp_sweep(void)
++{
++    if (!g_tp_res || g_tp_sweep_frame == g_ld_frames || (g_ld_frames & 63u)) return;
++    g_tp_sweep_frame = g_ld_frames;
++    const int n = texpack_count();
++    for (int i = 0; i < n; i++)
++        if (texpack_state(i) == TEXPACK_READY && g_ld_frames - g_tp_ask[i] > 120u)
++            tp_resident(i);
++}
++
++/* Level 0 of t exactly as the guest laid it down, to the dump worker. */
++static void tp_dump(const rsx_dsp_texture* t, u64 key, u32 base, u32 remap)
++{
++    const int linear = (t->format & TEX_FMT_LINEAR) != 0;
++    const u32 w = t->width, h = t->height;
++    u32 n;
++    if (base == TEX_FMT_DXT1 || base == TEX_FMT_DXT23 || base == TEX_FMT_DXT45)
++        n = ((w + 3) / 4) * ((h + 3) / 4) * (base == TEX_FMT_DXT1 ? 8u : 16u);
++    else {
++        const u32 ts = base == TEX_FMT_B8 ? 1u : base == TEX_FMT_A8R8G8B8 ? 4u : 2u;
++        if (!linear && ((w & (w - 1)) || (h & (h - 1)))) return;   /* not decodable either */
++        const u32 pitch = (linear && t->pitch) ? t->pitch : w * ts;
++        n = linear ? pitch * (h - 1) + w * ts : w * h * ts;
++    }
++    const u8* src = guest_ptr(t->location, t->offset, n);
++    if (src)
++        texpack_dump(key, base, linear, w, h, t->pitch, remap, t->mipmaps ? t->mipmaps : 1,
++                     t->location, t->offset, src, n, decode_texel);
++}
++
++/* A texture's guest content (hash) is new: dump it if asked, and return its
++ * replacement (one reference for the caller's cache entry) when one is loaded.
++ * *tp_idx / *tp_state are what the entry should carry from now on. */
++static ID3D12Resource* tp_lookup(const rsx_dsp_texture* t, u64 hash, u32 remap,
++                                 u32 refreshes, int* tp_idx, u8* tp_state, u8* tp_lod)
++{
++    *tp_idx = -1; *tp_state = 0; *tp_lod = 0;
++    const u32 base = ld_tex_base_fmt(t->format);
++    if (t->cubemap || t->dimension != 2 || !texpack_supported_fmt(base)) return NULL;
++    const u64 key = texpack_key(hash, base, t->width, t->height, remap);
++    /* a texture rewritten over and over (a movie, a render copy) is not art: dump the first few */
++    if (refreshes < 3 && texpack_dump_claim(key)) tp_dump(t, key, base, remap);
++    if (!tp_gpu_ready()) return NULL;
++    const int idx = texpack_find(key);
++    if (idx < 0) return NULL;
++    *tp_idx = idx;
++    ID3D12Resource* r = tp_resident(idx);
++    if (r) {
++        r->lpVtbl->AddRef(r);
++        *tp_state = 2;
++        *tp_lod = tp_lod_of(idx, t->width);
++        return r;
++    }
++    *tp_state = texpack_state(idx) == TEXPACK_FAILED ? 0 : 1;
++    return NULL;
++}
++
++/* Cache hit on an entry with a replacement: keep its use time, or swap it in
++ * once its background load has finished. */
++static void tp_poll(texcache_t* entry, u32 index)
++{
++    if (entry->tp_state == 2) { g_tp_used[entry->tp_idx] = g_ld_frames; return; }
++    ID3D12Resource* r = tp_resident(entry->tp_idx);
++    if (!r) {
++        if (texpack_state(entry->tp_idx) == TEXPACK_FAILED) entry->tp_state = 0;
++        return;
++    }
++    r->lpVtbl->AddRef(r);
++    ID3D12Resource* old = entry->tex;
++    entry->tex = r;
++    entry->tp_state = 2;
++    entry->tp_lod = tp_lod_of(entry->tp_idx, entry->width);
++    write_texture_srv(index, entry);
++    retire_texture(old);
++}
++
 +/* Decode a guest texture descriptor into a cached SRV slot.  Unlike the old
 + * descriptor-only cache, re-hash the source once per frame and refresh the
 + * D3D resource when the game rewrites the same guest address. */
@@ -12926,6 +13250,7 @@ index 2579117..5d8b31f 100644
 +static u32 texture_srv_slot(const rsx_dsp_texture* t)
 +{
 +    const u32 remap = t->remap & 0xFFFF;
++    if (g_tp_res) tp_sweep();
 +    static int refresh_enabled = -1;
 +    if (refresh_enabled < 0)
 +        refresh_enabled = getenv("RSX_NO_TEX_REFRESH") ? 0 : 1;
@@ -12961,6 +13286,7 @@ index 2579117..5d8b31f 100644
 +            ld_memo_report("texture slot", i, k);
 +        }
 +        tmemo[tslot] = i + 1;
++        if (entry->tp_state) tp_poll(entry, i);
 +        if (refresh_enabled && entry->tex && entry->last_hash_frame != g_ld_frames &&
 +            entry->stable >= 8u && ((g_ld_frames + i) & 15u) != 0 && ld_tex_adaptive()) {
 +            int sr = 0;
@@ -13017,6 +13343,7 @@ index 2579117..5d8b31f 100644
 +                              t->pitch);
 +              } }
 +            entry->last_hash_frame = g_ld_frames;
++            const u32 prev_stable = entry->stable;
 +            if (readable) {
 +                if (hash == entry->content_hash) { if (entry->stable < 255u) entry->stable++; }
 +                else entry->stable = 0;
@@ -13024,12 +13351,22 @@ index 2579117..5d8b31f 100644
 +                entry->sample_hash = texture_sample_hash(t, &sr);
 +            }
 +            if (readable && hash != entry->content_hash) {
-+                ID3D12Resource* replacement =
-+                    decode_guest_texture_profiled(t, remap);
++                /* a slot reused for new art after holding still for ~15 s dumps again (8 times at most:
++                 * a movie or render copy that pauses now and then must not keep dumping) */
++                if (prev_stable >= 64u && entry->rearms < 8u) { entry->refreshes = 0; entry->rearms++; }
++                if (entry->refreshes < 255u) entry->refreshes++;
++                int tp_idx = -1; u8 tp_state = 0, tp_lod = 0;
++                ID3D12Resource* replacement = texpack_active()
++                    ? tp_lookup(t, hash, remap, entry->refreshes, &tp_idx, &tp_state, &tp_lod) : NULL;
++                if (!replacement)
++                    replacement = decode_guest_texture_profiled(t, remap);
 +                if (replacement) {
 +                    ID3D12Resource* old = entry->tex;
 +                    entry->tex = replacement;
 +                    entry->content_hash = hash;
++                    entry->tp_idx = tp_idx;
++                    entry->tp_state = tp_state;
++                    entry->tp_lod = tp_lod;
 +                    write_texture_srv(i, entry);
 +                    retire_texture(old);
 +                    static u32 refresh_count = 0;
@@ -13090,11 +13427,15 @@ index 2579117..5d8b31f 100644
 +    replacement.cubemap = t->cubemap;
 +    replacement.last_hash_frame = g_ld_frames;
 +    replacement.last_use_serial = ++g_ld_texture_use_serial;
-+    {
-+        int readable = 0;
-+        replacement.content_hash = texture_content_hash(t, &readable);
-+    }
-+    replacement.tex = decode_guest_texture_profiled(t, remap);
++    int readable = 0;
++    replacement.content_hash = texture_content_hash(t, &readable);
++    replacement.tp_idx = -1;
++    replacement.tex = (readable && texpack_active())
++        ? tp_lookup(t, replacement.content_hash, remap, 0, &replacement.tp_idx, &replacement.tp_state,
++                    &replacement.tp_lod)
++        : NULL;
++    if (!replacement.tex)
++        replacement.tex = decode_guest_texture_profiled(t, remap);
 +    if (replacement.tex) {
 +        texcache_t* entry = &g.textures[index];
 +        if (evicted)
@@ -22535,6 +22876,13 @@ index 2579117..5d8b31f 100644
 +            } else {
 +                slots[u] = texture_srv_slot(&t);
 +                if (slots[u] == SRV_WHITE) g_ld_bind_white++; else g_ld_bind_real++;
++                if (slots[u] >= SRV_TEXTURE_BASE && slots[u] < SRV_TEXTURE_BASE + MAX_TEXTURES) {
++                    const texcache_t* te = &g.textures[slots[u] - SRV_TEXTURE_BASE];
++                    if (te->tp_state == 2 && te->tp_lod) {
++                        const u32 tps = sampler_slot_tp(&t, te->tp_lod);
++                        if (tps != SMP_DEFAULT) smp_slots[u] = tps;   /* sampler cache full: keep the guest's */
++                    }
++                }
 +            }
 +        }
 +    }
@@ -25932,6 +26280,12 @@ index 2579117..5d8b31f 100644
 +    shader_blob_cache_release(&g.vs_blobs);
 +    shader_blob_cache_release(&g.ps_blobs);
 +    for (u32 i = 0; i < g.n_textures; i++) if (g.textures[i].tex) g.textures[i].tex->lpVtbl->Release(g.textures[i].tex);
++    if (g_tp_res) {   /* texture pack replacements (NOTES fix 60) */
++        for (int i = 0; i < texpack_count(); i++)
++            if (g_tp_res[i]) { g_tp_res[i]->lpVtbl->Release(g_tp_res[i]); g_tp_res[i] = NULL;
++                               texpack_set_state(i, TEXPACK_IDLE); }
++        g_tp_bytes = 0;
++    }
 +    for (u32 i = 0; i < g.n_vtex; i++) if (g.vtex[i].tex) g.vtex[i].tex->lpVtbl->Release(g.vtex[i].tex);
 +    for (u32 i = 0; i < g.n_surfaces; i++) if (g.surfaces[i].tex) g.surfaces[i].tex->lpVtbl->Release(g.surfaces[i].tex);
 +    for (u32 i = 0; i < g.n_zdepths; i++) {
@@ -26062,6 +26416,881 @@ index 32e8a95..3a5f82d 100644
      /* RPCS3-style caption, once a second: guest FPS (flips), draws in the last
       * live-draw frame, window size. Here on the window's own thread, so the
       * WM_SETTEXT never blocks the renderer. */
+diff --git a/libs/video/rsx_tex_pack.c b/libs/video/rsx_tex_pack.c
+new file mode 100644
+index 0000000..4a84693
+--- /dev/null
++++ b/libs/video/rsx_tex_pack.c
+@@ -0,0 +1,768 @@
++/* rsx_tex_pack -- see rsx_tex_pack.h. */
++#include "rsx_tex_pack.h"
++
++#if defined(_WIN32)
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <windows.h>
++
++/* stb_image / stb_image_write are compiled in libs/codec (cellPngDec.c owns
++ * STB_IMAGE_IMPLEMENTATION, cellPngEnc.c STB_IMAGE_WRITE_IMPLEMENTATION);
++ * this file only needs the declarations. */
++#if __has_include("stb_image.h")
++#include "stb_image.h"
++#define TEXPACK_HAS_PNG_LOAD 1
++#else
++#define TEXPACK_HAS_PNG_LOAD 0
++#endif
++#include "stb_image_write.h"
++
++typedef uint8_t u8;
++typedef uint32_t u32;
++typedef uint64_t u64;
++
++/* RSX base formats (rsx_live_draw.c's TEX_FMT_*). */
++#define TP_B8       0x81
++#define TP_A1R5G5B5 0x82
++#define TP_A4R4G4B4 0x83
++#define TP_R5G6B5   0x84
++#define TP_A8R8G8B8 0x85
++#define TP_DXT1     0x86
++#define TP_DXT23    0x87
++#define TP_DXT45    0x88
++#define TP_G8B8     0x8B
++
++/* DXGI_FORMAT values used here (dxgiformat.h). */
++#define TP_DXGI_R8G8B8A8_UNORM      28
++#define TP_DXGI_R8G8B8A8_UNORM_SRGB 29
++#define TP_DXGI_BC1_UNORM           71
++#define TP_DXGI_BC1_UNORM_SRGB      72
++#define TP_DXGI_BC2_UNORM           74
++#define TP_DXGI_BC2_UNORM_SRGB      75
++#define TP_DXGI_BC3_UNORM           77
++#define TP_DXGI_BC3_UNORM_SRGB      78
++#define TP_DXGI_BC4_UNORM           80
++#define TP_DXGI_B8G8R8A8_UNORM      87
++#define TP_DXGI_B8G8R8X8_UNORM      88
++#define TP_DXGI_B8G8R8A8_UNORM_SRGB 91
++#define TP_DXGI_B8G8R8X8_UNORM_SRGB 93
++#define TP_DXGI_BC7_UNORM           98
++#define TP_DXGI_BC7_UNORM_SRGB      99
++
++/* ---------------------------------------------------------------------------
++ * settings
++ * -----------------------------------------------------------------------*/
++static INIT_ONCE s_once = INIT_ONCE_STATIC_INIT;
++static int  s_dump, s_replace;
++static char s_dir[MAX_PATH], s_dump_dir[MAX_PATH], s_repl_dir[MAX_PATH];
++
++typedef struct {
++    u64 key;
++    char* path;
++    volatile LONG state;
++    texpack_image img;
++    u8* mem;           /* everything img.lev[].data points into */
++    void* stb_mem;     /* stb_image's buffer, when the image is a PNG level 0 */
++} tp_entry;
++
++static tp_entry* s_ent;       /* open addressing on key; s_mask + 1 slots */
++static u32 s_mask, s_count;
++
++static int tp_is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
++
++static u64 tp_mix(u64 x)   /* splitmix64 finalizer */
++{
++    x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ull;
++    x ^= x >> 27; x *= 0x94D049BB133111EBull;
++    x ^= x >> 31;
++    return x;
++}
++
++uint64_t texpack_key(uint64_t content_hash, uint32_t base_fmt, uint32_t w, uint32_t h, uint32_t remap)
++{
++    const u64 shape = ((u64)(base_fmt & 0xFF) << 56) ^ ((u64)(remap & 0xFFFF) << 32) ^
++                      ((u64)(w & 0xFFFF) << 16) ^ (u64)(h & 0xFFFF);
++    u64 k = tp_mix(content_hash ^ tp_mix(shape + 0x9E3779B97F4A7C15ull));
++    return k ? k : 1;
++}
++
++int texpack_supported_fmt(uint32_t f)
++{
++    switch (f) {
++    case TP_B8: case TP_A1R5G5B5: case TP_A4R4G4B4: case TP_R5G6B5: case TP_A8R8G8B8:
++    case TP_DXT1: case TP_DXT23: case TP_DXT45: case TP_G8B8:
++        return 1;
++    default:
++        return 0;
++    }
++}
++
++static const char* tp_fmt_name(u32 f)
++{
++    switch (f) {
++    case TP_B8: return "b8";
++    case TP_A1R5G5B5: return "a1rgb5";
++    case TP_A4R4G4B4: return "argb4";
++    case TP_R5G6B5: return "rgb565";
++    case TP_A8R8G8B8: return "argb8";
++    case TP_DXT1: return "dxt1";
++    case TP_DXT23: return "dxt3";
++    case TP_DXT45: return "dxt5";
++    case TP_G8B8: return "g8b8";
++    default: return "unknown";
++    }
++}
++
++/* Parses the leading 16 hex digits of a file name; 0 = not a texture-pack name. */
++static u64 tp_name_key(const char* name)
++{
++    u64 k = 0;
++    for (int i = 0; i < 16; i++) {
++        const char c = name[i];
++        if (!tp_is_hex(c)) return 0;
++        k = (k << 4) | (u64)(c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10);
++    }
++    if (tp_is_hex(name[16])) return 0;   /* a longer hex run is something else */
++    return k;
++}
++
++static int tp_ext_rank(const char* name)   /* .dds 2, .png 1, else 0 */
++{
++    const char* dot = strrchr(name, '.');
++    if (!dot) return 0;
++    if (!_stricmp(dot, ".dds")) return 2;
++    if (!_stricmp(dot, ".png")) return TEXPACK_HAS_PNG_LOAD ? 1 : 0;
++    return 0;
++}
++
++typedef struct { u64 key; char* path; int rank; } tp_file;
++static tp_file* s_files; static u32 s_nfiles, s_capfiles;
++
++static void tp_scan(const char* dir, int depth)
++{
++    char pat[MAX_PATH];
++    if (snprintf(pat, sizeof pat, "%s\\*", dir) >= (int)sizeof pat) return;
++    WIN32_FIND_DATAA fd;
++    HANDLE h = FindFirstFileA(pat, &fd);
++    if (h == INVALID_HANDLE_VALUE) return;
++    do {
++        if (fd.cFileName[0] == '.') continue;
++        char full[MAX_PATH];
++        if (snprintf(full, sizeof full, "%s\\%s", dir, fd.cFileName) >= (int)sizeof full) continue;
++        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
++            if (depth < 8) tp_scan(full, depth + 1);
++            continue;
++        }
++        const int rank = tp_ext_rank(fd.cFileName);
++        const u64 key = rank ? tp_name_key(fd.cFileName) : 0;
++        if (!key) continue;
++        if (s_nfiles == s_capfiles) {
++            const u32 cap = s_capfiles ? s_capfiles * 2 : 1024;
++            tp_file* n = (tp_file*)realloc(s_files, cap * sizeof *n);
++            if (!n) break;
++            s_files = n; s_capfiles = cap;
++        }
++        s_files[s_nfiles].key = key;
++        s_files[s_nfiles].path = _strdup(full);
++        s_files[s_nfiles].rank = rank;
++        if (s_files[s_nfiles].path) s_nfiles++;
++    } while (FindNextFileA(h, &fd));
++    FindClose(h);
++}
++
++static tp_entry* tp_slot(u64 key)
++{
++    if (!s_ent) return NULL;
++    for (u32 i = (u32)tp_mix(key) & s_mask;; i = (i + 1) & s_mask) {
++        if (s_ent[i].key == key || s_ent[i].key == 0) return &s_ent[i];
++    }
++}
++
++static void tp_build_table(void)
++{
++    if (!s_nfiles) return;
++    u32 n = 1024;
++    while (n < s_nfiles * 2) n <<= 1;
++    s_ent = (tp_entry*)calloc(n, sizeof *s_ent);
++    if (!s_ent) return;
++    s_mask = n - 1;
++    u32 dup = 0;
++    for (u32 f = 0; f < s_nfiles; f++) {
++        tp_entry* e = tp_slot(s_files[f].key);
++        if (e->key) {   /* same key twice: keep the .dds (what a pack author optimised), else the first */
++            dup++;
++            if (dup <= 8)
++                fprintf(stderr, "[texpack] %016llX has more than one file; using %s\n",
++                        (unsigned long long)e->key,
++                        s_files[f].rank > tp_ext_rank(e->path) ? s_files[f].path : e->path);
++            if (s_files[f].rank > tp_ext_rank(e->path)) { free(e->path); e->path = s_files[f].path; }
++            else free(s_files[f].path);
++            continue;
++        }
++        e->key = s_files[f].key;
++        e->path = s_files[f].path;
++        s_count++;
++    }
++    free(s_files); s_files = NULL;
++    if (dup > 8) fprintf(stderr, "[texpack] ... %u keys had more than one file\n", dup);
++}
++
++static BOOL CALLBACK tp_init(PINIT_ONCE once, PVOID p, PVOID* ctx)
++{
++    (void)once; (void)p; (void)ctx;
++    const char* d = getenv("LD_TEX_DIR");
++    snprintf(s_dir, sizeof s_dir, "%s", (d && *d) ? d : "textures");
++    snprintf(s_dump_dir, sizeof s_dump_dir, "%s\\dump", s_dir);
++    snprintf(s_repl_dir, sizeof s_repl_dir, "%s\\replace", s_dir);
++    const char* e = getenv("LD_TEX_DUMP");
++    s_dump = e && *e && *e != '0';
++    if (s_dump) {
++        CreateDirectoryA(s_dir, NULL);
++        CreateDirectoryA(s_dump_dir, NULL);
++        const DWORD a = GetFileAttributesA(s_dump_dir);
++        if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) {
++            fprintf(stderr, "[texpack] cannot create %s -- texture dumping off\n", s_dump_dir);
++            s_dump = 0;
++        } else {
++            fprintf(stderr, "[texpack] dumping textures to %s\n", s_dump_dir);
++        }
++    }
++    e = getenv("LD_TEX_REPLACE");
++    if (!(e && *e == '0')) {
++        tp_scan(s_repl_dir, 0);
++        tp_build_table();
++        s_replace = s_count > 0;
++        if (s_replace)
++            fprintf(stderr, "[texpack] %u replacement textures in %s\n", s_count, s_repl_dir);
++    }
++    fflush(stderr);
++    return TRUE;
++}
++
++static void tp_ensure(void) { InitOnceExecuteOnce(&s_once, tp_init, NULL, NULL); }
++
++int texpack_active(void) { tp_ensure(); return s_dump || s_replace; }
++int texpack_dump_on(void) { tp_ensure(); return s_dump; }
++int texpack_replace_on(void) { tp_ensure(); return s_replace; }
++
++int texpack_find(uint64_t key)
++{
++    if (!s_replace || !key) return -1;
++    tp_entry* e = tp_slot(key);
++    return (e && e->key == key) ? (int)(e - s_ent) : -1;
++}
++int texpack_count(void) { return (int)(s_mask + 1) * (s_ent != NULL); }
++const char* texpack_path(int idx) { return s_ent[idx].path; }
++int texpack_state(int idx) { return (int)s_ent[idx].state; }
++void texpack_set_state(int idx, int state) { InterlockedExchange(&s_ent[idx].state, state); }
++const texpack_image* texpack_image_get(int idx) { return &s_ent[idx].img; }
++
++/* ---------------------------------------------------------------------------
++ * worker threads
++ * -----------------------------------------------------------------------*/
++typedef struct tp_job {
++    struct tp_job* next;
++    int load_idx;                 /* >= 0: load s_ent[load_idx]; -1: a dump */
++    u64 key;
++    u32 fmt, linear, w, h, pitch, remap, mips, location, offset, nbytes;
++    texpack_texel_fn texel;
++    u8 data[];
++} tp_job;
++
++static CRITICAL_SECTION s_qlock;
++static CONDITION_VARIABLE s_qcv;
++static tp_job *s_qhead, *s_qtail;
++static volatile LONG64 s_dump_pending;   /* bytes of queued dump jobs */
++static INIT_ONCE s_wonce = INIT_ONCE_STATIC_INIT;
++static CRITICAL_SECTION s_csv_lock;
++
++static void tp_do_load(int idx);
++static void tp_do_dump(const tp_job* j);
++
++static DWORD WINAPI tp_worker(LPVOID arg)
++{
++    (void)arg;
++    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
++    for (;;) {
++        EnterCriticalSection(&s_qlock);
++        while (!s_qhead) SleepConditionVariableCS(&s_qcv, &s_qlock, INFINITE);
++        tp_job* j = s_qhead;
++        s_qhead = j->next;
++        if (!s_qhead) s_qtail = NULL;
++        LeaveCriticalSection(&s_qlock);
++        if (j->load_idx >= 0) tp_do_load(j->load_idx);
++        else {
++            tp_do_dump(j);
++            InterlockedAdd64(&s_dump_pending, -(LONG64)j->nbytes);
++        }
++        free(j);
++    }
++}
++
++static BOOL CALLBACK tp_start_workers(PINIT_ONCE once, PVOID p, PVOID* ctx)
++{
++    (void)once; (void)p; (void)ctx;
++    InitializeCriticalSection(&s_qlock);
++    InitializeCriticalSection(&s_csv_lock);
++    InitializeConditionVariable(&s_qcv);
++    int n = 2;
++    const char* e = getenv("LD_TEX_THREADS");
++    if (e && atoi(e) > 0) n = atoi(e) > 8 ? 8 : atoi(e);
++    for (int i = 0; i < n; i++) {
++        HANDLE t = CreateThread(NULL, 0, tp_worker, NULL, 0, NULL);
++        if (t) CloseHandle(t);
++    }
++    return TRUE;
++}
++
++static void tp_push(tp_job* j)
++{
++    InitOnceExecuteOnce(&s_wonce, tp_start_workers, NULL, NULL);
++    j->next = NULL;
++    EnterCriticalSection(&s_qlock);
++    if (j->load_idx >= 0 && s_qhead) {   /* loads go ahead of dumps: they change what is drawn */
++        tp_job** pp = &s_qhead;
++        while (*pp && (*pp)->load_idx >= 0) pp = &(*pp)->next;
++        j->next = *pp;
++        *pp = j;
++        if (!j->next) s_qtail = j;
++    } else {
++        if (s_qtail) s_qtail->next = j; else s_qhead = j;
++        s_qtail = j;
++    }
++    LeaveCriticalSection(&s_qlock);
++    WakeConditionVariable(&s_qcv);
++}
++
++/* ---------------------------------------------------------------------------
++ * loading replacements
++ * -----------------------------------------------------------------------*/
++static void tp_fail(tp_entry* e, const char* why)
++{
++    static volatile LONG n;
++    if (InterlockedIncrement(&n) <= 32) {
++        fprintf(stderr, "[texpack] cannot use %s: %s\n", e->path, why);
++        fflush(stderr);
++    }
++    InterlockedExchange(&e->state, TEXPACK_FAILED);
++}
++
++static u8* tp_read_file(const char* path, size_t* size)
++{
++    FILE* f = fopen(path, "rb");
++    if (!f) return NULL;
++    u8* buf = NULL;
++    if (_fseeki64(f, 0, SEEK_END) == 0) {
++        const long long n = _ftelli64(f);
++        if (n > 0 && n < (1ll << 31) && _fseeki64(f, 0, SEEK_SET) == 0) {
++            buf = (u8*)malloc((size_t)n);
++            if (buf && fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); buf = NULL; }
++            if (buf) *size = (size_t)n;
++        }
++    }
++    fclose(f);
++    return buf;
++}
++
++static u32 tp_rd32(const u8* p) { return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24); }
++
++/* Fills e->img's level table over `base` for a chain of n levels of the given
++ * layout. Returns the bytes the chain needs. */
++static u64 tp_layout(texpack_image* im, const u8* base, u32 w, u32 h, u32 n, u32 block)
++{
++    u64 off = 0;
++    for (u32 m = 0; m < n; m++) {
++        im->lev[m].w = w; im->lev[m].h = h;
++        if (block) {
++            im->lev[m].row_bytes = ((w + 3) / 4) * block;
++            im->lev[m].rows = (h + 3) / 4;
++        } else {
++            im->lev[m].row_bytes = w * 4;
++            im->lev[m].rows = h;
++        }
++        im->lev[m].data = base ? base + off : NULL;
++        off += (u64)im->lev[m].row_bytes * im->lev[m].rows;
++        w = w > 1 ? w >> 1 : 1;
++        h = h > 1 ? h >> 1 : 1;
++    }
++    return off;
++}
++
++static u32 tp_full_chain(u32 w, u32 h)
++{
++    u32 n = 1;
++    while ((w > 1 || h > 1) && n < TEXPACK_MAX_LEVELS) { w = w > 1 ? w >> 1 : 1; h = h > 1 ? h >> 1 : 1; n++; }
++    return n;
++}
++
++/* 2x2 box filter, RGBA8; an odd edge repeats its last texel. */
++static void tp_downsample(const u8* s, u32 sw, u32 sh, u8* d, u32 dw, u32 dh)
++{
++    for (u32 y = 0; y < dh; y++) {
++        const u32 y0 = y * 2 < sh ? y * 2 : sh - 1, y1 = y * 2 + 1 < sh ? y * 2 + 1 : y0;
++        for (u32 x = 0; x < dw; x++) {
++            const u32 x0 = x * 2 < sw ? x * 2 : sw - 1, x1 = x * 2 + 1 < sw ? x * 2 + 1 : x0;
++            const u8* a = s + ((size_t)y0 * sw + x0) * 4; const u8* b = s + ((size_t)y0 * sw + x1) * 4;
++            const u8* c = s + ((size_t)y1 * sw + x0) * 4; const u8* q = s + ((size_t)y1 * sw + x1) * 4;
++            u8* o = d + ((size_t)y * dw + x) * 4;
++            for (int k = 0; k < 4; k++) o[k] = (u8)((a[k] + b[k] + c[k] + q[k] + 2) >> 2);
++        }
++    }
++}
++
++static int tp_load_png(tp_entry* e)
++{
++#if TEXPACK_HAS_PNG_LOAD
++    int w = 0, h = 0, comp = 0;
++    u8* px = stbi_load(e->path, &w, &h, &comp, 4);
++    if (!px) { tp_fail(e, stbi_failure_reason() ? stbi_failure_reason() : "not a PNG"); return 0; }
++    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) { stbi_image_free(px); tp_fail(e, "larger than 16384"); return 0; }
++    texpack_image* im = &e->img;
++    memset(im, 0, sizeof *im);
++    im->dxgi = TP_DXGI_R8G8B8A8_UNORM;
++    im->w = (u32)w; im->h = (u32)h;
++    im->n_levels = tp_full_chain((u32)w, (u32)h);
++    const u64 all = tp_layout(im, NULL, (u32)w, (u32)h, im->n_levels, 0);
++    const u64 lvl0 = (u64)w * h * 4;
++    /* level 0 stays in stb's buffer; the mips go in one block after it */
++    u8* mips = all > lvl0 ? (u8*)malloc((size_t)(all - lvl0)) : NULL;
++    if (all > lvl0 && !mips) { stbi_image_free(px); tp_fail(e, "out of memory"); return 0; }
++    tp_layout(im, NULL, (u32)w, (u32)h, im->n_levels, 0);
++    im->lev[0].data = px;
++    u64 off = 0;
++    for (u32 m = 1; m < im->n_levels; m++) {
++        u8* d = mips + off;
++        tp_downsample(im->lev[m - 1].data, im->lev[m - 1].w, im->lev[m - 1].h, d, im->lev[m].w, im->lev[m].h);
++        im->lev[m].data = d;
++        off += (u64)im->lev[m].row_bytes * im->lev[m].rows;
++    }
++    im->bytes = all;
++    e->stb_mem = px;
++    e->mem = mips;
++    return 1;
++#else
++    tp_fail(e, "PNG support was not built in (stb_image.h missing)");
++    return 0;
++#endif
++}
++
++static int tp_load_dds(tp_entry* e)
++{
++    size_t size = 0;
++    u8* f = tp_read_file(e->path, &size);
++    if (!f) { tp_fail(e, "cannot read the file"); return 0; }
++    const char* why = NULL;
++    u32 dxgi = 0, block = 0, swap_rb = 0, force_a = 0;
++    size_t data_off = 4 + 124;
++    if (size < data_off || memcmp(f, "DDS ", 4) || tp_rd32(f + 4) != 124) why = "not a DDS file";
++    u32 h = 0, w = 0, mips = 1, caps2 = 0;
++    if (!why) {
++        const u32 flags = tp_rd32(f + 8);
++        h = tp_rd32(f + 12); w = tp_rd32(f + 16);
++        mips = (flags & 0x20000) ? tp_rd32(f + 28) : 1;   /* DDSD_MIPMAPCOUNT */
++        if (!mips) mips = 1;
++        const u8* pf = f + 4 + 72;
++        const u32 pflags = tp_rd32(pf + 4), fourcc = tp_rd32(pf + 8), bits = tp_rd32(pf + 12);
++        const u32 rm = tp_rd32(pf + 16), gm = tp_rd32(pf + 20), bm = tp_rd32(pf + 24), am = tp_rd32(pf + 28);
++        caps2 = tp_rd32(f + 4 + 108);
++        if (caps2 & 0x200) why = "cubemaps are not supported";        /* DDSCAPS2_CUBEMAP */
++        else if (caps2 & 0x200000) why = "volume textures are not supported";
++        else if (pflags & 0x4) {   /* DDPF_FOURCC */
++            if (fourcc == MAKEFOURCC('D','X','T','1')) dxgi = TP_DXGI_BC1_UNORM;
++            else if (fourcc == MAKEFOURCC('D','X','T','2') || fourcc == MAKEFOURCC('D','X','T','3')) dxgi = TP_DXGI_BC2_UNORM;
++            else if (fourcc == MAKEFOURCC('D','X','T','4') || fourcc == MAKEFOURCC('D','X','T','5')) dxgi = TP_DXGI_BC3_UNORM;
++            else if (fourcc == MAKEFOURCC('A','T','I','1') || fourcc == MAKEFOURCC('B','C','4','U')) dxgi = TP_DXGI_BC4_UNORM;
++            else if (fourcc == MAKEFOURCC('D','X','1','0')) {
++                if (size < data_off + 20) why = "truncated DX10 header";
++                else {
++                    const u8* x = f + data_off;
++                    dxgi = tp_rd32(x);
++                    const u32 dim = tp_rd32(x + 4), misc = tp_rd32(x + 8), arr = tp_rd32(x + 12);
++                    if (dim != 3) why = "only 2D textures are supported";
++                    else if (misc & 0x4) why = "cubemaps are not supported";
++                    else if (arr > 1) why = "texture arrays are not supported";
++                    data_off += 20;
++                }
++            } else why = "unsupported compression (use DXT1/3/5, BC4, BC7 or 32-bit RGBA)";
++        } else if ((pflags & 0x40) && bits == 32) {   /* DDPF_RGB */
++            if (rm == 0xFF && gm == 0xFF00 && bm == 0xFF0000) dxgi = TP_DXGI_R8G8B8A8_UNORM;
++            else if (rm == 0xFF0000 && gm == 0xFF00 && bm == 0xFF) { dxgi = TP_DXGI_R8G8B8A8_UNORM; swap_rb = 1; }
++            else why = "unsupported 32-bit channel layout";
++            if (!why && (!(pflags & 0x1) || am != 0xFF000000u)) force_a = 1;   /* no alpha channel */
++        } else why = "unsupported pixel format (use DXT1/3/5, BC4, BC7 or 32-bit RGBA)";
++    }
++    if (!why) {
++        switch (dxgi) {
++        case TP_DXGI_BC1_UNORM: case TP_DXGI_BC1_UNORM_SRGB: dxgi = TP_DXGI_BC1_UNORM; block = 8; break;
++        case TP_DXGI_BC4_UNORM: block = 8; break;
++        case TP_DXGI_BC2_UNORM: case TP_DXGI_BC2_UNORM_SRGB: dxgi = TP_DXGI_BC2_UNORM; block = 16; break;
++        case TP_DXGI_BC3_UNORM: case TP_DXGI_BC3_UNORM_SRGB: dxgi = TP_DXGI_BC3_UNORM; block = 16; break;
++        case TP_DXGI_BC7_UNORM: case TP_DXGI_BC7_UNORM_SRGB: dxgi = TP_DXGI_BC7_UNORM; block = 16; break;
++        case TP_DXGI_R8G8B8A8_UNORM: case TP_DXGI_R8G8B8A8_UNORM_SRGB: dxgi = TP_DXGI_R8G8B8A8_UNORM; break;
++        case TP_DXGI_B8G8R8A8_UNORM: case TP_DXGI_B8G8R8A8_UNORM_SRGB:
++            dxgi = TP_DXGI_R8G8B8A8_UNORM; swap_rb = 1; break;
++        case TP_DXGI_B8G8R8X8_UNORM: case TP_DXGI_B8G8R8X8_UNORM_SRGB:
++            dxgi = TP_DXGI_R8G8B8A8_UNORM; swap_rb = 1; force_a = 1; break;
++        default: why = "unsupported DXGI format (use BC1/2/3/4/7 or 8-bit RGBA; BC5 has no blue/alpha)"; break;
++        }
++    }
++    if (!why && (!w || !h || w > 16384 || h > 16384)) why = "bad size (1..16384)";
++    if (!why && block && ((w & 3) || (h & 3))) why = "block-compressed size must be a multiple of 4";
++    texpack_image* im = &e->img;
++    if (!why) {
++        memset(im, 0, sizeof *im);
++        const u32 full = tp_full_chain(w, h);
++        if (mips > full) mips = full;
++        /* keep only the levels the file really holds */
++        while (mips > 1 && data_off + tp_layout(im, NULL, w, h, mips, block) > size) mips--;
++        const u64 need = tp_layout(im, NULL, w, h, mips, block);
++        if (data_off + need > size) why = "file is shorter than its first level";
++        else {
++            im->dxgi = dxgi; im->w = w; im->h = h; im->n_levels = mips; im->block = block; im->bytes = need;
++            u8* data = f + data_off;
++            if (!block && (swap_rb || force_a)) {
++                for (u64 i = 0; i < need; i += 4) {
++                    if (swap_rb) { const u8 t = data[i]; data[i] = data[i + 2]; data[i + 2] = t; }
++                    if (force_a) data[i + 3] = 255;
++                }
++            }
++            tp_layout(im, data, w, h, mips, block);
++            e->mem = f;   /* the file buffer itself backs the levels */
++            return 1;
++        }
++    }
++    free(f);
++    tp_fail(e, why);
++    return 0;
++}
++
++static void tp_do_load(int idx)
++{
++    tp_entry* e = &s_ent[idx];
++    const char* dot = strrchr(e->path, '.');
++    const int ok = (dot && !_stricmp(dot, ".dds")) ? tp_load_dds(e) : tp_load_png(e);
++    if (ok) InterlockedExchange(&e->state, TEXPACK_READY);
++}
++
++void texpack_request(int idx)
++{
++    if (idx < 0 || InterlockedCompareExchange(&s_ent[idx].state, TEXPACK_QUEUED, TEXPACK_IDLE) != TEXPACK_IDLE)
++        return;
++    tp_job* j = (tp_job*)calloc(1, sizeof *j);
++    if (!j) { InterlockedExchange(&s_ent[idx].state, TEXPACK_IDLE); return; }
++    j->load_idx = idx;
++    tp_push(j);
++}
++
++void texpack_image_release(int idx, int new_state)
++{
++    tp_entry* e = &s_ent[idx];
++#if TEXPACK_HAS_PNG_LOAD
++    if (e->stb_mem) stbi_image_free(e->stb_mem);
++#endif
++    e->stb_mem = NULL;
++    free(e->mem);
++    e->mem = NULL;
++    memset(&e->img, 0, sizeof e->img);
++    InterlockedExchange(&e->state, new_state);
++}
++
++/* ---------------------------------------------------------------------------
++ * dumping
++ * -----------------------------------------------------------------------*/
++static u64* s_claimed; static u32 s_claim_mask, s_claim_n;   /* render thread only */
++
++int texpack_dump_claim(uint64_t key)
++{
++    if (!s_dump || !key) return 0;
++    if (s_claim_n * 2 >= s_claim_mask) {   /* grow (and first allocation) */
++        const u32 n = s_claim_mask ? (s_claim_mask + 1) * 2 : 4096;
++        u64* t = (u64*)calloc(n, sizeof *t);
++        if (!t) return 0;
++        for (u32 i = 0; s_claimed && i <= s_claim_mask; i++) {
++            if (!s_claimed[i]) continue;
++            u32 j = (u32)tp_mix(s_claimed[i]) & (n - 1);
++            while (t[j]) j = (j + 1) & (n - 1);
++            t[j] = s_claimed[i];
++        }
++        free(s_claimed); s_claimed = t; s_claim_mask = n - 1;
++    }
++    u32 j = (u32)tp_mix(key) & s_claim_mask;
++    while (s_claimed[j]) {
++        if (s_claimed[j] == key) return 0;
++        j = (j + 1) & s_claim_mask;
++    }
++    s_claimed[j] = key;
++    s_claim_n++;
++    return 1;
++}
++
++void texpack_dump(uint64_t key, uint32_t base_fmt, int linear, uint32_t w, uint32_t h,
++                  uint32_t pitch, uint32_t remap, uint32_t mips, uint32_t location,
++                  uint32_t offset, const uint8_t* src, uint32_t nbytes, texpack_texel_fn texel)
++{
++    if (!s_dump || !src || !nbytes) return;
++    /* A big first visit can queue faster than PNG encoding drains it; hold the
++     * renderer here rather than let the queue grow without bound. */
++    while (InterlockedAdd64(&s_dump_pending, 0) > (256ll << 20)) Sleep(1);
++    tp_job* j = (tp_job*)malloc(sizeof *j + nbytes);
++    if (!j) return;
++    memset(j, 0, sizeof *j);
++    j->load_idx = -1;
++    j->key = key; j->fmt = base_fmt; j->linear = (u32)linear; j->w = w; j->h = h;
++    j->pitch = pitch; j->remap = remap; j->mips = mips; j->location = location; j->offset = offset;
++    j->nbytes = nbytes; j->texel = texel;
++    memcpy(j->data, src, nbytes);
++    InterlockedAdd64(&s_dump_pending, (LONG64)nbytes);
++    tp_push(j);
++}
++
++static u32 tp_morton(u32 x, u32 y, u32 lw, u32 lh)   /* rsx_live_draw.c's morton_index */
++{
++    u32 idx = 0, shift = 0;
++    while (lw || lh) {
++        if (lw) { idx |= (x & 1) << shift; x >>= 1; shift++; lw--; }
++        if (lh) { idx |= (y & 1) << shift; y >>= 1; shift++; lh--; }
++    }
++    return idx;
++}
++static u32 tp_log2(u32 v) { u32 n = 0; while (v > 1) { v >>= 1; n++; } return n; }
++
++static u8 tp_remap_comp(const u8 s[4], u32 remap, u32 comp)   /* rsx_live_draw.c's remap_comp */
++{
++    const u32 op  = (remap >> (8 + comp * 2)) & 3;
++    const u32 sel = (remap >> (comp * 2)) & 3;
++    if (op == 0) return 0;
++    if (op == 1) return 255;
++    return s[sel];
++}
++
++static void tp_565(u32 c, u8 o[4])
++{
++    o[0] = (u8)(((c >> 11) & 31) * 255 / 31);
++    o[1] = (u8)(((c >> 5) & 63) * 255 / 63);
++    o[2] = (u8)((c & 31) * 255 / 31);
++    o[3] = 255;
++}
++
++/* One 4x4 block -> 16 RGBA texels. */
++static void tp_bc_block(u32 fmt, const u8* b, u8 out[16][4])
++{
++    const u8* cb = fmt == TP_DXT1 ? b : b + 8;
++    const u32 c0 = cb[0] | (cb[1] << 8), c1 = cb[2] | (cb[3] << 8);
++    u8 pal[4][4];
++    tp_565(c0, pal[0]); tp_565(c1, pal[1]);
++    if (fmt != TP_DXT1 || c0 > c1) {
++        for (int k = 0; k < 3; k++) {
++            pal[2][k] = (u8)((2 * pal[0][k] + pal[1][k] + 1) / 3);
++            pal[3][k] = (u8)((pal[0][k] + 2 * pal[1][k] + 1) / 3);
++        }
++        pal[2][3] = pal[3][3] = 255;
++    } else {
++        for (int k = 0; k < 3; k++) pal[2][k] = (u8)((pal[0][k] + pal[1][k]) / 2);
++        pal[2][3] = 255;
++        pal[3][0] = pal[3][1] = pal[3][2] = pal[3][3] = 0;
++    }
++    const u32 bits = cb[4] | (cb[5] << 8) | (cb[6] << 16) | ((u32)cb[7] << 24);
++    for (int i = 0; i < 16; i++) memcpy(out[i], pal[(bits >> (i * 2)) & 3], 4);
++    if (fmt == TP_DXT23) {
++        for (int i = 0; i < 16; i++) out[i][3] = (u8)(((b[i / 2] >> ((i & 1) * 4)) & 15) * 17);
++    } else if (fmt == TP_DXT45) {
++        u8 a[8]; a[0] = b[0]; a[1] = b[1];
++        if (a[0] > a[1]) for (int k = 1; k < 7; k++) a[k + 1] = (u8)(((7 - k) * a[0] + k * a[1] + 3) / 7);
++        else {
++            for (int k = 1; k < 5; k++) a[k + 1] = (u8)(((5 - k) * a[0] + k * a[1] + 2) / 5);
++            a[6] = 0; a[7] = 255;
++        }
++        u64 ab = 0;
++        for (int k = 0; k < 6; k++) ab |= (u64)b[2 + k] << (8 * k);
++        for (int i = 0; i < 16; i++) out[i][3] = a[(ab >> (3 * i)) & 7];
++    }
++}
++
++static void tp_do_dump(const tp_job* j)
++{
++    char path[MAX_PATH];
++    snprintf(path, sizeof path, "%s\\%016llX_%ux%u_%s.png", s_dump_dir,
++             (unsigned long long)j->key, j->w, j->h, tp_fmt_name(j->fmt));
++    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) return;   /* dumped by an earlier run */
++    u8* rgba = (u8*)malloc((size_t)j->w * j->h * 4);
++    if (!rgba) return;
++    if (j->fmt == TP_DXT1 || j->fmt == TP_DXT23 || j->fmt == TP_DXT45) {
++        const u32 block = j->fmt == TP_DXT1 ? 8 : 16, bw = (j->w + 3) / 4, bh = (j->h + 3) / 4;
++        if ((u64)bw * bh * block > j->nbytes) { free(rgba); return; }
++        for (u32 by = 0; by < bh; by++)
++            for (u32 bx = 0; bx < bw; bx++) {
++                u8 px[16][4];
++                tp_bc_block(j->fmt, j->data + ((size_t)by * bw + bx) * block, px);
++                for (u32 i = 0; i < 16; i++) {
++                    const u32 x = bx * 4 + (i & 3), y = by * 4 + i / 4;
++                    if (x >= j->w || y >= j->h) continue;
++                    /* as the SRV's component mapping samples it: s[] is A,R,G,B */
++                    const u8 s[4] = { px[i][3], px[i][0], px[i][1], px[i][2] };
++                    u8* d = rgba + ((size_t)y * j->w + x) * 4;
++                    if ((j->remap & 0xFFFF) == 0xAAE4) memcpy(d, px[i], 4);
++                    else {
++                        d[0] = tp_remap_comp(s, j->remap, 1);
++                        d[1] = tp_remap_comp(s, j->remap, 2);
++                        d[2] = tp_remap_comp(s, j->remap, 3);
++                        d[3] = tp_remap_comp(s, j->remap, 0);
++                    }
++                }
++            }
++    } else {
++        const u32 ts = j->fmt == TP_B8 ? 1 : j->fmt == TP_A8R8G8B8 ? 4 : 2;
++        const u32 pitch = (j->linear && j->pitch) ? j->pitch : j->w * ts;
++        const u32 lw = tp_log2(j->w), lh = tp_log2(j->h);
++        for (u32 y = 0; y < j->h; y++)
++            for (u32 x = 0; x < j->w; x++) {
++                const size_t o = j->linear ? (size_t)y * pitch + (size_t)x * ts
++                                           : (size_t)tp_morton(x, y, lw, lh) * ts;
++                u8* d = rgba + ((size_t)y * j->w + x) * 4;
++                if (o + ts > j->nbytes) { memset(d, 0, 4); continue; }
++                j->texel(j->fmt, j->data + o, j->remap, d);
++            }
++    }
++    /* write under a temporary name so a half-written file never looks finished */
++    char tmp[MAX_PATH + 8];
++    snprintf(tmp, sizeof tmp, "%s.tmp", path);
++    const int ok = stbi_write_png(tmp, (int)j->w, (int)j->h, 4, rgba, (int)j->w * 4);
++    free(rgba);
++    if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp); return; }
++    EnterCriticalSection(&s_csv_lock);
++    char csv[MAX_PATH];
++    snprintf(csv, sizeof csv, "%s\\index.csv", s_dump_dir);
++    const int fresh = GetFileAttributesA(csv) == INVALID_FILE_ATTRIBUTES;
++    FILE* f = fopen(csv, "a");
++    if (f) {
++        if (fresh) fprintf(f, "key,width,height,format,mips,remap,location,offset\n");
++        fprintf(f, "%016llX,%u,%u,%s,%u,0x%04X,%u,0x%08X\n", (unsigned long long)j->key, j->w, j->h,
++                tp_fmt_name(j->fmt), j->mips, j->remap & 0xFFFF, j->location, j->offset);
++        fclose(f);
++    }
++    LeaveCriticalSection(&s_csv_lock);
++}
++
++#else   /* !_WIN32: the live draw engine is D3D12-only; keep the link happy */
++
++int texpack_active(void) { return 0; }
++int texpack_dump_on(void) { return 0; }
++int texpack_replace_on(void) { return 0; }
++int texpack_supported_fmt(uint32_t f) { (void)f; return 0; }
++uint64_t texpack_key(uint64_t h, uint32_t f, uint32_t w, uint32_t hh, uint32_t r) { (void)f; (void)w; (void)hh; (void)r; return h; }
++int texpack_dump_claim(uint64_t k) { (void)k; return 0; }
++void texpack_dump(uint64_t k, uint32_t f, int l, uint32_t w, uint32_t h, uint32_t p, uint32_t r, uint32_t m,
++                  uint32_t lo, uint32_t o, const uint8_t* s, uint32_t n, texpack_texel_fn t)
++{ (void)k; (void)f; (void)l; (void)w; (void)h; (void)p; (void)r; (void)m; (void)lo; (void)o; (void)s; (void)n; (void)t; }
++int texpack_find(uint64_t k) { (void)k; return -1; }
++int texpack_count(void) { return 0; }
++const char* texpack_path(int i) { (void)i; return ""; }
++int texpack_state(int i) { (void)i; return 0; }
++void texpack_set_state(int i, int s) { (void)i; (void)s; }
++void texpack_request(int i) { (void)i; }
++const texpack_image* texpack_image_get(int i) { (void)i; return 0; }
++void texpack_image_release(int i, int s) { (void)i; (void)s; }
++
++#endif
+diff --git a/libs/video/rsx_tex_pack.h b/libs/video/rsx_tex_pack.h
+new file mode 100644
+index 0000000..cc90ead
+--- /dev/null
++++ b/libs/video/rsx_tex_pack.h
+@@ -0,0 +1,95 @@
++/* rsx_tex_pack -- texture dumping and replacement ("texture packs") for the
++ * live draw engine.
++ *
++ * Every guest texture the renderer decodes has a content hash already (the
++ * texture cache uses it to notice rewrites). Mixed with the format, size and
++ * channel remap it names the texture as the game samples it, independent of
++ * where in memory the game happened to load it:
++ *
++ *   LD_TEX_DUMP=1   write each texture's base level, as sampled (remap
++ *                   applied), to <dir>\dump\<KEY>_<w>x<h>_<fmt>.png, once per
++ *                   key, plus a line in <dir>\dump\index.csv.
++ *   <dir>\replace   any .png or .dds whose file name starts with a KEY (sub
++ *                   folders are fine) is loaded in a background thread and
++ *                   drawn instead of that texture, at any resolution. On by
++ *                   default whenever the folder holds such files;
++ *                   LD_TEX_REPLACE=0 turns it off.
++ *   LD_TEX_DIR      <dir>, default "textures" (relative to the working
++ *                   directory).
++ *   LD_TEX_REPLACE_MB  GPU memory kept for loaded replacements no texture is
++ *                   using (default 4096); beyond it the least recently used
++ *                   are dropped and reloaded from disk when needed again.
++ *
++ * Only 2D textures in the formats below take part (no cubemaps, no 1D ramps,
++ * no float render-target copies). Replacements are drawn with no channel remap
++ * because the dump already has it applied; a BC4 file is drawn grey (R to RGB,
++ * alpha 1) like the one-channel dumps. BC5 is refused: it has no blue / alpha,
++ * so it cannot hold what a dump shows. A replacement larger than the guest
++ * texture gets a sampler whose LOD range reaches its extra mip levels
++ * (rsx_live_draw.c sampler_slot_tp).
++ *
++ * This file is the D3D-free half: file scan, key table, the worker threads
++ * that load PNG / DDS files and write dumps, a BC1-3 decoder for the dumps.
++ * The GPU upload and the texture cache hook live in rsx_live_draw.c. */
++#ifndef RSX_TEX_PACK_H
++#define RSX_TEX_PACK_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++enum { TEXPACK_IDLE = 0, TEXPACK_QUEUED, TEXPACK_READY, TEXPACK_FAILED, TEXPACK_RESIDENT };
++
++#define TEXPACK_MAX_LEVELS 15
++
++typedef struct {
++    uint32_t dxgi;             /* DXGI_FORMAT value, *_SRGB already mapped to UNORM */
++    uint32_t w, h, n_levels;
++    uint32_t block;            /* bytes per 4x4 block for BC formats, 0 = 4 bytes per texel */
++    uint64_t bytes;            /* all levels, as loaded */
++    struct {
++        const uint8_t* data;
++        uint32_t w, h;         /* texels */
++        uint32_t row_bytes;    /* one row of texels, or of 4x4 blocks */
++        uint32_t rows;         /* rows of texels, or of blocks */
++    } lev[TEXPACK_MAX_LEVELS];
++} texpack_image;
++
++/* Decodes one guest texel to RGBA with the remap applied (rsx_live_draw.c's
++ * decode_texel); the dump worker calls it for the uncompressed formats. */
++typedef void (*texpack_texel_fn)(uint32_t base_fmt, const uint8_t* p, uint32_t remap, uint8_t d[4]);
++
++/* Lazy; safe to call every time. Nonzero when dumping or replacing is on. */
++int texpack_active(void);
++int texpack_dump_on(void);
++int texpack_replace_on(void);
++
++/* RSX base format (after ld_tex_base_fmt) -> 1 if it can be dumped / replaced. */
++int texpack_supported_fmt(uint32_t base_fmt);
++uint64_t texpack_key(uint64_t content_hash, uint32_t base_fmt, uint32_t w, uint32_t h, uint32_t remap);
++
++/* Dumping. texpack_dump_claim returns 1 the first time it sees a key. src is
++ * copied before texpack_dump returns: the level-0 bytes exactly as the guest
++ * laid them down (BC blocks, or swizzled / pitch-linear texels). */
++int texpack_dump_claim(uint64_t key);
++void texpack_dump(uint64_t key, uint32_t base_fmt, int linear, uint32_t w, uint32_t h,
++                  uint32_t pitch, uint32_t remap, uint32_t mips, uint32_t location,
++                  uint32_t offset, const uint8_t* src, uint32_t nbytes, texpack_texel_fn texel);
++
++/* Replacement table. Index -1 = no file for that key. */
++int texpack_find(uint64_t key);
++int texpack_count(void);                      /* table slots: every index is below this */
++const char* texpack_path(int idx);
++int texpack_state(int idx);
++void texpack_set_state(int idx, int state);   /* render thread: RESIDENT -> IDLE on eviction */
++void texpack_request(int idx);                 /* IDLE -> QUEUED, loads in the background */
++const texpack_image* texpack_image_get(int idx);   /* valid while READY */
++void texpack_image_release(int idx, int new_state); /* frees the CPU copy; READY -> new_state */
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
 diff --git a/libs/video/rsx_vertex_compact.c b/libs/video/rsx_vertex_compact.c
 index e31b611..74f01e8 100644
 --- a/libs/video/rsx_vertex_compact.c

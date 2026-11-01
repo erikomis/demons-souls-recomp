@@ -1098,6 +1098,39 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       Walking, the new build is consistently louder (rms 0.0195 / 0.0220 -> 0.0254 / 0.0290, 50-2000 Hz
       bands ~2x, no silent blocks either way): with synth2 saturated, voices / effects were being
       dropped -- likely the user's "audio a bit off" and marks with smooth frames.
+60. **Texture packs: dump and replace textures (2026-11-01, asked for on Reddit):**
+    - Model / texture FILE mods already work (the port reads the unpacked disc files; PC Remaster =
+      fix 45). New: Dolphin-style packs that need no unpacking. Runtime: libs/video/rsx_tex_pack.c / .h
+      (D3D-free: folder scan, key table, 2 background threads, PNG via the stb_image already built
+      in libs/codec, DDS parser, BC1-3 decoder for dumps) + the GPU half in rsx_live_draw.c ("texture
+      packs, GPU half": tp_upload / tp_resident / tp_trim / tp_sweep / tp_lookup / tp_poll,
+      sampler_slot_tp) hooked into texture_srv_slot's new-entry, refresh and hit paths.
+    - Key = splitmix(content hash the cache already computes, mixed with base format, w, h, remap):
+      content-addressed, same every run / PC. LD_TEX_DUMP=1 writes level 0 AS SAMPLED (remap applied;
+      BC decoded on the CPU, remap via the same s[]={A,R,G,B} rule as write_texture_srv's BC mapping)
+      to textures\dump\<KEY>_<w>x<h>_<fmt>.png + index.csv, once per key (and never over an
+      existing file), in the worker; 256 MB queue cap holds the renderer. Changing textures: first 3
+      contents per cache entry, re-armed (max 8x) after ~15 s unchanged.
+    - textures\replace\**\<KEY>*.png|.dds: scanned once at start; loaded in the background on first
+      use, uploaded by the render thread with its own upload buffer (64 MB / frame budget), drawn with
+      the default SRV mapping (the dump had the remap). PNG -> RGBA8 + box mips; DDS DXT1/3/5, BC7,
+      BC4 (R to RGB, alpha 1), RGBA/BGRA 32-bit, *_SRGB read as UNORM; BC5 / cubemaps / arrays refused.
+      .dds beats .png on a duplicate key. A replacement 2^n larger gets sampler_slot_tp (LOD range
+      reaches its extra mips; guest no-mip textures filter between levels -- else a 4x UI texture
+      shimmers). A loaded replacement skips the guest decode entirely. LD_TEX_REPLACE_MB (4096) caps
+      replacements nothing draws (tp_trim drops only unreferenced ones; AddRef probe); finished loads
+      nobody asked for in 2 s are uploaded by tp_sweep so no RAM copy lingers; failed upload retries
+      after 600 frames. LD_TEX_REPLACE=0 off, LD_TEX_DIR, LD_TEX_THREADS. Off (no files, no dump):
+      one InitOnce check per new / changed texture, nothing else.
+    - Reviewed by two agent passes (findings verified by skeptics): fixed sampler LOD clamp, lingering
+      READY images, trimming held textures, BC4 drawn red, dump counter, sampler-cache-full fallback,
+      sweep timing, re-arm limit.
+    - Sandbox (Palace save): dump run 281 textures / 154 MB in 50 s, all decode
+      right (normal maps, alpha particles, button atlas, loading art); identity pack (the dumps as
+      replacements) looks the same as no pack, 49.6 vs 49.7 fps; 2x inverted+grid pack (219 PNG,
+      57 DDS RGBA8 / BC1 with mips, nested folders) fully replaced, 49.3 fps, worst present 219 ms
+      (as without, 194-226).
+    - PLAY_DUMP_TEXTURES.bat (sets LD_TEX_DUMP=1); textures\README.txt.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

@@ -71,6 +71,7 @@ Double-click **`PLAY.bat`**. The logos and first load take about a minute.
 | `PLAY_UNLIMITED.bat` | uncapped (up to 240 fps), no vsync, game speed stays correct |
 | `PLAY_CHOOSE_FPS.bat` | a menu of the above, plus **any frame rate you type in** (31–240) |
 | `PLAY_REMASTER.bat` | runs with the *PC Remaster* mod installed (see below) |
+| `PLAY_DUMP_TEXTURES.bat` | saves every texture the game draws, for texture packs (see below) |
 
 **Custom frame rate.** `PLAY_CHOOSE_FPS.bat` → *6* → type a number, e.g. 45, 72, 120 or 144. The game
 runs at real speed at any of them. If your monitor's refresh rate is a whole multiple of the number
@@ -140,6 +141,22 @@ The *Demon's Souls PC Remaster* mod by fromsoftserve (Nexus Mods, Demon's Souls 
 
 That builds `game_remaster/` as a hard-linked copy of `game/` (no extra disk space) with the mod's
 files swapped in. Your normal `game/` is not changed. Play with `PLAY_REMASTER.bat`.
+
+## Optional: texture packs
+
+Textures can be replaced without unpacking any game files, at any resolution:
+
+1. Run `PLAY_DUMP_TEXTURES.bat` and play through the part you want to change. Every texture the game
+   draws is saved once to `textures\dump\` as `<KEY>_<width>x<height>_<format>.png`, exactly as it
+   looks in game. The 16-character KEY comes from the texture's contents, so it is the same on every PC.
+2. Edit a PNG (or make a bigger one) and put it in `textures\replace\` with a name that starts with
+   the same KEY, e.g. `0123456789ABCDEF_armour_4k.png`. Sub folders are fine.
+3. Start any launcher. Replacements load in the background; `.dds` files (DXT1/3/5, BC7, BC4 or 32-bit
+   RGBA, with or without mipmaps) load faster and use less video memory than PNG.
+
+Details and settings: `textures\README.txt`. Cubemaps (reflections) are not covered; models are file
+mods (see the PC Remaster section). Packs are made from the game's art -- share them only where that
+is allowed.
 
 ## Repo layout
 
