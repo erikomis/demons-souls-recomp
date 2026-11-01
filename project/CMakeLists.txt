@@ -176,6 +176,7 @@ endif()
 # thread's stack at 8s/15s -- WATCHDOG_AT="a,b" moves them -- crash filter,
 # PS3_GUEST_PROF sampler) instead of the template's lean main.cpp.
 option(DS_BOOT_HARNESS "Build with runtime/ppu/tests/boot_main.cpp" OFF)
+option(DS_AVX2 "Build the lifted SPU code for AVX2 (setup/build.py turns it off on CPUs without it)" ON)
 if(DS_BOOT_HARNESS)
     set(DS_RUNNER "${PS3RECOMP_DIR}/runtime/ppu/tests/boot_main.cpp")
 else()
@@ -211,9 +212,15 @@ if(SPU_SOURCES)
         # NOTES fix 34. -mavx2 (fix 36): spu_helpers.h's vector paths for the
         # SPU float ops (fa/fm/fma..., estimates, conversions) need __AVX2__;
         # without it every lane went through the exact scalar emulation. No
-        # -mfma, so no new multiply-add contraction. boot_main.cpp refuses to
-        # start, with a message, on a CPU without AVX2.
-        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;/GS-;-msse4.1;-mavx2")
+        # -mfma, so no new multiply-add contraction. DS_AVX2=OFF (build.py picks
+        # it on a CPU without AVX2) keeps the exact scalar paths: ~2 fps slower
+        # in the heaviest area, otherwise the same. An AVX2 build stops with a
+        # message on a CPU without it (PS3_REQUIRE_AVX2 in PLAY.bat).
+        set(DS_SPU_OPTS "-O2;/GS-;-msse4.1")
+        if(DS_AVX2)
+            list(APPEND DS_SPU_OPTS "-mavx2")
+        endif()
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "${DS_SPU_OPTS}")
     endif()
 endif()
 

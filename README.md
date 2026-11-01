@@ -26,7 +26,9 @@ takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
 
 ## What you need
 
-- **Windows 10/11 x64**, a CPU with **AVX2** (Intel Haswell / AMD Ryzen or newer), a **Direct3D 12** GPU.
+- **Windows 10/11 x64** and a **Direct3D 12** GPU. AVX2 (Intel Haswell / AMD Ryzen or newer) is used
+  when your CPU has it; on older CPUs BUILD.bat builds without it (a couple of fps slower in the
+  heaviest areas).
 - About **12 GB** free disk space (8 GB game files + build).
 - **Your disc image** of Demon's Souls USA (BLUS-30443): a `.iso` (a Redump `.zip` works as is), or a
   dumped disc folder with `PS3_GAME` in it. A Redump-style encrypted image also needs its
@@ -168,7 +170,8 @@ Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs)
 - **Build tools not found**: install Visual Studio 2022 Build Tools with *Desktop development with C++*
   and LLVM (`winget install LLVM.LLVM`), or set `LLVM_DIR` to an LLVM folder, then run BUILD.bat.
 - **The game window stays black / closes**: look at the end of `logs\last_run_err.txt`.
-- **"needs AVX2"** message box: your CPU is too old for the SPU code as built.
+- **"needs AVX2"** message box: this build was made on a PC with AVX2 and yours has none. Run
+  BUILD.bat on this PC (it picks the right setting), or `set DS_AVX2=0` before BUILD.bat on the other one.
 
 ## Credits and license
 

@@ -8,6 +8,10 @@ the Python environment SETUP.bat makes. Offers to install what is missing with w
 The configuration is the tested one: build type "Fast" (no CMake flag preset, so the project's own
 -O1 / -O2 apply) and the boot harness runner (DS_BOOT_HARNESS=ON).
 
+The lifted SPU code uses AVX2 when this CPU has it (DS_AVX2). On an older CPU it is built without,
+and port/build_opt/no_avx2.txt tells PLAY.bat not to ask for it. "set DS_AVX2=0" before BUILD.bat
+builds without AVX2 on any CPU (for a copy meant for an older PC).
+
 usage: BUILD.bat [--jobs N] [ninja targets...]
 """
 import glob, os, re, shutil, subprocess, sys, tempfile
@@ -117,6 +121,17 @@ def tools():
     return vcvars, llvm, cmake, ninja
 
 
+def want_avx2():
+    e = os.environ.get('DS_AVX2', '').strip()
+    if e in ('0', '1'):
+        return e == '1'
+    try:
+        import ctypes
+        return bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(40))  # PF_AVX2_INSTRUCTIONS_AVAILABLE
+    except Exception:
+        return True
+
+
 def build(jobs=None, targets=()):
     t = tools()
     if not t:
@@ -143,6 +158,16 @@ def build(jobs=None, targets=()):
         if os.path.isfile(os.path.join(llvm, 'llvm-lib.exe')):
             cfg.append(f'-DCMAKE_AR="{L}/llvm-lib.exe"')
         lines.append(' '.join(cfg) + ' || exit /b 5')
+    else:
+        cfg = None
+    avx2 = want_avx2()
+    flag = '-DDS_AVX2=' + ('ON' if avx2 else 'OFF')
+    if cfg:
+        lines[-1] = lines[-1].replace(' || exit /b 5', f' {flag} || exit /b 5')
+    else:   # existing build: a quick CMake re-run; the SPU code rebuilds only when the choice changed
+        lines.append(f'"{cmake}" {flag} "{fwd(BUILD)}" >nul || exit /b 5')
+    if not avx2:
+        say('  CPU without AVX2 (or DS_AVX2=0): building the SPU code without it')
     lines.append(f'"{ninja}" -C "{BUILD}" -j {jobs} {" ".join(targets)}')
     lines.append('exit /b %errorlevel%')
     fd, bat = tempfile.mkstemp(suffix='.bat', prefix='ds_build_')
@@ -153,6 +178,13 @@ def build(jobs=None, targets=()):
     finally:
         os.remove(bat)
     if rc == 0:
+        marker = os.path.join(BUILD, 'no_avx2.txt')
+        if avx2:
+            if os.path.isfile(marker):
+                os.remove(marker)
+        else:
+            with open(marker, 'w') as f:
+                f.write('Built without AVX2 (setup/build.py); PLAY.bat does not require it.\n')
         say(f'\n  built {os.path.join(BUILD, "DemonsSoulsRecomp.exe")}')
     return rc
 

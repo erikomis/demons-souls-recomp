@@ -51,8 +51,10 @@ set "PS3_PRIO_START=1"
 rem Even frame pacing (fix 37): when the game falls behind it renders two frames back to back;
 rem this spaces their presents out instead of showing them a millisecond apart (judder).
 set "LD_PRESENT_PACE=0.85"
-rem The SPU code is built for AVX2 (fix 36); this makes a CPU without it stop with a message box.
-set "PS3_REQUIRE_AVX2=1"
+rem The SPU code is built for AVX2 when the building CPU has it (fix 36); then a CPU without it
+rem stops with a message box instead of crashing. BUILD.bat leaves no_avx2.txt for a build without.
+set "PS3_REQUIRE_AVX2="
+if not exist "%D%\port\build_opt\no_avx2.txt" set "PS3_REQUIRE_AVX2=1"
 rem F12 while the game window is in front records that frame for debugging (every draw as an
 rem image + the draw log) into captures\f<frame>. About 1 GB and a few seconds per press.
 set "LD_F12_CAPTURE=%D%\captures"
