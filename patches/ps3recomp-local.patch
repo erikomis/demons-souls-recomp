@@ -149,6 +149,318 @@ index 02b751b..c972287 100644
  s32 cellAudioGetPortBlockTag(u32 portNum, u64 blockNo, u64* tag)
  {
      uint32_t tag_ea = (uint32_t)(uintptr_t)tag;
+diff --git a/libs/codec/cellAtrac.c b/libs/codec/cellAtrac.c
+index 6138658..cde6dd2 100644
+--- a/libs/codec/cellAtrac.c
++++ b/libs/codec/cellAtrac.c
+@@ -14,16 +14,27 @@
+  * Game's three tracks: first + fact[0] lands exactly on the last frame
+  * boundary of the data chunk, and each loop spans the whole track.
+  *
+- * ponytail: no streaming (GetStreamDataInfo/AddStreamData/second buffer) and
+- * no plain ATRAC3 -- nothing that runs needs them yet. A title that streams
+- * gets a loud log line from SetDataAndGetMemSize; add the ring-buffer
+- * bookkeeping then (PPSSPP's sceAtrac is the model).
++ * Streaming (Demon's Souls NOTES fix 56): when SetDataAndGetMemSize gets only
++ * the head of the file, the title feeds the rest through its own buffer --
++ * GetStreamDataInfo says where to write, how much, and from which file offset;
++ * AddStreamData says how much it wrote. Every piece is copied out at once into
++ * a host-side copy of the whole file, which is what the decoder reads, so the
++ * title's buffer is free again after each AddStreamData (it is handed out
++ * whole every time) and loops need no second buffer. The remaining-frame count
++ * is the number of whole frames received ahead of the play position, or
++ * NONLOOP/LOOP_STREAM_DATA_IS_ON_MEMORY once the whole file is in. Without
++ * this the decoder ran off the end of the first 100 KB into whatever followed
++ * it in guest memory (garbled music, "Frame data doesn't match" floods).
++ * ATRAC_STREAM_LOG=1 logs the stream calls.
++ *
++ * ponytail: no plain ATRAC3 -- nothing that runs needs it yet.
+  */
+ 
+ #include "cellAtrac.h"
+ #include "../../runtime/ppu/ppu_memory.h"
+ #include "../../third_party/at3_standalone/at3_bridge.h"
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ #define AT3P_SAMPLES   2048
+@@ -46,6 +57,11 @@ typedef struct {
+     s32 loop_num;              /* -1 forever, 0 none, n more laps */
+     s32 next_frame;            /* frame the decoder expects next */
+     s32 pcm_frame;             /* frame held in pcm[], -1 = none */
++    /* streaming: file is host[] (malloc'd, file_bytes long), recv = bytes of it received */
++    u8* host;
++    u32 file_bytes, recv;
++    u32 buf_ea, buf_bytes;     /* the title's buffer */
++    u32 offered;               /* writable bytes the last GetStreamDataInfo offered */
+     float pcm[2][AT3P_SAMPLES];
+ } AtracSlot;
+ 
+@@ -139,6 +155,45 @@ static int decode_frame(AtracSlot* s, s32 k)
+ 
+ static int looping(const AtracSlot* s) { return s->t.loop_start >= 0 && s->loop_num != 0; }
+ 
++static int stream_log(void)
++{
++    static int on = -1;
++    if (on < 0) on = getenv("ATRAC_STREAM_LOG") ? 1 : 0;
++    return on;
++}
++
++static void slot_free(AtracSlot* s)
++{
++    if (s->dec) at3p_close(s->dec);
++    free(s->host);
++    memset(s, 0, sizeof(*s));
++}
++
++/* Whole frames received up to (not including) this decoder-stream frame index. */
++static s32 frames_received(const AtracSlot* s)
++{
++    if (!s->host) return 0x7FFFFFFF;
++    if (s->recv <= s->t.data_off) return 0;
++    return (s32)((s->recv - s->t.data_off) / s->t.block_align);
++}
++
++/* The remaining-frame value Decode / GetRemainFrame report. */
++static s32 remain_frames(const AtracSlot* s)
++{
++    if (!s->host) return CELL_ATRAC_ALLDATA_IS_ON_MEMORY;
++    if (s->recv >= s->file_bytes)
++        return s->t.loop_start >= 0 ? CELL_ATRAC_LOOP_STREAM_DATA_IS_ON_MEMORY
++                                    : CELL_ATRAC_NONLOOP_STREAM_DATA_IS_ON_MEMORY;
++    const s32 r = frames_received(s) - s->pos / AT3P_SAMPLES;
++    return r > 0 ? r : 0;
++}
++
++static u32 stream_writable(const AtracSlot* s)
++{
++    const u32 left = s->file_bytes - s->recv;
++    return left < s->buf_bytes ? left : s->buf_bytes;
++}
++
+ s32 cellAtracSetDataAndGetMemSize(u32 pHandle, u32 pucBufferAddr, u32 uiReadByte,
+                                   u32 uiBufferByte, u32 puiWorkMemByte)
+ {
+@@ -153,19 +208,29 @@ s32 cellAtracSetDataAndGetMemSize(u32 pHandle, u32 pucBufferAddr, u32 uiReadByte
+         fprintf(stderr, "[cellAtrac] SetData: not an ATRAC3plus file (0x%08X)\n", (u32)rc);
+         return rc;
+     }
+-    if (uiReadByte < t.data_off + t.data_bytes)
+-        fprintf(stderr, "[cellAtrac] SetData: %u of %u bytes on memory -- STREAMING is "
+-                        "not implemented; this track will decode garbage\n",
+-                uiReadByte, t.data_off + t.data_bytes);
+-    if (s->dec) at3p_close(s->dec);
+-    memset(s, 0, sizeof(*s));
++    const u32 file_bytes = t.data_off + t.data_bytes;
++    u8* host = NULL;
++    if (uiReadByte < file_bytes) {   /* streaming: keep our own copy of the file */
++        if (uiReadByte > uiBufferByte) return (s32)CELL_ATRAC_ERROR_READSIZE_OVER_BUFFER;
++        host = (u8*)malloc(file_bytes);
++        if (!host) return (s32)CELL_ATRAC_ERROR_API_FAIL;
++        memcpy(host, file, uiReadByte);
++        memset(host + uiReadByte, 0, file_bytes - uiReadByte);
++        fprintf(stderr, "[cellAtrac] SetData: streaming, %u of %u bytes on memory, buffer %u bytes\n",
++                uiReadByte, file_bytes, uiBufferByte);
++    }
++    slot_free(s);
+     s->handle_ea = pHandle;
+-    s->file = file;
++    s->file = host ? host : file;
++    s->host = host;
++    s->file_bytes = file_bytes;
++    s->recv = host ? uiReadByte : file_bytes;
++    s->buf_ea = pucBufferAddr;
++    s->buf_bytes = uiBufferByte;
+     s->t = t;
+     s->pos = t.first;
+     s->next_frame = 0;         /* start of the stream, like the console */
+     s->pcm_frame = -1;
+-    (void)uiBufferByte;
+     if (puiWorkMemByte) vm_write32(puiWorkMemByte, 0x1000);
+     fprintf(stderr, "[cellAtrac] SetData handle=0x%08X ch=%u frames=%u first=%d end=%d loop=[%d,%d)\n",
+             pHandle, t.channels, t.data_bytes / t.block_align, t.first, t.end,
+@@ -196,8 +261,7 @@ s32 cellAtracDeleteDecoder(u32 pHandle)
+ {
+     AtracSlot* s = slot_of(pHandle);
+     if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
+-    if (s->dec) at3p_close(s->dec);
+-    memset(s, 0, sizeof(*s));
++    slot_free(s);
+     return CELL_OK;
+ }
+ 
+@@ -222,6 +286,13 @@ s32 cellAtracDecode(u32 pHandle, u32 pfOutAddr, u32 puiSamples, u32 puiFinishfla
+     const s32 k = s->pos / AT3P_SAMPLES, at = s->pos - k * AT3P_SAMPLES;
+     s32 n = AT3P_SAMPLES - at;
+     if (n > limit - s->pos) n = limit - s->pos;
++    if (k >= frames_received(s)) {   /* streaming: this frame has not arrived yet */
++        if (puiFinishflag) vm_write32(puiFinishflag, 0);
++        if (piRemainFrame) vm_write32(piRemainFrame, 0);
++        if (stream_log()) fprintf(stderr, "[cellAtrac] Decode 0x%08X: frame %d not received (have %d)\n",
++                                  pHandle, k, frames_received(s));
++        return (s32)CELL_ATRAC_ERROR_NODATA_IN_BUFFER;
++    }
+     decode_frame(s, k);
+     const u32 ch = s->t.channels;
+     for (s32 i = 0; i < n; i++)
+@@ -233,14 +304,101 @@ s32 cellAtracDecode(u32 pHandle, u32 pfOutAddr, u32 puiSamples, u32 puiFinishfla
+     s->pos += n;
+     if (puiSamples) vm_write32(puiSamples, (u32)n);
+     if (puiFinishflag) vm_write32(puiFinishflag, !looping(s) && s->pos >= s->t.end);
+-    if (piRemainFrame) vm_write32(piRemainFrame, (u32)CELL_ATRAC_ALLDATA_IS_ON_MEMORY);
++    if (piRemainFrame) vm_write32(piRemainFrame, (u32)remain_frames(s));
+     return CELL_OK;
+ }
+ 
+ s32 cellAtracGetRemainFrame(u32 pHandle, u32 piRemainFrame)
+ {
++    AtracSlot* s = slot_of(pHandle);
++    if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    vm_write32(piRemainFrame, (u32)remain_frames(s));
++    return CELL_OK;
++}
++
++s32 cellAtracGetStreamDataInfo(u32 pHandle, u32 ppucWritePointer, u32 puiWritableByte,
++                               u32 puiReadPosition)
++{
++    AtracSlot* s = slot_of(pHandle);
++    if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    const u32 w = s->host ? stream_writable(s) : 0;
++    s->offered = w;
++    if (ppucWritePointer) vm_write32(ppucWritePointer, s->host ? s->buf_ea : 0);
++    if (puiWritableByte) vm_write32(puiWritableByte, w);
++    if (puiReadPosition) vm_write32(puiReadPosition, s->host ? s->recv : s->file_bytes);
++    if (stream_log()) fprintf(stderr, "[cellAtrac] GetStreamDataInfo 0x%08X: write 0x%08X, %u bytes from file offset %u\n",
++                              pHandle, s->buf_ea, w, s->recv);
++    return s->host ? CELL_OK : (s32)CELL_ATRAC_ERROR_ALLDATA_IS_ONMEMORY;
++}
++
++s32 cellAtracAddStreamData(u32 pHandle, u32 uiAddByte)
++{
++    AtracSlot* s = slot_of(pHandle);
++    if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    if (!s->host) return (s32)CELL_ATRAC_ERROR_ALLDATA_IS_ONMEMORY;
++    if (uiAddByte > s->offered || uiAddByte > s->file_bytes - s->recv)
++        return (s32)CELL_ATRAC_ERROR_ADD_DATA_IS_TOO_BIG;
++    memcpy(s->host + s->recv, vm_base + s->buf_ea, uiAddByte);
++    s->recv += uiAddByte;
++    s->offered -= uiAddByte;
++    if (stream_log()) fprintf(stderr, "[cellAtrac] AddStreamData 0x%08X: +%u -> %u of %u\n",
++                              pHandle, uiAddByte, s->recv, s->file_bytes);
++    return CELL_OK;
++}
++
++s32 cellAtracGetVacantSize(u32 pHandle, u32 puiVacantSize)
++{
++    AtracSlot* s = slot_of(pHandle);
++    if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    if (!s->host) return (s32)CELL_ATRAC_ERROR_ALLDATA_IS_ONMEMORY;
++    vm_write32(puiVacantSize, stream_writable(s));
++    return CELL_OK;
++}
++
++/* The whole file ends up in the host copy, so a looping stream never needs the
++ * second buffer that holds the data after the loop end on the console. */
++s32 cellAtracIsSecondBufferNeeded(u32 pHandle)
++{
++    if (!slot_of(pHandle)) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    return 0;
++}
++
++s32 cellAtracGetSecondBufferInfo(u32 pHandle, u32 puiReadPosition, u32 puiDataByte)
++{
++    AtracSlot* s = slot_of(pHandle);
++    if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    if (puiReadPosition) vm_write32(puiReadPosition, 0);
++    if (puiDataByte) vm_write32(puiDataByte, 0);
++    return (s32)CELL_ATRAC_ERROR_NONEED_SECOND_BUFFER;
++}
++
++s32 cellAtracSetSecondBuffer(u32 pHandle, u32 pucSecondBufferAddr, u32 uiSecondBufferByte)
++{
++    (void)pucSecondBufferAddr; (void)uiSecondBufferByte;
+     if (!slot_of(pHandle)) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
+-    vm_write32(piRemainFrame, (u32)CELL_ATRAC_ALLDATA_IS_ON_MEMORY);
++    return (s32)CELL_ATRAC_ERROR_NONEED_SECOND_BUFFER;
++}
++
++/* CellAtracBufferInfo: {pucWriteAddr, uiWritableByte, uiMinWriteByte, uiReadPosition}. Seeking a
++ * stream: what has arrived stays in the host copy, so nothing has to be re-read; the stream just
++ * carries on from where it is. */
++s32 cellAtracGetBufferInfoForResetting(u32 pHandle, u32 uiSample, u32 pBufferInfo)
++{
++    AtracSlot* s = slot_of(pHandle);
++    if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    if (s->t.first + (s32)uiSample >= s->t.end) return (s32)CELL_ATRAC_ERROR_ILLEGAL_SAMPLE;
++    vm_write32(pBufferInfo + 0, s->host ? s->buf_ea : 0);
++    vm_write32(pBufferInfo + 4, s->host ? stream_writable(s) : 0);
++    vm_write32(pBufferInfo + 8, 0);
++    vm_write32(pBufferInfo + 12, s->host ? s->recv : s->file_bytes);
++    if (s->host) s->offered = stream_writable(s);
++    return CELL_OK;
++}
++
++s32 cellAtracGetInternalErrorInfo(u32 pHandle, u32 piResult)
++{
++    if (!slot_of(pHandle)) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    vm_write32(piResult, 0);
+     return CELL_OK;
+ }
+ 
+@@ -319,9 +477,12 @@ s32 cellAtracSetLoopNum(u32 pHandle, s32 iLoopNum)
+ 
+ s32 cellAtracResetPlayPosition(u32 pHandle, u32 uiSample, u32 uiWriteByte)
+ {
+-    (void)uiWriteByte;
+     AtracSlot* s = slot_of(pHandle);
+     if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
++    if (s->host && uiWriteByte) {   /* data written per GetBufferInfoForResetting */
++        const s32 rc = cellAtracAddStreamData(pHandle, uiWriteByte);
++        if (rc) return rc;
++    }
+     const s32 p = s->t.first + (s32)uiSample;
+     if (p >= s->t.end) return (s32)CELL_ATRAC_ERROR_ILLEGAL_SAMPLE;
+     s->pos = p;
+diff --git a/libs/codec/cellAtrac.h b/libs/codec/cellAtrac.h
+index 3a473eb..1db35bd 100644
+--- a/libs/codec/cellAtrac.h
++++ b/libs/codec/cellAtrac.h
+@@ -27,11 +27,16 @@ extern "C" {
+ #define CELL_ATRAC_ERROR_UNSET_DATA            0x80610322
+ #define CELL_ATRAC_ERROR_DECODER_WAS_CREATED   0x80610323
+ #define CELL_ATRAC_ERROR_ALLDATA_WAS_DECODED   0x80610331
++#define CELL_ATRAC_ERROR_NODATA_IN_BUFFER      0x80610332
+ #define CELL_ATRAC_ERROR_ALLDATA_IS_ONMEMORY   0x80610341
++#define CELL_ATRAC_ERROR_ADD_DATA_IS_TOO_BIG   0x80610342
++#define CELL_ATRAC_ERROR_NONEED_SECOND_BUFFER  0x80610351
+ #define CELL_ATRAC_ERROR_UNSET_LOOP_NUM        0x80610361
+ #define CELL_ATRAC_ERROR_ILLEGAL_SAMPLE        0x80610371
+ 
+ #define CELL_ATRAC_ALLDATA_IS_ON_MEMORY  (-1)
++#define CELL_ATRAC_NONLOOP_STREAM_DATA_IS_ON_MEMORY (-2)
++#define CELL_ATRAC_LOOP_STREAM_DATA_IS_ON_MEMORY    (-3)
+ 
+ s32 cellAtracSetDataAndGetMemSize(u32 pHandle, u32 pucBufferAddr, u32 uiReadByte,
+                                   u32 uiBufferByte, u32 puiWorkMemByte);
+@@ -53,6 +58,16 @@ s32 cellAtracGetBitrate(u32 pHandle, u32 puiBitrate);
+ s32 cellAtracGetLoopInfo(u32 pHandle, u32 piLoopNum, u32 puiLoopStatus);
+ s32 cellAtracSetLoopNum(u32 pHandle, s32 iLoopNum);
+ s32 cellAtracResetPlayPosition(u32 pHandle, u32 uiSample, u32 uiWriteByte);
++/* Streaming (the file arrives in pieces through a ring buffer the title owns). */
++s32 cellAtracGetStreamDataInfo(u32 pHandle, u32 ppucWritePointer, u32 puiWritableByte,
++                               u32 puiReadPosition);
++s32 cellAtracAddStreamData(u32 pHandle, u32 uiAddByte);
++s32 cellAtracGetVacantSize(u32 pHandle, u32 puiVacantSize);
++s32 cellAtracIsSecondBufferNeeded(u32 pHandle);
++s32 cellAtracGetSecondBufferInfo(u32 pHandle, u32 puiReadPosition, u32 puiDataByte);
++s32 cellAtracSetSecondBuffer(u32 pHandle, u32 pucSecondBufferAddr, u32 uiSecondBufferByte);
++s32 cellAtracGetBufferInfoForResetting(u32 pHandle, u32 uiSample, u32 pBufferInfo);
++s32 cellAtracGetInternalErrorInfo(u32 pHandle, u32 piResult);
+ 
+ #ifdef __cplusplus
+ }
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
 index afdd93d..0769373 100644
 --- a/libs/input/cellPad.c
@@ -1380,7 +1692,7 @@ index c4eb87d..d924140 100644
  
  /* Dialog and other one-shot completions carry their own OPD, rather than a
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 298ee7d..c25db14 100644
+index 298ee7d..b7e9159 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
 @@ -354,6 +354,10 @@ static CellGcmReportData s_report_data[CELL_GCM_MAX_REPORT_COUNT];
@@ -1569,7 +1881,40 @@ index 298ee7d..c25db14 100644
      if (!size || size > 0x40000u) return;
      u32 room = 0;
      u32 io = gcm_ea2io_range(ea, &room);
-@@ -1946,14 +2032,37 @@ static void wprof_note_walker(void) {}
+@@ -1792,6 +1878,32 @@ void cellGcm_fifo_kick_wait(unsigned ms)
+     else    Sleep(ms);
+ }
+ 
++/* The same wait in microseconds (Demon's Souls NOTES fix 55). With whole milliseconds the ticker
++ * waited 0 for the last fraction of a millisecond before every tick and spun through its loop --
++ * ~50,000 passes a second, each pumping window messages and polling the FIFO (2 ms of the render
++ * thread per frame). Below 1 ms this waits on a high-resolution waitable timer together with the
++ * kick event, so a kick still wakes it at once. LD_TICK_TIMER=0 = the old millisecond wait. */
++void cellGcm_fifo_kick_wait_us(unsigned us)
++{
++    static int mode = -1; static HANDLE timer;
++    if (mode < 0) {
++        const char* e = getenv("LD_TICK_TIMER");
++        mode = (e && *e == '0') ? 0 : 1;
++        if (mode) {
++            timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */,
++                                           TIMER_ALL_ACCESS);
++            if (!timer) mode = 0;
++        }
++    }
++    if (!mode || us >= 1000) { cellGcm_fifo_kick_wait(us / 1000); return; }
++    if (us < 50) return;
++    LARGE_INTEGER due; due.QuadPart = -(LONGLONG)us * 10;   /* relative, 100 ns units */
++    if (!SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) { cellGcm_fifo_kick_wait(0); return; }
++    HANDLE ev = (HANDLE)cellGcm_fifo_kick_event();
++    HANDLE hs[2] = { timer, ev };
++    WaitForMultipleObjects(ev ? 2 : 1, hs, FALSE, 2);
++}
++
+ 
+ /* Serializes fence publication between the present ticker and every guest
+  * thread poll-reading the ref register (REFPOLL default-on made this path
+@@ -1946,14 +2058,37 @@ static void wprof_note_walker(void) {}
  /* Host thread that last walked the FIFO, for PS3_SAMPLE_DRAIN. */
  volatile unsigned long g_gcm_drain_tid;
  
@@ -1607,7 +1952,7 @@ index 298ee7d..c25db14 100644
      if (ft_t0) {
          const uint64_t t1 = ps3_ft_now();
          if (t1 - ft_t0 >= ps3_ft_min_ns())
-@@ -1976,6 +2085,14 @@ static int gcm_legacy_method_has_effect(u32 m)
+@@ -1976,6 +2111,14 @@ static int gcm_legacy_method_has_effect(u32 m)
      }
  }
  
@@ -1622,7 +1967,7 @@ index 298ee7d..c25db14 100644
  /* GCM_GET_EQ_PUT=1: see where get is published at the end of a pass. */
  static int gcm_get_eq_put(void)
  {
-@@ -2023,25 +2140,45 @@ static void gcm_3d_method(rsx_state* st, u32 m, u32 v, int legacy_state_live)
+@@ -2023,25 +2166,45 @@ static void gcm_3d_method(rsx_state* st, u32 m, u32 v, int legacy_state_live)
      if (m == 0x1800) {
          const u32 off = v & 0xFFFFFFu, idx = off / 16u;
          const u32 val = (v >> 24) == 1u ? 0xFFFFu : 0u;
@@ -1670,7 +2015,7 @@ index 298ee7d..c25db14 100644
  
  /* The diagnostic switches below are tested on every drain pass, and GCM_RECDBG
   * on every semaphore method. getenv walks the whole environment and showed in
-@@ -2183,7 +2320,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2183,7 +2346,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
       * short of `put` every tick is the signature of a FIFO that can never
       * catch up, and the reason is the whole diagnosis. */
      const char* why = "caught-up";
@@ -1708,7 +2053,7 @@ index 298ee7d..c25db14 100644
          u32 ea = gcm_io2ea(s_fifo_getoff);
          if (!ea) {
              /* get is sitting on an IO offset with no mapping -- the title
-@@ -2303,6 +2469,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2303,6 +2495,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
              if (PS3_FT_ON()) { const uint64_t t = ps3_ft_now();
                                 ps3_ft_span(PS3_FT_FLIP_FIFO, 0, w & 7u, 0, t, t); }
              if ((w & 0xFFFFFF00u) == GCM_FLIP_MARKER) {
@@ -1716,7 +2061,7 @@ index 298ee7d..c25db14 100644
                  /* Queued by _cellGcmSetFlipCommand, which already did the
                   * guest-visible half of the request. */
                  gcm_set_current_display_buffer(w & 7u);
-@@ -2311,6 +2478,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2311,6 +2504,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
                  /* Not past `queued`: a resync may already have written off
                   * this flip. */
                  if (s_fifo_flips_reached != s_fifo_flips_queued) s_fifo_flips_reached++;
@@ -1738,7 +2083,7 @@ index 298ee7d..c25db14 100644
              } else {
                  cellGcmSetFlipCommand(w & 0xFFu);
              }
-@@ -2412,6 +2594,13 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2412,6 +2620,13 @@ static void gcm_rsx_process_fifo_unlocked(void)
              u32 count  = (w >> 18) & 0x7FF;
              u32 method = w & 0x1FFCu;
              u32 subch  = (w >> 13) & 7;
@@ -1752,7 +2097,7 @@ index 298ee7d..c25db14 100644
              /* TCONST_FIFO=1: how the title actually streams vertex constants.
               * NV4097_SET_TRANSFORM_CONSTANT is a 32-register window; if a block
               * arrives NON-INCREMENTING then every dword carries the same method
-@@ -2840,8 +3029,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2840,8 +3055,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
           * overruns first, so the first overrun is recycled by the path above
           * and near-end recycling is enabled from then on. */
          static int s_title_overran = 0;
@@ -1768,7 +2113,7 @@ index 298ee7d..c25db14 100644
          if (begin && end > begin && cur >= begin && cur + GCM_RECYCLE_SLACK >= end
                  && head_consumed && s_title_overran) {
              u32 io_begin = gcm_ea2io(begin);
-@@ -3099,12 +3295,16 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -3099,12 +3321,16 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
          return CELL_GCM_ERROR_INVALID_VALUE;
  
  
@@ -1786,7 +2131,7 @@ index 298ee7d..c25db14 100644
          s_flip_direct_pending = 1;
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
-@@ -3256,6 +3456,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
+@@ -3256,6 +3482,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
      s_flip_handler = handler;
      { u32 c = s_flip_handler_opd ? vm_read32(s_flip_handler_opd) : 0; if (c) s_flip_handler_code = c; }
      gcm_update_handler_mask();
@@ -1794,7 +2139,7 @@ index 298ee7d..c25db14 100644
  }
  
  /* NID: 0xA547ADDE */
-@@ -3266,6 +3467,7 @@ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler)
+@@ -3266,6 +3493,7 @@ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler)
      s_vblank_handler = handler;
      { u32 c = s_vblank_handler_opd ? vm_read32(s_vblank_handler_opd) : 0; if (c) s_vblank_handler_code = c; }
      gcm_update_handler_mask();
@@ -1802,7 +2147,7 @@ index 298ee7d..c25db14 100644
  }
  
  /* NID: 0xF9BFCDA3 */
-@@ -3753,7 +3955,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
+@@ -3753,7 +3981,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
  u32 cellGcmGetReport(u32 type, u32 index)
  {
      { static unsigned n = 0;   /* unsigned: the periodic line keeps counting, and wrapping is defined */
@@ -1878,10 +2223,43 @@ index eca370f..306216e 100644
              (*load)++;
          return;
 diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
-index cfb9685..a211601 100644
+index cfb9685..df1104d 100644
 --- a/libs/video/rsx_fp_decompiler.c
 +++ b/libs/video/rsx_fp_decompiler.c
-@@ -315,6 +315,7 @@ typedef struct {
+@@ -133,6 +133,32 @@ u32 rsx_fp_program_size(const u8* ucode, u32 max_bytes)
+     return 0;
+ }
+ 
++u32 rsx_fp_program_layout(const u8* ucode, u32 max_bytes, u8* const_mask, u32 mask_bytes)
++{
++    memset(const_mask, 0, mask_bytes);
++    if (!ucode) return 0;
++    u32 off = 0;
++    while (off + 16 <= max_bytes) {
++        u32 w0 = rsx_fp_read_word(ucode + off + 0);
++        u32 w1 = rsx_fp_read_word(ucode + off + 4);
++        u32 w2 = rsx_fp_read_word(ucode + off + 8);
++        u32 w3 = rsx_fp_read_word(ucode + off + 12);
++        off += 16;
++        if (((w1 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST ||
++            ((w2 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST ||
++            ((w3 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_CONST) {
++            if (off + 16 <= max_bytes) {
++                const u32 b = off / 16;
++                if (b / 8 >= mask_bytes) return 0;
++                const_mask[b / 8] |= (u8)(1u << (b & 7));
++                off += 16;
++            }
++        }
++        if (w0 & FP_END) return off / 16 <= mask_bytes * 8 ? off : 0;
++    }
++    return 0;
++}
++
+ static int fp_instruction_has_constant(u32 w1, u32 w2, u32 w3)
+ {
+     return
+@@ -315,6 +341,7 @@ typedef struct {
      int half;
      int negate;
      int abs;
@@ -1889,7 +2267,7 @@ index cfb9685..a211601 100644
      char swz[5];    /* e.g. "xyzw" */
  } Src;
  
-@@ -326,6 +327,7 @@ static void decode_src(u32 w, int abs_bit, Src* s)
+@@ -326,6 +353,7 @@ static void decode_src(u32 w, int abs_bit, Src* s)
      s->half   = (w & FP_SRC_HALF) ? 1 : 0;
      s->negate = (w & FP_SRC_NEGATE) ? 1 : 0;
      s->abs    = abs_bit ? 1 : 0;
@@ -1897,7 +2275,7 @@ index cfb9685..a211601 100644
      for (int i = 0; i < 4; i++)
          s->swz[i] = comp[(w >> (FP_SRC_SWZ_SHIFT + 2 * i)) & 3];
      s->swz[4] = '\0';
-@@ -388,8 +390,18 @@ static void emit_src(const Src* s, u32 input_src, int persp, const float* k, int
+@@ -388,8 +416,18 @@ static void emit_src(const Src* s, u32 input_src, int persp, const float* k, int
              snprintf(base, sizeof(base), "float4(0,0,0,0)");
      }
  
@@ -1917,7 +2295,7 @@ index cfb9685..a211601 100644
  
      const char* pre = "";
      const char* post = "";
-@@ -780,6 +792,11 @@ static int rsx_fp_decompile_internal(
+@@ -780,6 +818,11 @@ static int rsx_fp_decompile_internal(
          decode_src(w1, w1 & FP_SRC0_ABS, &s0);
          decode_src(w2, w2 & FP_SRC1_ABS, &s1);
          decode_src(w3, 0,                &s2);
@@ -1929,11 +2307,26 @@ index cfb9685..a211601 100644
  
          /* Inline constant: any CONST source pulls the next 16 bytes as a
           * float4 literal and advances past it. */
+diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
+index e55bcc1..5a0e68d 100644
+--- a/libs/video/rsx_fp_decompiler.h
++++ b/libs/video/rsx_fp_decompiler.h
+@@ -247,6 +247,10 @@ const char* rsx_fp_opcode_name(u32 opcode);
+  * walk logic so callers (e.g. a shader cache hashing the bytecode) agree with
+  * the decompiler on where a program ends. */
+ u32 rsx_fp_program_size(const u8* ucode, u32 max_bytes);
++/* rsx_fp_program_size, and bit i of const_mask (mask_bytes long, zeroed here) set when 16-byte
++ * block i is an inline constant slot rather than an instruction. 0 also when the program is longer
++ * than mask_bytes * 8 blocks. */
++u32 rsx_fp_program_layout(const u8* ucode, u32 max_bytes, u8* const_mask, u32 mask_bytes);
+ 
+ #ifdef __cplusplus
+ }
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 2579117..9c65150 100644
+index 2579117..9455073 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
-@@ -1,10554 +1,12805 @@
+@@ -1,10554 +1,12926 @@
 -/*
 - * ps3recomp - Track B live NV4097 draw path (implementation)
 - *
@@ -11658,7 +12051,7 @@ index 2579117..9c65150 100644
 +        }
 +    }
 +    static int every = -1;
-+    if (every < 0) { const char* e = getenv("LD_KICK_DRAWS"); every = e ? atoi(e) : 64;
++    if (every < 0) { const char* e = getenv("LD_KICK_DRAWS"); every = e ? atoi(e) : 128;   /* fix 55: was 64 */
 +                     if (every < 0) every = 0;
 +                     fprintf(stderr, "[live-draw] mid-frame kick every %d draws%s\n", every, every ? "" : " (off)"); }
 +    if (!every) every = 0x7FFFFFFF;   /* kicks off: only the early write-back ones */
@@ -12424,6 +12817,8 @@ index 2579117..9c65150 100644
 +/* Decode a guest texture descriptor into a cached SRV slot.  Unlike the old
 + * descriptor-only cache, re-hash the source once per frame and refresh the
 + * D3D resource when the game rewrites the same guest address. */
++static int ld_memo_check(void);
++static void ld_memo_report(const char* what, unsigned long long a, unsigned long long b);
 +static u32 texture_srv_slot(const rsx_dsp_texture* t)
 +{
 +    const u32 remap = t->remap & 0xFFFF;
@@ -12431,13 +12826,37 @@ index 2579117..9c65150 100644
 +    if (refresh_enabled < 0)
 +        refresh_enabled = getenv("RSX_NO_TEX_REFRESH") ? 0 : 1;
 +
-+    for (u32 i = 0; i < g.n_textures; i++) {
++    /* Lookup memo (NOTES fix 55): the scan compared 8 fields of every cached texture (~280) for
++     * every bound texture. Keys are unique -- an entry is only added after a scan finds none -- so
++     * starting at a remembered index whose fields match finds exactly what the scan would.
++     * LD_TEX_MEMO=0 = off. */
++    static u32 tmemo[1024]; static int tmemo_on = -1;
++    if (tmemo_on < 0) { const char* e = getenv("LD_TEX_MEMO"); tmemo_on = (e && *e == '0') ? 0 : 1; }
++    const u32 tslot = (u32)((((u64)t->offset * 0x9E3779B1u) ^ ((u64)t->format << 7) ^ ((u64)t->width << 13) ^
++                             ((u64)t->height << 19) ^ ((u64)t->location << 3) ^ remap ^ ((u64)t->pitch << 2) ^
++                             ((u64)t->cubemap << 29)) >> 7) & 1023u;
++    u32 tstart = 0;
++    if (tmemo_on && tmemo[tslot] && tmemo[tslot] - 1 < g.n_textures) tstart = tmemo[tslot] - 1;
++    for (u32 i = tstart; i < g.n_textures; i++) {
 +        texcache_t* entry = &g.textures[i];
 +        if (entry->location != t->location || entry->offset != t->offset ||
 +            entry->format != t->format || entry->width != t->width ||
 +            entry->height != t->height || entry->pitch != t->pitch ||
-+            entry->remap != remap || entry->cubemap != t->cubemap)
++            entry->remap != remap || entry->cubemap != t->cubemap) {
++            if (i == tstart && tstart) { tstart = 0; i = (u32)-1; }   /* memo stale: full scan */
 +            continue;
++        }
++        if (tstart && ld_memo_check()) {   /* the first match of a scan from 0 must be this one */
++            u32 k = 0;
++            for (; k < g.n_textures; k++) {
++                const texcache_t* q = &g.textures[k];
++                if (q->location == t->location && q->offset == t->offset && q->format == t->format &&
++                    q->width == t->width && q->height == t->height && q->pitch == t->pitch &&
++                    q->remap == remap && q->cubemap == t->cubemap) break;
++            }
++            ld_memo_report("texture slot", i, k);
++        }
++        tmemo[tslot] = i + 1;
 +        if (refresh_enabled && entry->tex && entry->last_hash_frame != g_ld_frames &&
 +            entry->stable >= 8u && ((g_ld_frames + i) & 15u) != 0 && ld_tex_adaptive()) {
 +            int sr = 0;
@@ -14936,6 +15355,101 @@ index 2579117..9c65150 100644
 +    do { static int _said_ = 0; ld_pso_bail(&_said_, (reason)); } while (0)
 +
 +static u32 g_ld_draw_nverts;   /* vertex count of the draw being set up (diagnostics) */
++/* Fragment-program memo (Demon's Souls NOTES fix 55). get_pso decoded the bound program's size
++ * (rsx_fp_program_size) and hashed it byte by byte (rsx_fp_structural_hash, FNV-1a) on every draw --
++ * ~7% of the renderer thread. Both read only the instruction blocks (the inline constant slots,
++ * which games patch per draw, are skipped). So per program address a copy of the program and its
++ * constant-slot mask is kept: when every instruction block still matches the copy byte for byte,
++ * the size and the structural hash (per seed) are what those functions would return.
++ * LD_FP_MEMO=0 = off. */
++#define LD_FPM_N 64u
++#define LD_FPM_BYTES 4096u
++typedef struct {
++    u32 loc, off, size, valid;
++    u64 seed[4], shash[4]; u32 next_seed;
++    u8 cmask[LD_FPM_BYTES / 16 / 8];
++    u8 code[LD_FPM_BYTES];
++} ld_fpm_t;
++static ld_fpm_t g_fpm[LD_FPM_N];
++static ld_fpm_t* g_fpm_cur;   /* the entry ld_fpm_size matched or filled for this draw */
++
++static unsigned long long g_memo_checks, g_memo_bad;
++static int ld_memo_check(void)   /* LD_MEMO_CHECK=1 (debug): compute both ways, log differences */
++{
++    static int on = -1;
++    if (on < 0) on = getenv("LD_MEMO_CHECK") ? 1 : 0;
++    return on;
++}
++static void ld_memo_report(const char* what, unsigned long long a, unsigned long long b)
++{
++    g_memo_checks++;
++    if (a != b && ++g_memo_bad <= 20)
++        fprintf(stderr, "[memo-check] MISMATCH %s: memo %llX original %llX\n", what, a, b);
++    if ((g_memo_checks & 0xFFFFF) == 0)
++        fprintf(stderr, "[memo-check] %llu checks, %llu mismatches\n", g_memo_checks, g_memo_bad);
++}
++
++static int ld_fpm_on(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("LD_FP_MEMO"); on = (e && *e == '0') ? 0 : 1; }
++    return on;
++}
++
++static int ld_fpm_same(const ld_fpm_t* m, const u8* p)
++{
++    for (u32 b = 0; b < m->size / 16; b++) {
++        if (m->cmask[b / 8] & (1u << (b & 7))) continue;
++        u64 x[2], y[2];
++        memcpy(x, p + b * 16, 16); memcpy(y, m->code + b * 16, 16);
++        if (x[0] != y[0] || x[1] != y[1]) return 0;
++    }
++    return 1;
++}
++
++/* = rsx_fp_program_size(head, 0x10000) for the program at (loc, off); head maps >= 16 bytes. */
++static u32 ld_fpm_size(u32 loc, u32 off, const u8* head)
++{
++    g_fpm_cur = NULL;
++    if (!ld_fpm_on()) return rsx_fp_program_size(head, 0x10000);
++    ld_fpm_t* m = &g_fpm[((off >> 4) ^ (off >> 12) ^ (loc << 5)) & (LD_FPM_N - 1u)];
++    if (m->valid && m->loc == loc && m->off == off) {
++        const u8* p = guest_ptr(loc, off, m->size);
++        if (p && ld_fpm_same(m, p)) {
++            g_fpm_cur = m;
++            if (ld_memo_check()) ld_memo_report("fp size", m->size, rsx_fp_program_size(head, 0x10000));
++            return m->size;
++        }
++    }
++    const u32 size = rsx_fp_program_size(head, 0x10000);
++    u8 cm[LD_FPM_BYTES / 16 / 8];
++    const u8* p = size && size <= LD_FPM_BYTES ? guest_ptr(loc, off, size) : NULL;
++    if (p && rsx_fp_program_layout(p, 0x10000, cm, sizeof cm) == size) {
++        m->loc = loc; m->off = off; m->size = size; m->valid = 1;
++        memcpy(m->cmask, cm, sizeof cm);
++        memcpy(m->code, p, size);
++        m->seed[0] = m->seed[1] = m->seed[2] = m->seed[3] = 0; m->next_seed = 0;
++        m->shash[0] = m->shash[1] = m->shash[2] = m->shash[3] = 0;
++        g_fpm_cur = m;
++    } else m->valid = 0;
++    return size;
++}
++
++/* = rsx_fp_structural_hash(uc, size, seed), from the memo entry ld_fpm_size matched. */
++static u64 ld_fpm_structural(const u8* uc, u32 size, u64 seed)
++{
++    ld_fpm_t* m = g_fpm_cur;
++    if (!m || m->size != size) return rsx_fp_structural_hash(uc, size, seed);
++    for (u32 i = 0; i < 4; i++)
++        if (m->shash[i] && m->seed[i] == seed) {
++            if (ld_memo_check()) ld_memo_report("fp hash", m->shash[i], rsx_fp_structural_hash(uc, size, seed));
++            return m->shash[i];
++        }
++    const u64 h = rsx_fp_structural_hash(uc, size, seed);
++    if (h) { const u32 i = m->next_seed++ & 3u; m->seed[i] = seed; m->shash[i] = h; }
++    return h;
++}
++
 +static ID3D12PipelineState* get_pso(
 +    const rsx_vertex_layout_plan* masked_layout, int packed_payload)
 +{
@@ -14966,7 +15480,7 @@ index 2579117..9c65150 100644
 +    const u32 fp_off = rsx_dsp_fragment_program(&g.rsx, &fp_loc);
 +    const u8* fp_uc = guest_ptr(fp_loc, fp_off, 16);
 +    if (!fp_uc) { LD_PSO_BAIL("fragment program address does not resolve to guest memory"); return NULL; }
-+    const u32 fp_size = rsx_fp_program_size(fp_uc, 0x10000);
++    const u32 fp_size = ld_fpm_size(fp_loc, fp_off, fp_uc);
 +    if (!fp_size) {
 +        /* No END-bit instruction in 64 KB: the bytes at (location, offset) are
 +         * not a fragment program. Almost always the LOCATION is wrong, not the
@@ -15219,7 +15733,7 @@ index 2579117..9c65150 100644
 +
 +    u64 key = vpm.hash;
 +    if (ld_fp_constants_buffered())
-+        key = rsx_fp_structural_hash(fp_uc, fp_size, key);
++        key = ld_fpm_structural(fp_uc, fp_size, key);
 +    else
 +        key = fnv1a(fp_uc, fp_size, key);
 +    if (!key) {
@@ -25289,10 +25803,18 @@ index 2579117..9c65150 100644
 +
 +#endif /* _WIN32 */
 diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
-index 32e8a95..4932a0c 100644
+index 32e8a95..3a5f82d 100644
 --- a/libs/video/rsx_null_backend.c
 +++ b/libs/video/rsx_null_backend.c
-@@ -18,6 +18,33 @@
+@@ -9,6 +9,7 @@
+ #include "rsx_null_backend.h"
+ #include <stdio.h>
+ #include <string.h>
++#include <stdlib.h>
+ #include "../../runtime/ps3_log.h"
+ 
+ #ifdef _WIN32
+@@ -18,6 +19,33 @@
  #endif
  #include <windows.h>
  
@@ -25326,7 +25848,7 @@ index 32e8a95..4932a0c 100644
  /* ---------------------------------------------------------------------------
   * Internal state
   * -----------------------------------------------------------------------*/
-@@ -57,6 +84,7 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+@@ -57,6 +85,7 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
      switch (msg) {
      case WM_CLOSE:
          s_state.window_closed = 1;
@@ -25334,6 +25856,28 @@ index 32e8a95..4932a0c 100644
          DestroyWindow(hwnd);
          return 0;
  
+@@ -297,12 +326,21 @@ void rsx_null_backend_shutdown(void)
+ int rsx_null_backend_pump_messages(void)
+ {
+     MSG msg;
++    /* LD_PUMP_STATS=1 (debug): time spent here, calls and messages, every 5 s. */
++    static int pst = -1; static LARGE_INTEGER pf, p0; static double pacc; static unsigned pcalls, pmsgs; static ULONGLONG plast;
++    if (pst < 0) { pst = getenv("LD_PUMP_STATS") ? 1 : 0; QueryPerformanceFrequency(&pf); }
++    if (pst) QueryPerformanceCounter(&p0);
+     while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+         if (msg.message == WM_QUIT)
+             return -1;
++        if (pst) pmsgs++;
+         TranslateMessage(&msg);
+         DispatchMessageA(&msg);
+     }
++    if (pst) { LARGE_INTEGER p1; QueryPerformanceCounter(&p1); pacc += (double)(p1.QuadPart - p0.QuadPart) * 1e3 / (double)pf.QuadPart; pcalls++;
++               ULONGLONG nw = GetTickCount64(); if (!plast) plast = nw;
++               if (nw - plast >= 5000) { fprintf(stderr, "[pump] %.1f calls/s, %.1f msgs/s, %.3f ms/s in PeekMessage loop\n",
++                   pcalls * 1000.0 / (nw - plast), pmsgs * 1000.0 / (nw - plast), pacc * 1000.0 / (nw - plast)); pacc = 0; pcalls = pmsgs = 0; plast = nw; } }
+     /* RPCS3-style caption, once a second: guest FPS (flips), draws in the last
+      * live-draw frame, window size. Here on the window's own thread, so the
+      * WM_SETTEXT never blocks the renderer. */
 diff --git a/libs/video/rsx_vertex_compact.c b/libs/video/rsx_vertex_compact.c
 index e31b611..74f01e8 100644
 --- a/libs/video/rsx_vertex_compact.c
@@ -25677,7 +26221,7 @@ index 35052c6..56e782d 100644
  #define VMX_FUN(name, expr, flush_in, nanmode) \
  VMX_INL void name(VMX_D, VMX_B, uint32_t vscr) { const uint8_t* b = (const uint8_t*)b_; uint8_t r[16]; \
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb0..80a08b4 100644
+index a55afb0..a04dabe 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -73,7 +73,7 @@ void     ps3_load_prx_modules(void) {}
@@ -25740,7 +26284,15 @@ index a55afb0..80a08b4 100644
      }
      AcquireSRWLockExclusive(&s_env_lock);
      const char* val = NULL; int found = 0;
-@@ -323,6 +323,7 @@ extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
+@@ -306,6 +306,7 @@ extern "C" int  rsx_null_backend_pump_messages(void);
+ #endif
+ extern "C" void cellGcm_rsx_process_fifo(void);   /* cellGcmSys.c: drain get->put */
+ extern "C" void cellGcm_fifo_kick_wait(unsigned ms); /* idle wait, woken by a kick */
++extern "C" void cellGcm_fifo_kick_wait_us(unsigned us); /* the same, sub-millisecond (fix 55) */
+ extern "C" unsigned cellGcm_flip_request_count(void);
+ extern "C" unsigned cellGcmGetCurrentDisplayBufferId(void);
+ extern "C" int sys_event_queue_inject(unsigned int, unsigned long long, unsigned long long, unsigned long long, unsigned long long);
+@@ -323,6 +324,7 @@ extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
  extern "C" void  rsx_live_draw_present(uint32_t buffer_id);
  extern "C" uint32_t rsx_live_draw_get_frames(void);
  extern "C" uint32_t rsx_live_draw_get_last_draws(void);
@@ -25748,7 +26300,7 @@ index a55afb0..80a08b4 100644
  extern "C" int   rsx_null_backend_init(uint32_t w, uint32_t h, const char* title);
  extern "C" int   rsx_null_backend_pump_messages(void);
  extern "C" void* rsx_null_backend_get_hwnd(void);
-@@ -485,17 +486,53 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -485,17 +487,53 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -25798,7 +26350,7 @@ index a55afb0..80a08b4 100644
 -        cellGcm_fifo_kick_wait(4);
 -        ULONGLONG now = GetTickCount64();
 +        { const double left = next_tick - (double)vb_now_us();   /* wake for the tick itself too */
-+          cellGcm_fifo_kick_wait(left <= 0 ? 0u : left >= 4000.0 ? 4u : (unsigned)(left / 1000.0)); }
++          cellGcm_fifo_kick_wait_us(left <= 0 ? 0u : left >= 4000.0 ? 4000u : (unsigned)left); }
 +        double now = (double)vb_now_us();
          int fired = 0;
 -        while ((long long)(now - next_tick) >= 0 && fired < 240) {
@@ -25806,7 +26358,7 @@ index a55afb0..80a08b4 100644
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -503,18 +540,33 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -503,18 +541,33 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * right now is exactly the completed frame. Presenting on a raw
               * flip-count change after the drain raced the guest's next-frame
               * writes and showed empty or mixed batches. */
@@ -25847,7 +26399,7 @@ index a55afb0..80a08b4 100644
              fired++;
          }
          if (fired >= 240) next_tick = now;   /* fell too far behind -> resync */
-@@ -523,10 +575,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -523,10 +576,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
           * at 16ms per fence wave's six passes paced the guest to ~7 fps.
           * The real RSX writes those fences in microseconds. */
          if (rsx_ok) {
@@ -25859,7 +26411,7 @@ index a55afb0..80a08b4 100644
              cellGcm_rsx_process_fifo();
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
-@@ -934,45 +983,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,45 +984,45 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -25934,7 +26486,7 @@ index a55afb0..80a08b4 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1085,6 +1134,17 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
+@@ -1085,6 +1135,17 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
  
  int main(int argc, char** argv)
  {

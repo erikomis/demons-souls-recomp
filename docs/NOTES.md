@@ -941,6 +941,56 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       - m06_02 layout (MSB): punch regions 2420-2429 on the upper path, breath regions 2430-2436 on the
         lower walkway (y -98), ballistas 2410 (x 95.8) / 2411 (x 193.6), wall 1445 beside ballista 1 is
         removed by OnEvent_6413 at the end of cutscene 60200.
+55. **Renderer thread CPU -21% (2026-10-31, user's 19:27 Boletaria recording, 31 min, 11 F8 marks):**
+    - Marks 6-11: catch-up frames / 3-1 refresh pairs where render CPU reached 16-20 ms (median 13.4 at
+      mark 9, ~900 draws). Marks 1-4: nothing in any timing data (presents, cadence, steps, catch-ups)
+      even 90 s back -- not frame pacing (asked the user; video bat suggested). Overall 99.81% of frames
+      at 2 refreshes.
+    - Sandbox: testenv/save_user_1031e (user's save after that session, loads in the Palace, 815 draws at
+      the start). Measuring: scratchpad incl.py (inclusive/self profile, idle dropped), rcmp.py; A/Bs must
+      be pinned (AFF=FFFF) and back to back -- unpinned runs drifted 8.2 -> 10.4 ms in an hour (CCD
+      placement on the 7950X3D, background Vortex / cam_helper).
+    - Exact memos (LD_MEMO_CHECK=1 computes both ways: 13.6 M checks, 0 mismatches):
+      - Fragment program (get_pso): rsx_fp_program_size + rsx_fp_structural_hash (byte-wise FNV-1a) ran
+        per draw. Memo per program address = copy of the program + its inline-constant block mask
+        (rsx_fp_program_layout, new in rsx_fp_decompiler.c); when every instruction block matches, size
+        and structural hash (4 seeds) are reused. LD_FP_MEMO=0 = off.
+      - texture_srv_slot: linear 8-field scan of ~280 cache entries per bound texture -> 1024-slot memo of
+        the last index per key (keys are unique, so starting there finds what the scan would).
+        LD_TEX_MEMO=0 = off.
+    - Ticker spin (boot_main + cellGcmSys.c cellGcm_fifo_kick_wait_us): the wait was whole ms, so the
+      last <1 ms before each tick spun ~50,000 passes/s through PeekMessage + FIFO poll (LD_PUMP_STATS=1
+      shows calls/s). Now a high-resolution waitable timer + the kick event; 1,100 passes/s, cadence
+      still 100% 2-refresh at 50 fps. LD_TICK_TIMER=0 = old.
+    - LD_KICK_DRAWS default 64 -> 128: render CPU -0.4 ms, uncapped fps unchanged (76.0 / 75.2 / 74.9 at
+      64 / 128 / 192; 0 = 62 fps, the overlap matters).
+    - Tried and dropped: vertex-constant block reuse (constants change per draw: no hits, 0 gain);
+      sparse index-range hashing (ranges are mostly <= 4 KB: 0 gain).
+    - Result (pinned A/B, same build, old = the env switches above): Palace start 10.92 -> 8.64 ms render
+      CPU (p90 12.12 -> 9.60); walk + pan route median 4.5 -> 3.1, p99 8.6 -> 6.9 ms.
+    - Left (profile after): FIFO parse/dispatch ~19% of the busy thread, draw recording (sink_end_impl
+      self) 12%, D3D12 submit + Present 16% (driver), vertex/texture hashing ~12%, vertex convert 6%.
+56. **Garbled music: cellAtrac streaming implemented (2026-10-31):**
+    - Without dev_flash (the launchers use no_flash) MagicOrchestra plays music through libatrac3plus
+      in streaming mode: SetDataAndGetMemSize with the first 100 KB of a 1.9 MB .at3, then
+      GetStreamDataInfo / AddStreamData. Those 5 imports were unnamed (NIDs = SHA-1 of the name:
+      0x2BFFF084 GetStreamDataInfo, 0x46CFC013 AddStreamData, 0x99EFE171 IsSecondBufferNeeded,
+      0xBE07F05E GetSecondBufferInfo, 0x06DDB53E SetSecondBuffer) and Decode reported
+      ALLDATA_IS_ON_MEMORY, so the game never streamed and the decoder read past the first 100 KB into
+      unrelated guest memory: thousands of "Atrac3/3+: Frame data doesn't match channel configuration"
+      / Invalid / Missing lines in bursts (the user's 19:27 log) = audible garbage.
+    - libs/codec/cellAtrac.c: a streamed track keeps a host copy of the whole file; GetStreamDataInfo
+      hands out the title's whole buffer each time (write = buffer, writable = min(buffer, rest of the
+      file), read position = bytes received), AddStreamData copies the piece out at once. Decode returns
+      NODATA_IN_BUFFER for a frame not received yet; remaining frames = whole frames received ahead of
+      the play position, then NONLOOP / LOOP_STREAM_DATA_IS_ON_MEMORY once complete (loops read the host
+      copy, so IsSecondBufferNeeded = 0). Also GetVacantSize, GetBufferInfoForResetting (+ the write
+      byte of ResetPlayPosition), GetInternalErrorInfo. New handlers register by name (gen_hle_nids.py).
+      ATRAC_STREAM_LOG=1 logs the stream calls.
+    - Sandbox (testenv/save_user_1031e): the 1.9 MB track (loop 637552..end) arrives in 19 x 100 KB
+      reads, 0 decoder errors, 0 frames requested before they arrived; the AUDIO_WAV mix is tonal music
+      (spectral flatness 0.001-0.05). Sample: DemonsSouls\showcase\atrac_stream_fix_sample.mp3.
+      The mono tracks with a 20 KB head (user's log) take the same path; not hit in the sandbox.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
