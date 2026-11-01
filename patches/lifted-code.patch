@@ -2665,3 +2665,27 @@ diff -ruN a/spu/spu_0000_at_01760280/spu_recomp.c b/spu/spu_0000_at_01760280/spu
          ctx->gpr[2] = spu_pref_u32(spu_rchcnt(ctx, SPU_RdInMbox));
          if (ctx->gpr[2]._u32[0] != 0) { SPU_DIRECT(ctx, 0xC20C, spu_0000_at_01760280_spu_func_0000C20C); }
          spu_ls_write128(ctx, ctx->gpr[1]._u32[0] + -0x100, ctx->gpr[4]);
+diff -ruN a/spu/spu_0010_at_01818080/spu_recomp.c b/spu/spu_0010_at_01818080/spu_recomp.c
+--- a/spu/spu_0010_at_01818080/spu_recomp.c	2026-11-01 12:41:31.819027100 -0700
++++ b/spu/spu_0010_at_01818080/spu_recomp.c	2026-11-01 12:41:31.821025800 -0700
+@@ -764,6 +764,20 @@
+ }
+ 
+ void spu_0010_at_01818080_spu_func_00000AC4(spu_context* ctx) {
++        /* PORT PATCH (NOTES fix 59): synth2 (libsynth2) clears 112 bytes of a voice block here one
++         * byte per pass -- read the quadword, cbx + shufb the byte of r7 in, write it back, r5 += 1
++         * (all four slots) until r5 == 112. ~30% of the thread when many voices play. All passes
++         * but the last are done as plain byte stores and r5 advanced to match; the original loop
++         * then runs the last pass, so LS and every register (r13-r16, r5) end exactly as before.
++         * Skipped while an LS write diagnostic is armed (g_spu_ls_wdiag) or r5 is past the end. */
++        { const uint32_t r5 = ctx->gpr[5]._u32[0];
++          if (r5 < 111u && g_spu_ls_wdiag == 0) {
++              const uint32_t base = ctx->gpr[4]._u32[0];
++              const uint8_t b = ctx->gpr[7]._u8[SPU_W(3)];   /* cbx inserts r7's preferred byte */
++              for (uint32_t i = r5; i < 111u; i++) ctx->ls[(base + i) & SPU_LS_MASK] = b;
++              const uint32_t k = 111u - r5;
++              for (int w = 0; w < 4; w++) ctx->gpr[5]._u32[w] += k;
++          } }
+ loc_00000AC4:
+         ctx->gpr[15] = spu_ls_read128(ctx, ctx->gpr[5]._u32[0] + ctx->gpr[4]._u32[0]);
+         ctx->gpr[16] = spu_cbx(ctx->gpr[5], ctx->gpr[4]);

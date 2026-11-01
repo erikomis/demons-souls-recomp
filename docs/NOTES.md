@@ -1062,6 +1062,42 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
     - Not done yet from the plan: ring reset at present (needs an upload-capacity preflight), 4-way
       vertex cache, partial vertex-constant upload, reservation cache-line padding (full rebuild),
       SIMD vertex conversion, one-CCD CPU set.
+59. **Sound thread (synth2) saturated -> sound work dropped; SPU float zeros in the vector path (2026-11-01, user's 10:36 recording):**
+    - The recording (42 min, Latria through the Fool's Idol, 4 marks): marks 2 / 3 have no frame hitch
+      at all; the new thread lines show "spu  synth2 Group:0" (libsynth2, image 11, lv2 SPU thread that
+      renders the voices for libmixer, one receive per 5.33 ms block) at 90-100% of a core for most of
+      the session -- no headroom, pinned at 99-100 for minutes. Mark 4: a 1.32 s freeze (no game step
+      at all, HighGraphics 91%, synth2 8%) at 4,0 46.9 9.4 -40.4 -- not reproduced by teleporting there;
+      no save / file activity in the run log at that point. The launcher now records late-step stack
+      samples (DES_PERF_STACKS=1, DES_PERF_STACK_THREADS=HighGraphics) so the next one says where.
+    - Sandbox: synth2 has two modes, ~30% (standing) and ~90% (after the player moves: walking, a
+      teleport) -- the voices the moves start. Its receive is a real blocking wait (SPU_RECV_LOG=1:
+      ~187 "wait" receives a second, no polling). Stack samples in the high mode (scratchpad synhi.sh:
+      retries runs until thread_cpu.py sees >= 70%, then old session's stack_sample.py): func_00000AC4
+      30%, func_00001090 23% (a one-sample-per-pass 4-tap fm/fma filter), 2C20 9%, 63C8 7%, the float
+      fix-up paths _x8_fa_fix / _x8_fm_fix / _sf_sum ~8%, waiting ~7-10%.
+    - func_00000AC4 (entered from 0AA0 with r4 = r80 + 16, r5 = r7 = 0): clears 112 bytes of a voice
+      block one byte per pass -- read the quadword, cbx + shufb r7's preferred byte in, write it back,
+      r5 += 1 in all four slots until r5 == 112. Port patch at its top (port/spu/spu_0010_at_01818080/
+      spu_recomp.c): all passes but the last as plain byte stores, r5 advanced to match, then the
+      original loop runs the last pass -- LS and r5 / r13-r16 end exactly as before. Skipped while
+      g_spu_ls_wdiag != 0 (LS write diagnostics) or r5 >= 111.
+    - spu_helpers.h AVX2 fa / fs / fm / fma / fms / fnms (runtime): SPU zeros (biased exponent 0, any
+      fraction) become +0 before the op and results below 2^-126 flush to +0 inside the vector path,
+      as the NEON path already did (spu__x8_z0 / spu__x8_fin / spu__x8_trunc1); only extended-range
+      operands and results >= 2^128 still go per lane. SPU_X8_ZERO_SLOW = old rule. Checked against the
+      exact per-lane reference (spu__*_any) on 20 M random vectors x 6 ops (weighted to zeros,
+      denormal patterns, tiny / huge / extended exponents, cancellation): 0 mismatches, old and new.
+      Bench: ordinary values same speed, operands in the SPU-zero range 5.3x faster. No measurable
+      synth2 change by itself (its remaining fix-up lanes are not zeros).
+    - Result (scratchpad synab.sh: old exe copy port/build_nozero vs new, walk + pan, A B A B, in-game
+      thr lines 140-178 s): synth2 90.5 / 92.0% -> 61.1 / 62.0% (max 96-97 -> 64-65), process ~496 ->
+      ~465%. Standing (cheap mode): 36 -> 28%.
+    - Audio (scratchpad audchk.sh, AUDIO_WAV of the mix 140-175 s): standing, old and new are
+      IDENTICAL (rms 0.0144, peak 0.065, band levels equal to every digit -- the patches are exact).
+      Walking, the new build is consistently louder (rms 0.0195 / 0.0220 -> 0.0254 / 0.0290, 50-2000 Hz
+      bands ~2x, no silent blocks either way): with synth2 saturated, voices / effects were being
+      dropped -- likely the user's "audio a bit off" and marks with smooth frames.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

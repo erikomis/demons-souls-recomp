@@ -117,6 +117,10 @@ set "DES_PERF=1"
 set "LD_PRESENT_LOG=%PD%\perf.txt"
 set "LD_PRESENT_LOG_FROM=0"
 set "LD_PRESENT_LOG_SECS=0"
+rem When a game step runs 28 ms or more, a few stack samples of the main thread and HighGraphics go in the
+rem recording too, so a freeze says what the game was doing (docs/NOTES.md fix 59). Costs nothing otherwise.
+if not defined DES_PERF_STACKS set "DES_PERF_STACKS=1"
+if not defined DES_PERF_STACK_THREADS set "DES_PERF_STACK_THREADS=HighGraphics"
 echo Recording frame timing: press F8 in the game right after any stutter you see.
 :no_record
 set "EXE=%D%\port\build_opt\DemonsSoulsRecomp.exe"
