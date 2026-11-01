@@ -7,12 +7,19 @@ The log (LD_PRESENT_LOG + DES_PERF) has two kinds of lines, all on one microseco
   <us> <frame> <pace us> <Present us> <gpu wait us> <last present> <stat present> <stat vblank> <sync vblank> <render cpu us> [<draws>]
   # <us> <kind> ...   kind = info | step <s> <rx> <ry> <pad src> <polls> <mdx> <mdy> <cpu us> | mark <n>
                               | pso <vs ms> <ps ms> <create ms> | read <sync|aio> <ms> <bytes> <path>
+                              | pos <mcp map> <x> <y> <z> <block id>  (the player, once a second + with each
+                                mark; "AA,BB" of the last map .mcp opened = the world, block id = GetBlockId; fix 57)
 What it prints: the display cadence (how many monitor refreshes each frame stayed up), every
 hitch (a frame shown longer than the usual cadence, or a late present / step) with what happened
 in that frame (shader compiles, slow reads, a late game step, a long Present), the F8 marks with
 the hitches just before each, and how the camera stick was driven.
 """
 import collections, glob, os, statistics, sys
+
+
+# Map areas (map/mAA_*): the event scripts' world starts (NOTES fix 39) + the Nexus and the tutorial.
+AREAS = {'1': ' (Nexus)', '2': ' (Boletarian Palace)', '3': ' (Shrine of Storms)', '4': ' (Tower of Latria)',
+         '5': ' (Valley of Defilement)', '6': ' (Stonefang Tunnel)', '8': ' (tutorial)'}
 
 
 def load(path):
@@ -253,10 +260,31 @@ def main():
     # (e.g. alternate frames 3 / 23 ms of render CPU) reads as judder with no single long frame.
     rcpu_all = sorted(r[9] for r in pres if r[9] >= 0)
     rcpu_med = rcpu_all[len(rcpu_all) // 2] / 1000 if rcpu_all else 0
+    # Where the player was (fix 57): the newest "pos" line at or before the mark, and the one about 5 s
+    # earlier (people press F8 after the stutter). To go there in a test run: DES_WARP_AT=<s>:<area>,<block>,999
+    # (the world's archstone; later blocks need their own point) and, once loaded, DES_TELEPORT_AT=<s>:x,y,z.
+
+    def where(v):
+        a = v[0].split(',')[0].lstrip('0') or '0'
+        return 'area %s%s block %s at %s,%s,%s' % (a, AREAS.get(a, ''), v[4] if len(v) > 4 else '?', v[1], v[2], v[3])
+    poss = [(n[0], n[2]) for n in notes if n[1] == 'pos' and len(n[2]) >= 4]
+
+    def pos_at(t):
+        best = None
+        for pt, v in poss:
+            if pt > t:
+                break
+            best = v
+        return best
     for m in marks:
         near = [h for h in hitches if m[0] - 10000000 <= h[0] <= m[0]]
         print('  mark %s at %.1f s: %s' % (m[2][0] if m[2] else '?', sec(m[0]),
               'no hitch in the 10 s before' if not near else ''))
+        if poss:
+            here, before = pos_at(m[0]), pos_at(m[0] - 5000000)
+            if here:
+                print('     player: %s%s' % (where(here), '' if not before or before == here else
+                                                 ' (5 s before: %s)' % where(before)))
         win = [r for r in pres if m[0] - 10000000 <= r[0] <= m[0]]
         if len(win) > 2:
             iv = sorted((y[0] - x[0]) / 1000 for x, y in zip(win, win[1:]))

@@ -25939,10 +25939,31 @@ index 8507deb..a6a6edb 100644
  #define RSX_VERTEX_TYPE_SF             3  /* half-float (float16) */
  #define RSX_VERTEX_TYPE_UB             4  /* unsigned byte */
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
-index f73907c..37b3db0 100644
+index f73907c..7d273f8 100644
 --- a/runtime/ppu/ppu_fs.cpp
 +++ b/runtime/ppu/ppu_fs.cpp
-@@ -473,6 +473,18 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
+@@ -262,10 +262,20 @@ static DIR* fd_dir(int fd)
+ }
+ 
+ /* ---- handlers ---- */
++/* The last map collision file opened (".../map/mAA_BB_CC_DD/mAA_BB_CC_DD.mcp" -> "AA,BB"): which
++ * Demon's Souls world the player is in (one .mcp per loaded map -- Boletaria's blocks share m02_00,
++ * while every layout of the world loads alongside) for the perf log's "pos" lines (DemonsSouls
++ * NOTES fix 57; the block comes from the game's own GetBlockId). */
++static char g_fs_last_map[8];
++extern "C" const char* ps3_fs_last_map(void) { return g_fs_last_map; }
++
+ static void cellFsOpen(ppu_context* ctx)
+ {
+     char gpath[1024], hpath[1100];
+     guest_strcpy(gpath, (uint32_t)ctx->gpr[3], sizeof gpath);
++    { const char* m = strstr(gpath, "/map/m"); const size_t L = strlen(gpath);
++      if (m && L > 4 && strcmp(gpath + L - 4, ".mcp") == 0 && m[8] == '_')
++          snprintf(g_fs_last_map, sizeof g_fs_last_map, "%.2s,%.2s", m + 6, m + 9); }
+     uint32_t flags  = (uint32_t)ctx->gpr[4];
+     uint32_t fd_ptr = (uint32_t)ctx->gpr[5];
+     host_path(hpath, sizeof hpath, gpath);
+@@ -473,6 +483,18 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
      p[len - 1] = p[len - 1];
  }
  
@@ -25961,7 +25982,7 @@ index f73907c..37b3db0 100644
  static void cellFsRead(ppu_context* ctx)
  {
      int fd          = (int)(uint32_t)ctx->gpr[3];
-@@ -486,7 +498,9 @@ static void cellFsRead(ppu_context* ctx)
+@@ -486,7 +508,9 @@ static void cellFsRead(ppu_context* ctx)
      if (ppu_vm_size && (uint64_t)buf + nbytes > ppu_vm_size) nbytes = ppu_vm_size - buf;
      fs_prefault(buf, nbytes);
      fs_set_dir(fd, f, 1);
@@ -25971,7 +25992,7 @@ index f73907c..37b3db0 100644
      /* PS3_FSLOG_EOF=<fd>,<bytes>: report end-of-file past <bytes> on one descriptor.
       * The intro cinematic is 28 seconds and this port renders it at a few frames
       * a second, so it cannot be watched to its end -- truncating the stream makes
-@@ -961,12 +975,14 @@ static void cellFsAioRead(ppu_context* ctx)
+@@ -961,12 +985,14 @@ static void cellFsAioRead(ppu_context* ctx)
           * could land between the two, and the next cellFsRead continued from
           * wherever the AIO stopped. Hold the stream lock across seek, read
           * and the seek back (stdio's own calls take the same lock). */

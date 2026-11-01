@@ -991,6 +991,33 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       reads, 0 decoder errors, 0 frames requested before they arrived; the AUDIO_WAV mix is tonal music
       (spectral flatness 0.001-0.05). Sample: DemonsSouls\showcase\atrac_stream_fix_sample.mp3.
       The mono tracks with a 20 KB head (user's log) take the same path; not hit in the sandbox.
+57. **Player location in the stutter recording + test teleport (2026-11-01, user's 23:48 Latria recording):**
+    - The recording (26 min, 12 F8 marks, Tower of Latria after a 5.9 s load at 103 s): mark 3 = 2.5 s of
+      ~45-55 ms steps with the game thread waiting (CPU 4 ms) after a 102 ms first-time shader compile;
+      marks 6 / 9 / 11 / 12 = short catch-up pairs (fix 50's alternation, longest 12 frames: full frame
+      30-40 ms apart at ~1100 draws / 11 ms render CPU, then a scene-less one) -- the guest's frame chain
+      (HighGraphics -> SpursTaskCommandDispatcher) running past 20 ms; marks 1 / 4 / 5 / 7 / 8 / 10 = nothing
+      in the timing data (sound? -- video bat suggested).
+    - Not reproduced: the user's save (testenv/save_user_1101, loads on the Prison of Hope walkway at
+      -6.5, 9.3, -14.6, ~1100 draws) standing, panning and walking (PAD_STICK_SEQ) stays at 2 refreshes.
+      The heavy moments need the user's exact spot (enemies), which the log did not have.
+    - Ruled out: the 670 MB stderr log (5,000 lines/s through one FILE lock; ps3_log.h warns about it).
+      Pinned uncapped A/B with PS3_VERBOSE=0: no fps gain (uncapped runs vary 94-117 fps run to run), and
+      the log only shrinks a third -- most lines (spu_workload dispatch / RETURNED / taskset, with an
+      fflush each) print regardless of PS3_VERBOSE.
+    - New: "# <us> pos <AA,BB> <x> <y> <z> <block id>" in the perf log once a second and with every F8
+      (port patch in ppu_recomp_011.cpp func_0001B8D0, des_player_where): the character from
+      func_004142A8(obj, 10000) as god mode; the position from lua_SaveChrPos's virtual call
+      chr->vtable[+0x70](out, chr) (x, y, z BE floats); block id = lua_GetBlockId's func_00419610(obj);
+      "AA,BB" = the last map/mAA_BB_*.mcp cellFsOpen saw (ppu_fs.cpp ps3_fs_last_map) -- the area:
+      Boletaria's blocks share m02_00 (Palace = 02,00 block 3), Latria = 04,00 block 0. The stage
+      manager's +0x8 is only the warp request (-1 once done; no current map id in its first 0x100 bytes).
+    - perf_report.py prints per mark "player: area 4 (Tower of Latria) block 0 at x,y,z" (+ 5 s before).
+    - Test helpers: DES_TELEPORT_AT=<s>:x,y,z[;...] (seconds from the first step) puts the player there via
+      lua_LoadChrPos's func_00273BE0(chr, v2 = (x, y, z, 0)); DES_WHERE=<s> prints the position. Recipe:
+      DES_WARP_AT=<s>:<area>,<block>,999 once in game (a warp requested during the save's load never
+      settles), then DES_TELEPORT_AT after the load. Checked: user's Palace save -> warp 4,0,999 at 125 s
+      -> teleport at 170 s -> standing on the Latria walkway at the logged x,y,z.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

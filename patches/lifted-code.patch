@@ -196,8 +196,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
---- a/recompiled/ppu_recomp_011.cpp	2026-10-31 19:24:46.413288900 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-10-31 19:25:04.105357400 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-11-01 01:09:34.563847300 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-01 01:09:34.582869700 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -213,7 +213,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,181 @@
+@@ -38897,8 +38899,266 @@
          return;
  }
  
@@ -233,6 +233,59 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +    if (g_des_title_marks >= 0) snprintf(s + strlen(s), sizeof s - strlen(s), "  [RECORDING - F8 = stutter, %d marked]", g_des_title_marks);
 +    ps3_host_title_suffix(s);
 +}
++/* Where the player is (PORT DEBUG, NOTES fix 57): the lookups the event scripts' bindings use.
++ * The character: func_004142A8(obj, 10000) as in god mode; lua_GetBlockId's func_00419610(obj)
++ * (0 in Latria's first block); the position: lua_SaveChrPos's virtual call chr->vtable[+0x70](out, chr),
++ * which writes x, y, z (big-endian floats) to out. Calls run on a frame below the live stack with
++ * the context saved and restored. Returns 0 when there is no player (title, loading). */
++extern "C" const char* ps3_fs_last_map(void);   /* ppu_fs.cpp: "AA,BB" of the last map .mcp opened */
++static int des_player_where(ppu_context* ctx, uint32_t* chr_out, int* block, float xyz[3])
++{
++    PPU_MM_SNAP
++    const uint32_t toc = vm_read32((uint32_t)ctx->gpr[2] - 0x7884);
++    const uint32_t pp = toc ? vm_read32(toc - 0x7F0C) : 0;
++    const uint32_t obj = pp ? vm_read32(pp) : 0;
++    if (!obj) return 0;
++    ppu_context save = *ctx;
++    ctx->gpr[1] = (save.gpr[1] - 0x400) & ~0xFull;
++    const uint32_t out = (uint32_t)ctx->gpr[1] + 0x200;   /* between the callees' frames and ours */
++    ctx->gpr[3] = obj; ctx->gpr[4] = 10000; ctx->gpr[5] = 0; ctx->gpr[6] = 0;
++    ctx->lr = 0x0001B8D0; func_004142A8(ctx); DRAIN_TRAMPOLINE(ctx);
++    const uint32_t chr = (uint32_t)ctx->gpr[3];
++    int ok = 0;
++    if (chr) {
++        ctx->gpr[3] = obj; ctx->lr = 0x0001B8D0; func_00419610(ctx); DRAIN_TRAMPOLINE(ctx);
++        *block = (int32_t)ctx->gpr[3];
++        const uint32_t vt = vm_read32(chr), d = vt ? vm_read32(vt + 0x70) : 0;
++        if (d) {
++            for (int i = 0; i < 4; i++) vm_write32(out + 4 * i, 0);
++            ctx->gpr[3] = out; ctx->gpr[4] = chr;
++            ctx->ctr = vm_read32(d); ctx->gpr[2] = vm_read32(d + 4);
++            ctx->lr = 0x0001B8D0; ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx);
++            for (int i = 0; i < 3; i++) { const uint32_t w = vm_read32(out + 4 * i); memcpy(&xyz[i], &w, 4); }
++            ok = 1;
++        }
++    }
++    *ctx = save;
++    if (chr_out) *chr_out = chr;
++    return ok;
++}
++
++/* Put the player at x, y, z in the current block (PORT DEBUG, NOTES fix 57): lua_LoadChrPos's
++ * func_00273BE0(chr, v2 = (x, y, z, 0)). */
++static void des_player_place(ppu_context* ctx, uint32_t chr, const float xyz[3])
++{
++    PPU_MM_SNAP
++    ppu_context save = *ctx;
++    ctx->gpr[1] = (save.gpr[1] - 0x400) & ~0xFull;
++    const uint32_t v = (uint32_t)ctx->gpr[1] + 0x200;
++    for (int i = 0; i < 3; i++) { uint32_t w; memcpy(&w, &xyz[i], 4); vm_write32(v + 4 * i, w); }
++    vm_write32(v + 12, 0);
++    vm_raw_ld16(&ctx->vr[2], v);
++    ctx->gpr[3] = chr; ctx->lr = 0x0001B8D0; func_00273BE0(ctx); DRAIN_TRAMPOLINE(ctx);
++    *ctx = save;
++}
++
  void func_0001B8D0(ppu_context* ctx) {
      PPU_MM_SNAP
 +    /* DES_STEP_STATS=1 (PORT DEBUG): this is the game's per-step update; every 5 s print steps per
@@ -339,10 +392,42 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +          ps3_perf_note("step %.5f %d %d %d %d %d %d %llu", st, rx, ry, src, polls, mdx, mdy,
 +                        cpu_last ? cpu - cpu_last : 0ull);
 +          cpu_last = cpu;
-+          if (ps3_host_hotkey(0x77 /* VK_F8 */)) {
++          const int marked = ps3_host_hotkey(0x77 /* VK_F8 */);
++          /* "# <us> pos <area>,<block> <x> <y> <z> <GetBlockId>" once a second and with every mark: where the player
++           * was, so a stutter can be revisited (DES_TELEPORT_AT, perf_report.py). NOTES fix 57. */
++          static unsigned long long pos_t;
++          const unsigned long long now = ps3_qpc_us();
++          if (marked || now - pos_t >= 1000000ull) {
++              pos_t = now;
++              int blk = -1; float xyz[3];
++              if (des_player_where(ctx, 0, &blk, xyz) && (xyz[0] != 0.0f || xyz[1] != 0.0f || xyz[2] != 0.0f))
++                  ps3_perf_note("pos %s %.2f %.2f %.2f %d", *ps3_fs_last_map() ? ps3_fs_last_map() : "-", xyz[0], xyz[1], xyz[2], blk); }
++          if (marked) {
 +              g_des_title_marks++; des_title();
 +              ps3_perf_note("mark %d", g_des_title_marks);
 +              fprintf(stderr, "[des] perf mark %d (F8)\n", g_des_title_marks); } } }
++    /* DES_TELEPORT_AT=<sec>:<x>,<y>,<z>[;...] (PORT DEBUG, up to 16; <sec> from the first step): put the
++     * player there -- a perf log "pos" line, after DES_WARP_AT has loaded its block. DES_WHERE=<sec>:
++     * print the position to stderr every <sec> s. NOTES fix 57. */
++    { static int n = -1, next; static unsigned long long t_at[16], where_us, where_t; static float at[16][3];
++      if (n < 0) { const char* e = getenv("DES_TELEPORT_AT"); n = 0; next = 0;
++                   const unsigned long long t0 = ps3_qpc_us();
++                   while (e && *e && n < 16) { double sec; float x, y, z;
++                     if (sscanf(e, "%lf:%f,%f,%f", &sec, &x, &y, &z) != 4) break;
++                     t_at[n] = t0 + (unsigned long long)(sec * 1e6); at[n][0] = x; at[n][1] = y; at[n][2] = z; n++;
++                     e = strchr(e, ';'); if (e) e++; }
++                   const char* w = getenv("DES_WHERE"); where_us = w ? (unsigned long long)(atof(w) * 1e6) : 0; }
++      const unsigned long long now = ps3_qpc_us();
++      const int tele = next < n && now >= t_at[next], where = where_us && now - where_t >= where_us;
++      if (tele || where) {
++          uint32_t chr = 0; int blk = -1; float xyz[3];
++          if (des_player_where(ctx, &chr, &blk, xyz)) {
++              if (where) { where_t = now; fprintf(stderr, "[des] where map %s (block id %d) pos %.2f %.2f %.2f\n", ps3_fs_last_map(), blk, xyz[0], xyz[1], xyz[2]); }
++              if (tele) {
++                  des_player_place(ctx, chr, at[next]);
++                  fprintf(stderr, "[des] teleport %.2f %.2f %.2f (was map %s at %.2f %.2f %.2f)\n",
++                          at[next][0], at[next][1], at[next][2], ps3_fs_last_map(), xyz[0], xyz[1], xyz[2]);
++                  next++; } } } }
 +    /* DES_HITCH_AT=<s>:<ms>[,<s>:<ms>...] (PORT DEBUG): stall this step <ms> ms once, <s> seconds after
 +     * the first step -- a repeatable stand-in for a slow step (shader compile, OS hiccup), to watch how
 +     * the frame loop recovers from one. NOTES fix 50. */
