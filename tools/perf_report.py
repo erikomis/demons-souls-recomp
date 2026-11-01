@@ -7,8 +7,9 @@ The log (LD_PRESENT_LOG + DES_PERF) has two kinds of lines, all on one microseco
   <us> <frame> <pace us> <Present us> <gpu wait us> <last present> <stat present> <stat vblank> <sync vblank> <render cpu us> [<draws>]
   # <us> <kind> ...   kind = info | step <s> <rx> <ry> <pad src> <polls> <mdx> <mdy> <cpu us> | mark <n>
                               | pso <vs ms> <ps ms> <create ms> | read <sync|aio> <ms> <bytes> <path>
-                              | pos <mcp map> <x> <y> <z> <block id>  (the player, once a second + with each
-                                mark; "AA,BB" of the last map .mcp opened = the world, block id = GetBlockId; fix 57)
+                              | pos <area>,<block> <x> <y> <z>  (the player, once a second + with each mark;
+                                fix 57. Two logs from 2026-11-01 01:00 have "<mcp AA,BB> x y z <block id>")
+                              | thr <process %> <thread>=<%> ...  (busiest threads, % of a core, 1/s; fix 58)
 What it prints: the display cadence (how many monitor refreshes each frame stayed up), every
 hitch (a frame shown longer than the usual cadence, or a late present / step) with what happened
 in that frame (shader compiles, slow reads, a late game step, a long Present), the F8 marks with
@@ -265,8 +266,11 @@ def main():
     # (the world's archstone; later blocks need their own point) and, once loaded, DES_TELEPORT_AT=<s>:x,y,z.
 
     def where(v):
-        a = v[0].split(',')[0].lstrip('0') or '0'
-        return 'area %s%s block %s at %s,%s,%s' % (a, AREAS.get(a, ''), v[4] if len(v) > 4 else '?', v[1], v[2], v[3])
+        a, b = (v[0].split(',') + ['?'])[:2]
+        a = a.lstrip('0') or '0'
+        if len(v) > 4:
+            b = v[4]
+        return 'area %s%s block %s at %s,%s,%s' % (a, AREAS.get(a, ''), b.lstrip('0') or '0', v[1], v[2], v[3])
     poss = [(n[0], n[2]) for n in notes if n[1] == 'pos' and len(n[2]) >= 4]
 
     def pos_at(t):
@@ -276,6 +280,26 @@ def main():
                 break
             best = v
         return best
+    # Thread CPU (fix 58): per thread name, the mean % of a core over the whole log and over the 10 s
+    # before each mark; the threads that rose the most say what was saturated during the stutter.
+    thr = []
+    for n in notes:
+        if n[1] == 'thr' and n[2]:
+            d = {'(process)': float(n[2][0])}
+            for kv in n[2][1:]:
+                k, _, v = kv.rpartition('=')
+                if k: d[k] = float(v)
+            thr.append((n[0], d))
+
+    def thr_mean(rows):
+        acc = collections.Counter()
+        for _, d in rows:
+            for k, v in d.items(): acc[k] += v
+        return {k: v / len(rows) for k, v in acc.items()} if rows else {}
+    thr_all = thr_mean(thr)
+    if thr_all:
+        print('thread CPU, whole log (%% of one core): %s' % ', '.join(
+            '%s %.0f' % kv for kv in sorted(thr_all.items(), key=lambda kv: -kv[1])[:9]))
     for m in marks:
         near = [h for h in hitches if m[0] - 10000000 <= h[0] <= m[0]]
         print('  mark %s at %.1f s: %s' % (m[2][0] if m[2] else '?', sec(m[0]),
@@ -295,6 +319,12 @@ def main():
             ncu = sum(1 for t in cu_t if m[0] - 10000000 <= t <= m[0])
             if ncu:
                 print('     %d game catch-up frames in those 10 s (full + scene-less frame pairs: judder)' % ncu)
+        if thr:
+            w = thr_mean([r for r in thr if m[0] - 10000000 <= r[0] <= m[0]])
+            if w:
+                up = sorted(((v - thr_all.get(k, 0), k, v) for k, v in w.items()), reverse=True)[:4]
+                print('     thread CPU in those 10 s: %s' % ', '.join(
+                    '%s %.0f%% (usual %.0f)' % (k, v, thr_all.get(k, 0)) for _, k, v in up))
         for h in near:
             print('     %.2f s before: frame %.1f ms, on screen %s refreshes -- %s' % (
                 (m[0] - h[0]) / 1e6, h[1] / 1000, h[2] if h[2] is not None else '?', h[3]))

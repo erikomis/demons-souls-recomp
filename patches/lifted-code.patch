@@ -197,7 +197,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
 --- a/recompiled/ppu_recomp_011.cpp	2026-11-01 01:09:34.563847300 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-11-01 01:09:34.582869700 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-01 10:25:12.201502200 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -213,7 +213,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,266 @@
+@@ -38897,8 +38899,273 @@
          return;
  }
  
@@ -234,11 +234,11 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +    ps3_host_title_suffix(s);
 +}
 +/* Where the player is (PORT DEBUG, NOTES fix 57): the lookups the event scripts' bindings use.
-+ * The character: func_004142A8(obj, 10000) as in god mode; lua_GetBlockId's func_00419610(obj)
-+ * (0 in Latria's first block); the position: lua_SaveChrPos's virtual call chr->vtable[+0x70](out, chr),
++ * The character: func_004142A8(obj, 10000) as in god mode; the map (area << 8 | block): the lookup
++ * lua_GetBlockId's func_00419610 makes -- X = *(TOC[-0x788C] - 0x7E70), func_0033BBB8(out, X[+4],
++ * X[+0x30]) writes the map id bytes (area, block, ..) at out; the position: lua_SaveChrPos's virtual call chr->vtable[+0x70](out, chr),
 + * which writes x, y, z (big-endian floats) to out. Calls run on a frame below the live stack with
 + * the context saved and restored. Returns 0 when there is no player (title, loading). */
-+extern "C" const char* ps3_fs_last_map(void);   /* ppu_fs.cpp: "AA,BB" of the last map .mcp opened */
 +static int des_player_where(ppu_context* ctx, uint32_t* chr_out, int* block, float xyz[3])
 +{
 +    PPU_MM_SNAP
@@ -254,8 +254,15 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +    const uint32_t chr = (uint32_t)ctx->gpr[3];
 +    int ok = 0;
 +    if (chr) {
-+        ctx->gpr[3] = obj; ctx->lr = 0x0001B8D0; func_00419610(ctx); DRAIN_TRAMPOLINE(ctx);
-+        *block = (int32_t)ctx->gpr[3];
++        *block = -1;
++        const uint32_t t2 = vm_read32((uint32_t)save.gpr[2] - 0x788C);
++        const uint32_t xp = t2 ? vm_read32(t2 - 0x7E70) : 0, x = xp ? vm_read32(xp) : 0;
++        if (x) {
++            vm_write32(out, 0xFFFFFFFFu);
++            ctx->gpr[3] = out; ctx->gpr[4] = vm_read32(x + 0x4); ctx->gpr[5] = (int64_t)(int32_t)vm_read32(x + 0x30);
++            ctx->lr = 0x0001B8D0; func_0033BBB8(ctx); DRAIN_TRAMPOLINE(ctx);
++            *block = (int32_t)((vm_read8(out) << 8) | vm_read8(out + 1));
++        }
 +        const uint32_t vt = vm_read32(chr), d = vt ? vm_read32(vt + 0x70) : 0;
 +        if (d) {
 +            for (int i = 0; i < 4; i++) vm_write32(out + 4 * i, 0);
@@ -393,7 +400,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +                        cpu_last ? cpu - cpu_last : 0ull);
 +          cpu_last = cpu;
 +          const int marked = ps3_host_hotkey(0x77 /* VK_F8 */);
-+          /* "# <us> pos <area>,<block> <x> <y> <z> <GetBlockId>" once a second and with every mark: where the player
++          /* "# <us> pos <area>,<block> <x> <y> <z>" once a second and with every mark: where the player
 +           * was, so a stutter can be revisited (DES_TELEPORT_AT, perf_report.py). NOTES fix 57. */
 +          static unsigned long long pos_t;
 +          const unsigned long long now = ps3_qpc_us();
@@ -401,7 +408,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +              pos_t = now;
 +              int blk = -1; float xyz[3];
 +              if (des_player_where(ctx, 0, &blk, xyz) && (xyz[0] != 0.0f || xyz[1] != 0.0f || xyz[2] != 0.0f))
-+                  ps3_perf_note("pos %s %.2f %.2f %.2f %d", *ps3_fs_last_map() ? ps3_fs_last_map() : "-", xyz[0], xyz[1], xyz[2], blk); }
++                  ps3_perf_note("pos %d,%d %.2f %.2f %.2f", (blk >> 8) & 0xFF, blk & 0xFF, xyz[0], xyz[1], xyz[2]); }
 +          if (marked) {
 +              g_des_title_marks++; des_title();
 +              ps3_perf_note("mark %d", g_des_title_marks);
@@ -422,11 +429,11 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +      if (tele || where) {
 +          uint32_t chr = 0; int blk = -1; float xyz[3];
 +          if (des_player_where(ctx, &chr, &blk, xyz)) {
-+              if (where) { where_t = now; fprintf(stderr, "[des] where map %s (block id %d) pos %.2f %.2f %.2f\n", ps3_fs_last_map(), blk, xyz[0], xyz[1], xyz[2]); }
++              if (where) { where_t = now; fprintf(stderr, "[des] where map %d,%d pos %.2f %.2f %.2f\n", (blk >> 8) & 0xFF, blk & 0xFF, xyz[0], xyz[1], xyz[2]); }
 +              if (tele) {
 +                  des_player_place(ctx, chr, at[next]);
-+                  fprintf(stderr, "[des] teleport %.2f %.2f %.2f (was map %s at %.2f %.2f %.2f)\n",
-+                          at[next][0], at[next][1], at[next][2], ps3_fs_last_map(), xyz[0], xyz[1], xyz[2]);
++                  fprintf(stderr, "[des] teleport %.2f %.2f %.2f (was map %d,%d at %.2f %.2f %.2f)\n",
++                          at[next][0], at[next][1], at[next][2], (blk >> 8) & 0xFF, blk & 0xFF, xyz[0], xyz[1], xyz[2]);
 +                  next++; } } } }
 +    /* DES_HITCH_AT=<s>:<ms>[,<s>:<ms>...] (PORT DEBUG): stall this step <ms> ms once, <s> seconds after
 +     * the first step -- a repeatable stand-in for a slow step (shader compile, OS hiccup), to watch how

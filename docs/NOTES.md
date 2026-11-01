@@ -1018,6 +1018,50 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       DES_WARP_AT=<s>:<area>,<block>,999 once in game (a warp requested during the save's load never
       settles), then DES_TELEPORT_AT after the load. Checked: user's Palace save -> warp 4,0,999 at 125 s
       -> teleport at 170 s -> standing on the Latria walkway at the logged x,y,z.
+    - Follow-up (2026-11-01 01:40): the area came from the last map .mcp opened, which went stale --
+      revisiting a world does not reopen it (Nexus -> Latria kept saying "Nexus"). Now both area and
+      block come from the game: lua_GetBlockId's func_00419610 does X = *(TOC[-0x788C] - 0x7E70),
+      func_0033BBB8(out, X[+4], X[+0x30]) -> map id bytes (area, block, ..) at out; the port makes that
+      call itself. "pos <area>,<block> x y z" (Palace 2,3; Latria 4,0). The ppu_fs.cpp .mcp tracker is gone.
+58. **Sound behind the picture, thread CPU in the recording, renderer -10% (2026-11-01, user's 01:14 recording):**
+    - User: "a little stuttery again" + sound "out of sync" (sounds land late). Recording (12 min): judder =
+      the first ~20 s on the Latria walkway by the save point (-6.5, 9.3, -14.6; ~1050 draws vs 500-650
+      elsewhere) both after the save loaded and after returning from the Nexus (~135 catch-up frames
+      per 20 s), and a drop at y = -77. The sandbox at the same spot: ~10 catch-ups in the first 5 s,
+      then none -- not reproduced; pinned to CCD0 (AFF=FFFF) also smooth.
+    - A/V measured (scratchpad avsync.sh / avpress.py): 8 scripted R1 swings, LD_VIDEO + AUDIO_WAV on
+      the QPC clock, press times now logged by cellPad ("PAD_SCRIPT ... qpc_us="). Press -> swing sound
+      989 ms at 50 fps vs 1007 ms at 30 fps (same), press -> picture 404 vs 498 ms: at 50 fps the
+      picture answers ~95 ms sooner while the sound does not, so sound lags the picture more than in
+      the original. Code audit (workflow, 20 agents): PS3_CLOCK_SCALE is not involved (the audio path
+      is real time); the host queue is: a 60 ms WASAPI buffer prefilled half full and corrected only
+      outside 1/4..3/4, so it drifted from 27 to the 45 ms edge (the device clock runs slow vs QPC
+      here: 29 -> 31 ms in 70 s).
+    - Fix (cellAudio.c): the queue is held at 15 ms +/- 1 block (PS3_AUDIO_TARGET_MS, 0 = old band);
+      each underrun raises the target a block (to half the buffer). AUDIO_RATE=1 now prints queue mean
+      / min. Sandbox Latria walking + pans: default 29-31 ms (min 24), target 20: 18-20 (13), 12: 13-15
+      (7), 15: 15.3 (min 10) -- 0 underruns in all. ~15-30 ms less audio delay.
+    - Thread CPU in the perf log (rsx_live_draw.c perf_thread_cpu, DES_PERF_THREADS=0 = off): once a
+      second "# <us> thr <process %> <name>=<%> ..." (QueryThreadCycleTime per host thread, by
+      ps3_thread_name), perf_report prints the whole-log means and per F8 mark the threads that rose.
+      Latria standing (thread_cpu.py, per thread): one "spu job" thread 102% (spins), HighGraphics 58%
+      (much of it sub-ms usleep spins at 0x00ACB0A0 waiting for the dispatcher: 17k calls / 10 s,
+      PS3_POLLTOP=10), MOStreamingThread 53% (usleep polls of ~1 us at 0x010D000C / 0x010D0F8C, 25k /
+      10 s: sys_timer_usleep busy-waits under 1 ms), render thread ~40%, synth2 34% (real synthesis;
+      its receive wait does block). Process ~380-490% of a core.
+    - Renderer survey (workflow, 21 agents, read-only, adversarially checked): ranked plan in the
+      session; done here: (a) 3 swap-chain buffers (LD_SWAP_COUNT=2 = old) so the next frame's
+      submits do not queue behind a swap copy that waits for the display after a catch-up pair;
+      (b) cellGcmSys.c stops feeding the legacy rsx_state once live draw is up (rsx_live_draw_ready();
+      GCM_LEGACY_STATE=1 = old) -- the null backend registered under live draw did nothing with the
+      per-method callbacks but print viewport / RT changes (most of the 160 MB stdout log).
+      Pinned A/B (abhitch.sh: Latria, pan, 45 ms forced late steps every 4 s, A B A B): render CPU per
+      heavy frame median 4.44 / 4.63 -> 4.02 / 4.06 ms, p90 9.05 / 9.06 -> 8.19 / 8.11; catch-up
+      frames 14 / 40 -> 13 / 27, hitches 10 / 53 -> 9 / 13. Frame dump at the same frame: 0.7% of
+      pixels differ (idle animation phase), image identical otherwise.
+    - Not done yet from the plan: ring reset at present (needs an upload-capacity preflight), 4-way
+      vertex cache, partial vertex-constant upload, reservation cache-line padding (full rebuild),
+      SIMD vertex conversion, one-CCD CPU set.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

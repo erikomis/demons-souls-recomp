@@ -1,5 +1,5 @@
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index 02b751b..c972287 100644
+index 02b751b..f699dba 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -477,8 +477,9 @@ static void audio_mix_one_block(void)
@@ -28,7 +28,16 @@ index 02b751b..c972287 100644
              } } }
  
          for (u32 s = 0; s < CELL_AUDIO_BLOCK_SAMPLES; s++) {
-@@ -585,27 +589,57 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -561,6 +565,8 @@ static void audio_notify_event_queues(void)
+ 
+ #ifdef _WIN32
+ static unsigned long long g_audio_underruns;
++static unsigned long long g_audio_q_sum, g_audio_q_n;   /* AUDIO_RATE: device queue level */
++static UINT32 g_audio_q_min = 0xFFFFFFFFu;
+ static unsigned __stdcall audio_mix_thread_func(void* arg)
+ {
+     (void)arg;
+@@ -585,27 +591,81 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
       * dropped the surplus: 20% of the audio thrown away, and a guest mixer
       * (GH3's FMOD) that could not keep ahead of the read index played gaps.
       * With no device, pace on the performance counter instead. */
@@ -46,10 +55,26 @@ index 02b751b..c972287 100644
 +    double due = (double)q0.QuadPart;
 +    const int device_paced = getenv("AUDIO_DEVICE_PACED") ? 1 : 0;
 +#if AUDIO_BACKEND_WASAPI
++    /* The queue level the clock steers to. Every frame queued is that much later at the speaker:
++     * the old half-full 60 ms buffer (~30 ms, drifting to its 3/4 edge = 45 ms within minutes -- the
++     * device clock runs slower than QPC here) made sound land behind the picture (Demon's Souls NOTES
++     * fix 58). Now the queue is held at 15 ms +/- 1 block (5.3 ms); sandbox Latria with walking +
++     * pans: no underruns even at a 12 ms target. Each underrun raises the target one block (to at
++     * most half the buffer), so a machine that cannot keep up settles where it can.
++     * PS3_AUDIO_TARGET_MS=<ms> sets the target; 0 = the old half-full band (1/4..3/4). */
++    UINT32 q_target = s_wasapi_buf_frames / 2, q_lo = s_wasapi_buf_frames / 4, q_hi = s_wasapi_buf_frames * 3 / 4;
++    int q_held = 0;
++    { const char* e = getenv("PS3_AUDIO_TARGET_MS"); const int ms = e ? atoi(e) : 15;
++      const UINT32 t = (UINT32)ms * (CELL_AUDIO_SAMPLE_RATE / 1000);
++      if (ms >= 5 && t + 2 * CELL_AUDIO_BLOCK_SAMPLES <= s_wasapi_buf_frames) {
++          q_held = 1; q_target = t; q_hi = t + CELL_AUDIO_BLOCK_SAMPLES; q_lo = t - CELL_AUDIO_BLOCK_SAMPLES;
++          fprintf(stderr, "[cellAudio] device queue held at %d ms (%u frames +/- %u of %u)\n",
++                  ms, t, (unsigned)CELL_AUDIO_BLOCK_SAMPLES, (unsigned)s_wasapi_buf_frames); } }
++    unsigned long long q_underruns = 0;
 +    if (!device_paced && s_wasapi_buf_frames >= 2 * CELL_AUDIO_BLOCK_SAMPLES) {
-+        /* start half full, so the first jitter does not run the device dry */
++        /* start at the target, so the first jitter does not run the device dry */
 +        static float silence[CELL_AUDIO_BLOCK_SAMPLES * 2];
-+        for (UINT32 f = 0; f + CELL_AUDIO_BLOCK_SAMPLES <= s_wasapi_buf_frames / 2; f += CELL_AUDIO_BLOCK_SAMPLES)
++        for (UINT32 f = 0; f + CELL_AUDIO_BLOCK_SAMPLES <= q_target; f += CELL_AUDIO_BLOCK_SAMPLES)
 +            audio_backend_submit(silence, CELL_AUDIO_BLOCK_SAMPLES);
 +    }
 +#endif
@@ -63,6 +88,13 @@ index 02b751b..c972287 100644
           * audible click/stutter). AUDIO_RATE reports how often. */
          if (room >= 0 && blocks > 64 &&
              (UINT32)room + CELL_AUDIO_BLOCK_SAMPLES / 2 >= s_wasapi_buf_frames) g_audio_underruns++;
++        if (q_held && g_audio_underruns != q_underruns) {   /* ran dry: hold one block more */
++            q_underruns = g_audio_underruns;
++            if (q_target + CELL_AUDIO_BLOCK_SAMPLES <= s_wasapi_buf_frames / 2) {
++                q_target += CELL_AUDIO_BLOCK_SAMPLES; q_hi += CELL_AUDIO_BLOCK_SAMPLES; q_lo += CELL_AUDIO_BLOCK_SAMPLES;
++                fprintf(stderr, "[cellAudio] device ran dry: queue now held at %.1f ms\n", q_target / 48.0);
++            }
++        }
  #endif
 -        if (room < 0) {
 +        if (!device_paced || room < 0) {
@@ -88,15 +120,16 @@ index 02b751b..c972287 100644
 +#if AUDIO_BACKEND_WASAPI
 +            if (room >= 0) {
 +                const UINT32 queued = s_wasapi_buf_frames - (UINT32)room;
-+                if (queued > s_wasapi_buf_frames * 3 / 4) step += period / 16;       /* device slower than QPC */
-+                else if (queued < s_wasapi_buf_frames / 4) step -= period / 16;  /* device faster */
++                if (queued > q_hi) step += period / 16;       /* device slower than QPC */
++                else if (queued < q_lo) step -= period / 16;  /* device faster */
++                g_audio_q_sum += queued; g_audio_q_n++; if (queued < g_audio_q_min) g_audio_q_min = queued;
 +            }
 +#endif
 +            due += step;
          }
          blocks++;
          /* Mix and submit one block */
-@@ -621,8 +655,17 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -621,8 +681,17 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
          /* AUDIO_WAV=<file>: append the final mix as raw f32le stereo 48 kHz
           * (ffmpeg -f f32le -ar 48000 -ac 2 -i <file>). */
          { static FILE* _wf = (FILE*)-1;
@@ -115,7 +148,28 @@ index 02b751b..c972287 100644
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
          /* AUDIO_RATE=1: blocks mixed vs real time, and frames dropped. */
          { static int on = -1; if (on < 0) on = getenv("AUDIO_RATE") ? 1 : 0;
-@@ -934,6 +977,33 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -631,15 +700,18 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+             { int nz = 0; for (u32 i = 0; i < CELL_AUDIO_BLOCK_SAMPLES * 2; i++) if (s_mix_buffer[i] != 0.0f) { nz = 1; break; }
+               if (!nz) z++; }
+             if (now - t0 >= 5000) {
+-                fprintf(stderr, "[audio-rate] %.1f blocks/s (real time 187.5), silent %.1f%%, dropped %.0f frames/s, underruns %llu, device buf %u%c",
++                fprintf(stderr, "[audio-rate] %.1f blocks/s (real time 187.5), silent %.1f%%, dropped %.0f frames/s, underruns %llu, queue mean %.1f min %.1f ms, device buf %u%c",
+                         n * 1000.0 / (now - t0), n ? 100.0 * z / n : 0.0, (g_audio_dropped - d0) * 1000.0 / (now - t0),
+                         g_audio_underruns - u0,
++                        g_audio_q_n ? g_audio_q_sum / (double)g_audio_q_n / 48.0 : -1.0,
++                        g_audio_q_n ? g_audio_q_min / 48.0 : -1.0,
+                 #if AUDIO_BACKEND_WASAPI
+                         (unsigned)s_wasapi_buf_frames, 10);
+ #else
+                         0u, 10);
+ #endif
+-                n = z = 0; d0 = g_audio_dropped; u0 = g_audio_underruns; t0 = now; } } }
++                n = z = 0; d0 = g_audio_dropped; u0 = g_audio_underruns; t0 = now;
++                g_audio_q_sum = g_audio_q_n = 0; g_audio_q_min = 0xFFFFFFFFu; } } }
+ 
+         /* Notify event queues */
+         audio_notify_event_queues();
+@@ -934,6 +1006,33 @@ s32 cellAudioPortStop(u32 portNum)
      return CELL_OK;
  }
  
@@ -462,7 +516,7 @@ index 3a473eb..1db35bd 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..0769373 100644
+index afdd93d..d60c2f9 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -268,8 +268,12 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
@@ -719,7 +773,22 @@ index afdd93d..0769373 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -1015,6 +1208,24 @@ skip_inject: ;
+@@ -949,7 +1142,13 @@ skip_inject: ;
+                   data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
+                   static int said[256];
+                   if (!said[i]) { said[i] = 1;
+-                      printf("[cellPad] PAD_SCRIPT t=%.1fs press 0x%04X\n", ev[i].t, ev[i].mask); }
++                      /* + the press on the QPC microsecond clock LD_VIDEO / AUDIO_WAV log (press-to-sound timing) */
++                      unsigned long long q = 0;
++#ifdef _WIN32
++                      { LARGE_INTEGER f, c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c);
++                        q = (unsigned long long)((double)c.QuadPart * 1e6 / (double)f.QuadPart); }
++#endif
++                      printf("[cellPad] PAD_SCRIPT t=%.1fs press 0x%04X qpc_us=%llu\n", ev[i].t, ev[i].mask, q); }
+               }
+           }
+       } }
+@@ -1015,6 +1214,24 @@ skip_inject: ;
        if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
@@ -1692,7 +1761,7 @@ index c4eb87d..d924140 100644
  
  /* Dialog and other one-shot completions carry their own OPD, rather than a
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 298ee7d..b7e9159 100644
+index 298ee7d..dee4823 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
 @@ -354,6 +354,10 @@ static CellGcmReportData s_report_data[CELL_GCM_MAX_REPORT_COUNT];
@@ -2015,7 +2084,27 @@ index 298ee7d..b7e9159 100644
  
  /* The diagnostic switches below are tested on every drain pass, and GCM_RECDBG
   * on every semaphore method. getenv walks the whole environment and showed in
-@@ -2183,7 +2346,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2080,8 +2243,17 @@ static void gcm_rsx_process_fifo_unlocked(void)
+      * (gcm_legacy_method_has_effect). RSX_TRACE still sees every method. */
+     static int s_rsx_trace = -1;
+     if (s_rsx_trace < 0) s_rsx_trace = getenv("RSX_TRACE") ? 1 : 0;
+-    const int legacy_state_live = rsx_get_backend() != NULL || !rsx_draw_engine_enabled() ||
+-                                  s_rsx_trace;
++    /* The live draw engine (rsx_live_draw.c) keeps its own register file and never reads this
++     * rsx_state; the vtable backend registered under it (rsx_null_backend: the window, its message
++     * pump and caption) does nothing with the per-method callbacks but print viewport / render-target
++     * changes. So once live draw is up, only the methods with effects outside the state go through
++     * here -- every other word of the frame was a trip through rsx_process_method's switch for
++     * nothing (Demon's Souls NOTES fix 58). GCM_LEGACY_STATE=1 = feed it everything again. */
++    extern int rsx_live_draw_ready(void);
++    static int s_legacy_force = -1;
++    if (s_legacy_force < 0) { const char* e = getenv("GCM_LEGACY_STATE"); s_legacy_force = (e && *e == '1') ? 1 : 0; }
++    const int legacy_state_live = s_rsx_trace ||
++        ((s_legacy_force || !rsx_live_draw_ready()) && (rsx_get_backend() != NULL || !rsx_draw_engine_enabled()));
+ 
+ 
+     /* Walk the FIFO exactly like the RSX: chase the guest-written `put` (an IO
+@@ -2183,7 +2355,36 @@ static void gcm_rsx_process_fifo_unlocked(void)
       * short of `put` every tick is the signature of a FIFO that can never
       * catch up, and the reason is the whole diagnosis. */
      const char* why = "caught-up";
@@ -2053,7 +2142,7 @@ index 298ee7d..b7e9159 100644
          u32 ea = gcm_io2ea(s_fifo_getoff);
          if (!ea) {
              /* get is sitting on an IO offset with no mapping -- the title
-@@ -2303,6 +2495,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2303,6 +2504,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
              if (PS3_FT_ON()) { const uint64_t t = ps3_ft_now();
                                 ps3_ft_span(PS3_FT_FLIP_FIFO, 0, w & 7u, 0, t, t); }
              if ((w & 0xFFFFFF00u) == GCM_FLIP_MARKER) {
@@ -2061,7 +2150,7 @@ index 298ee7d..b7e9159 100644
                  /* Queued by _cellGcmSetFlipCommand, which already did the
                   * guest-visible half of the request. */
                  gcm_set_current_display_buffer(w & 7u);
-@@ -2311,6 +2504,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2311,6 +2513,21 @@ static void gcm_rsx_process_fifo_unlocked(void)
                  /* Not past `queued`: a resync may already have written off
                   * this flip. */
                  if (s_fifo_flips_reached != s_fifo_flips_queued) s_fifo_flips_reached++;
@@ -2083,7 +2172,7 @@ index 298ee7d..b7e9159 100644
              } else {
                  cellGcmSetFlipCommand(w & 0xFFu);
              }
-@@ -2412,6 +2620,13 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2412,6 +2629,13 @@ static void gcm_rsx_process_fifo_unlocked(void)
              u32 count  = (w >> 18) & 0x7FF;
              u32 method = w & 0x1FFCu;
              u32 subch  = (w >> 13) & 7;
@@ -2097,7 +2186,7 @@ index 298ee7d..b7e9159 100644
              /* TCONST_FIFO=1: how the title actually streams vertex constants.
               * NV4097_SET_TRANSFORM_CONSTANT is a 32-register window; if a block
               * arrives NON-INCREMENTING then every dword carries the same method
-@@ -2840,8 +3055,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
+@@ -2840,8 +3064,15 @@ static void gcm_rsx_process_fifo_unlocked(void)
           * overruns first, so the first overrun is recycled by the path above
           * and near-end recycling is enabled from then on. */
          static int s_title_overran = 0;
@@ -2113,7 +2202,7 @@ index 298ee7d..b7e9159 100644
          if (begin && end > begin && cur >= begin && cur + GCM_RECYCLE_SLACK >= end
                  && head_consumed && s_title_overran) {
              u32 io_begin = gcm_ea2io(begin);
-@@ -3099,12 +3321,16 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -3099,12 +3330,16 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
          return CELL_GCM_ERROR_INVALID_VALUE;
  
  
@@ -2131,7 +2220,7 @@ index 298ee7d..b7e9159 100644
          s_flip_direct_pending = 1;
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
-@@ -3256,6 +3482,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
+@@ -3256,6 +3491,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
      s_flip_handler = handler;
      { u32 c = s_flip_handler_opd ? vm_read32(s_flip_handler_opd) : 0; if (c) s_flip_handler_code = c; }
      gcm_update_handler_mask();
@@ -2139,7 +2228,7 @@ index 298ee7d..b7e9159 100644
  }
  
  /* NID: 0xA547ADDE */
-@@ -3266,6 +3493,7 @@ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler)
+@@ -3266,6 +3502,7 @@ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler)
      s_vblank_handler = handler;
      { u32 c = s_vblank_handler_opd ? vm_read32(s_vblank_handler_opd) : 0; if (c) s_vblank_handler_code = c; }
      gcm_update_handler_mask();
@@ -2147,7 +2236,7 @@ index 298ee7d..b7e9159 100644
  }
  
  /* NID: 0xF9BFCDA3 */
-@@ -3753,7 +3981,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
+@@ -3753,7 +3990,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
  u32 cellGcmGetReport(u32 type, u32 index)
  {
      { static unsigned n = 0;   /* unsigned: the periodic line keeps counting, and wrapping is defined */
@@ -2323,10 +2412,10 @@ index e55bcc1..5a0e68d 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 2579117..9455073 100644
+index 2579117..5d8b31f 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
-@@ -1,10554 +1,12926 @@
+@@ -1,10554 +1,13021 @@
 -/*
 - * ps3recomp - Track B live NV4097 draw path (implementation)
 - *
@@ -9988,6 +10077,7 @@ index 2579117..9455073 100644
 +#define WIN32_LEAN_AND_MEAN
 +#endif
 +#include <windows.h>
++#include <tlhelp32.h>   /* perf_thread_cpu */
 +#include <initguid.h>
 +#include <d3d12.h>
 +#include <d3d12sdklayers.h>
@@ -10012,7 +10102,17 @@ index 2579117..9455073 100644
 + * Engine state (module-static; single live RSX)
 + * -----------------------------------------------------------------------*/
 +
-+#define LD_SWAP_BUFFERS  2
++/* RTV slots reserved for the swap chain (the surface cache's RTVs follow them). How many buffers the
++ * swap chain really has: ld_swap_count() -- 3 by default, LD_SWAP_COUNT=2 the old two (Demon's Souls
++ * NOTES fix 58: with two, the next frame's submits queued behind a swap copy waiting for the display
++ * after every catch-up pair). */
++#define LD_SWAP_BUFFERS  3
++static u32 ld_swap_count(void)
++{
++    static u32 n;
++    if (!n) { const char* e = getenv("LD_SWAP_COUNT"); n = (e && *e == '2') ? 2 : 3; }
++    return n;
++}
 +#define MAX_SURFACES     64
 +#define MAX_TEXTURES     1024
 +#define MAX_RETIRED_TEXTURES 4096
@@ -11163,6 +11263,10 @@ index 2579117..9455073 100644
 +/* ---------------------------------------------------------------------------
 + * enable gate
 + * -----------------------------------------------------------------------*/
++/* The engine is up and drawing (its device, lists and swap chain exist). cellGcmSys.c then stops
++ * feeding the legacy rsx_state (Demon's Souls NOTES fix 58). */
++int rsx_live_draw_ready(void) { return g.ready; }
++
 +int rsx_live_draw_enabled(void)
 +{
 +    static int cached = -1;
@@ -15090,9 +15194,89 @@ index 2579117..9455073 100644
 +        n_this_step++; next_at = now + 4000;
 +    }
 +}
++/* Per-thread CPU for the perf log (Demon's Souls NOTES fix 58): once a second
++ * "# <us> thr <process %> <name>=<%> ..." -- the busiest host threads by name (ps3_thread_name:
++ * "ppu HighGraphics", "spu ...", the renderer), % of one core over that second, from
++ * QueryThreadCycleTime. A stretch of late frames then says which thread was saturated and which
++ * sat waiting. Threads that started and ended within the second are not seen. DES_PERF_THREADS=0
++ * = off. */
++static DWORD WINAPI perf_thread_cpu(LPVOID unused)
++{
++    (void)unused;
++    typedef HRESULT (WINAPI *get_desc_fn)(HANDLE, PWSTR*);
++    const get_desc_fn get_desc = (get_desc_fn)(void*)GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription");
++    enum { MAXT = 512 };
++    static struct { DWORD tid; ULONG64 cyc; char name[40]; int seen; } tab[MAXT];
++    int nt = 0;
++    const DWORD pid = GetCurrentProcessId();
++    const unsigned long long c0 = __rdtsc(), q0 = ps3_qpc_us();
++    Sleep(50);
++    const double tsc_per_us = (double)(__rdtsc() - c0) / (double)(ps3_qpc_us() - q0);
++    unsigned long long last = ps3_qpc_us();
++    ULONG64 proc_last = 0; QueryProcessCycleTime(GetCurrentProcess(), &proc_last);
++    for (;;) {
++        Sleep(1000);
++        const unsigned long long now = ps3_qpc_us();
++        const double span = (double)(now - last) * tsc_per_us / 100.0;   /* cycles per 1% of a core */
++        last = now;
++        struct { char name[40]; double pct; } agg[64]; int na = 0;
++        for (int i = 0; i < nt; i++) tab[i].seen = 0;
++        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
++        if (snap == INVALID_HANDLE_VALUE) continue;
++        THREADENTRY32 te; te.dwSize = sizeof te;
++        for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
++            if (te.th32OwnerProcessID != pid) continue;
++            HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
++            if (!h) continue;
++            ULONG64 cyc = 0; QueryThreadCycleTime(h, &cyc);
++            int k = 0;
++            while (k < nt && tab[k].tid != te.th32ThreadID) k++;
++            if (k == nt && nt < MAXT) {
++                tab[nt].tid = te.th32ThreadID; tab[nt].cyc = cyc; tab[nt].name[0] = 0;
++                PWSTR w = NULL;
++                if (get_desc && SUCCEEDED(get_desc(h, &w)) && w) {
++                    int j = 0;
++                    for (; w[j] && j < 39; j++) tab[nt].name[j] = (w[j] == L' ' || w[j] > 126) ? '_' : (char)w[j];
++                    tab[nt].name[j] = 0; LocalFree(w); }
++                if (!tab[nt].name[0]) snprintf(tab[nt].name, sizeof tab[nt].name, "tid%lu", (unsigned long)te.th32ThreadID);
++                tab[nt].seen = 1; nt++; CloseHandle(h); continue;   /* new: counted from the next second */
++            }
++            CloseHandle(h);
++            if (k == nt) continue;
++            const double pct = (double)(cyc - tab[k].cyc) / span;
++            tab[k].cyc = cyc; tab[k].seen = 1;
++            int a = 0;
++            while (a < na && strcmp(agg[a].name, tab[k].name)) a++;
++            if (a == na && na < 64) { memcpy(agg[na].name, tab[k].name, 40); agg[na].pct = 0; na++; }
++            if (a < na) agg[a].pct += pct;
++        }
++        CloseHandle(snap);
++        /* threads gone since the last snapshot: drop them */
++        for (int i = 0; i < nt; ) { if (!tab[i].seen && tab[i].cyc) { tab[i] = tab[--nt]; } else i++; }
++        ULONG64 proc = 0; QueryProcessCycleTime(GetCurrentProcess(), &proc);
++        const double proc_pct = (double)(proc - proc_last) / span; proc_last = proc;
++        char line[1024]; int len = snprintf(line, sizeof line, "thr %.0f", proc_pct);
++        for (int shown = 0; shown < 10; shown++) {
++            int best = -1;
++            for (int a = 0; a < na; a++) if (agg[a].pct >= 2.0 && (best < 0 || agg[a].pct > agg[best].pct)) best = a;
++            if (best < 0) break;
++            len += snprintf(line + len, sizeof line - len, " %s=%.0f", agg[best].name, agg[best].pct);
++            agg[best].pct = -1.0;
++            if (len >= (int)sizeof line - 64) break;
++        }
++        ps3_perf_note("%s", line);
++    }
++    return 0;
++}
++
 +void ps3_perf_step_begin(void)
 +{
-+    static int started;
++    static int started, thr_started;
++    if (!thr_started) {
++        thr_started = 1;
++        const char* e = getenv("DES_PERF_THREADS");
++        if (!(e && *e == '0')) { HANDLE t = CreateThread(NULL, 0, perf_thread_cpu, NULL, 0, NULL); if (t) CloseHandle(t); }
++    }
 +    if (!perf_stacks_on()) return;
 +    if (!started) {
 +        started = 1;
@@ -23212,7 +23396,7 @@ index 2579117..9455073 100644
 +    DXGI_SWAP_CHAIN_DESC1 scd = {0};
 +    scd.Width = width; scd.Height = height; scd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 +    scd.SampleDesc.Count = 1; scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-+    scd.BufferCount = LD_SWAP_BUFFERS; scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
++    scd.BufferCount = ld_swap_count(); scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 +    IDXGISwapChain1* sc1 = NULL;
 +    if (FAILED(factory->lpVtbl->CreateSwapChainForHwnd(factory, (IUnknown*)g.queue,
 +            (HWND)hwnd, &scd, NULL, NULL, &sc1))) {
@@ -23223,13 +23407,13 @@ index 2579117..9455073 100644
 +    if (g.swap) ldvb_start();   /* NOTES fix 53 */
 +    factory->lpVtbl->Release(factory);
 +
-+    /* RTV heap: [0..1] backbuffers, [2..] surface cache */
++    /* RTV heap: [0..LD_SWAP_BUFFERS) backbuffers (ld_swap_count() of them used), then the surface cache */
 +    D3D12_DESCRIPTOR_HEAP_DESC hd = {0};
 +    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 +    hd.NumDescriptors = LD_SWAP_BUFFERS + MAX_SURFACES;
 +    g.dev->lpVtbl->CreateDescriptorHeap(g.dev, &hd, &IID_ID3D12DescriptorHeap, (void**)&g.rtv_heap);
 +    g.rtv_step = g.dev->lpVtbl->GetDescriptorHandleIncrementSize(g.dev, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-+    for (u32 i = 0; i < LD_SWAP_BUFFERS; i++) {
++    for (u32 i = 0; i < ld_swap_count(); i++) {
 +        g.swap->lpVtbl->GetBuffer(g.swap, i, &IID_ID3D12Resource, (void**)&g.backbuf[i]);
 +        g.dev->lpVtbl->CreateRenderTargetView(g.dev, g.backbuf[i], NULL, rtv_handle(i));
 +    }
@@ -25939,31 +26123,10 @@ index 8507deb..a6a6edb 100644
  #define RSX_VERTEX_TYPE_SF             3  /* half-float (float16) */
  #define RSX_VERTEX_TYPE_UB             4  /* unsigned byte */
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
-index f73907c..7d273f8 100644
+index f73907c..37b3db0 100644
 --- a/runtime/ppu/ppu_fs.cpp
 +++ b/runtime/ppu/ppu_fs.cpp
-@@ -262,10 +262,20 @@ static DIR* fd_dir(int fd)
- }
- 
- /* ---- handlers ---- */
-+/* The last map collision file opened (".../map/mAA_BB_CC_DD/mAA_BB_CC_DD.mcp" -> "AA,BB"): which
-+ * Demon's Souls world the player is in (one .mcp per loaded map -- Boletaria's blocks share m02_00,
-+ * while every layout of the world loads alongside) for the perf log's "pos" lines (DemonsSouls
-+ * NOTES fix 57; the block comes from the game's own GetBlockId). */
-+static char g_fs_last_map[8];
-+extern "C" const char* ps3_fs_last_map(void) { return g_fs_last_map; }
-+
- static void cellFsOpen(ppu_context* ctx)
- {
-     char gpath[1024], hpath[1100];
-     guest_strcpy(gpath, (uint32_t)ctx->gpr[3], sizeof gpath);
-+    { const char* m = strstr(gpath, "/map/m"); const size_t L = strlen(gpath);
-+      if (m && L > 4 && strcmp(gpath + L - 4, ".mcp") == 0 && m[8] == '_')
-+          snprintf(g_fs_last_map, sizeof g_fs_last_map, "%.2s,%.2s", m + 6, m + 9); }
-     uint32_t flags  = (uint32_t)ctx->gpr[4];
-     uint32_t fd_ptr = (uint32_t)ctx->gpr[5];
-     host_path(hpath, sizeof hpath, gpath);
-@@ -473,6 +483,18 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
+@@ -473,6 +473,18 @@ static inline void fs_prefault(uint32_t buf, uint64_t len)
      p[len - 1] = p[len - 1];
  }
  
@@ -25982,7 +26145,7 @@ index f73907c..7d273f8 100644
  static void cellFsRead(ppu_context* ctx)
  {
      int fd          = (int)(uint32_t)ctx->gpr[3];
-@@ -486,7 +508,9 @@ static void cellFsRead(ppu_context* ctx)
+@@ -486,7 +498,9 @@ static void cellFsRead(ppu_context* ctx)
      if (ppu_vm_size && (uint64_t)buf + nbytes > ppu_vm_size) nbytes = ppu_vm_size - buf;
      fs_prefault(buf, nbytes);
      fs_set_dir(fd, f, 1);
@@ -25992,7 +26155,7 @@ index f73907c..7d273f8 100644
      /* PS3_FSLOG_EOF=<fd>,<bytes>: report end-of-file past <bytes> on one descriptor.
       * The intro cinematic is 28 seconds and this port renders it at a few frames
       * a second, so it cannot be watched to its end -- truncating the stream makes
-@@ -961,12 +985,14 @@ static void cellFsAioRead(ppu_context* ctx)
+@@ -961,12 +975,14 @@ static void cellFsAioRead(ppu_context* ctx)
           * could land between the two, and the next cellFsRead continued from
           * wherever the AIO stopped. Hold the stream lock across seek, read
           * and the seek back (stdio's own calls take the same lock). */
