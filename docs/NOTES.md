@@ -1131,6 +1131,50 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       57 DDS RGBA8 / BC1 with mips, nested folders) fully replaced, 49.3 fps, worst present 219 ms
       (as without, 194-226).
     - PLAY_DUMP_TEXTURES.bat (sets LD_TEX_DUMP=1); textures\README.txt.
+61. **Model export / import: tools/flver_tool.py + tools/souls_formats.py (2026-11-01, asked for on Reddit):**
+    - Standard library only. souls_formats.py: DCX (EDGE / DFLT / bare DCP-DFLT) read + write, BND3, FLVER0,
+      PS3 TPF + BC1-3 / ARGB8 decode, PNG writer. Every reader keeps what it does not interpret, and all
+      5454 FLVERs and 1781 BND3 archives in the game read and write back byte for byte (selftest).
+    - FLVER0 facts (checked on the game's data): big-endian v0x15; mesh header 0x64; materials own their
+      texture tables + buffer layouts; meshes with vertex-buffer offset 0 (some characters) have one
+      implicit buffer; triangle strips with 0xFFFF restart; game winding = cross(b-a, c-a) opposite the
+      normal (1535 of 1537 meshes) -> mirroring X for glTF lands on glTF's CCW rule; skinned (dynamic=1)
+      vertices are in model space, rigid (dynamic=0) ones in their OWN bone's space (table[bone byte]);
+      the mesh "default bone" is a GLOBAL bone (the model's own node bone on skinned parts, e.g.
+      bd_f_5010 -> 91 'BD_F_5010'; 0 = root on map pieces) -- import keeps it; bone local = T*Ry*Rz*Rx*S; UVs
+      short/1024; normals byte (b-127)/127 with W byte 127; tangent = dP/dv with w = -UV handedness
+      (21908 of 21934 vertices); vertex colour RGBA bytes; header 0x40 = non-degenerate triangles.
+    - export: glTF + .bin + textures\*.png (diffuse / normal from the model's own TPF, a .tpf beside it,
+      or the area's MAP\mXX\*.tpf), skeleton as joint nodes WITHOUT bone scale (Blender's rest pose
+      cannot hold it; vertices still placed with the real scaled matrices), IBM = inverse joint world,
+      every vertex skinned (rigid ones weight 1 to their bone), meshes named m00_<material>, unique
+      material names (#index) + extras.flver_material.
+    - import: model-space positions = sum w * (joint world * IBM) * p from the glTF itself (so Blender's
+      bone re-orientation does not matter), mirrored back; rigid meshes back into their bone's space;
+      per-mesh bone tables rebuilt, >28 bones or >65535 vertices split; strips rebuilt greedily
+      (triangles_to_strip, fewer indices and restarts than the game's own); tangents rebuilt in game
+      convention; colour alpha (Blender drops it) / missing colours from the nearest original vertex
+      (then normal, then UV); inside-out primitives (mirrored objects, skinned or not) flipped by a
+      face-normal vote; unskinned objects rigid to their nearest bone ancestor; faces with another of
+      the model's materials go to a mesh in the file using it (never one left out); bounds grow only. Writes into game_mod\ (hard links to game\, .links_complete marker; files are unlinked
+      before writing, and a realpath guard refuses anything in game\); an already-modded copy is the base
+      (other FLVERs in the archive / PC Remaster files kept); the loose and .dcx twins both written; a
+      note for the _l / l1 low-detail twin. PLAY_MODDED.bat runs game_mod;
+      models\README.txt for modders.
+    - THE LOAD HANG: the game's DCX reader skips h[0x14] - (h[0x10] + DCA size) bytes before the block
+      data (unit_00AFF944). The first writer left 0x14 stale, so any import whose payload crossed a 64 KB
+      block boundary hung the map loader on the loading screen (bisected in game: same-size variant loads
+      112 map files, resized variant stops after 7). dcx_compress now writes 0x14 = 0x10 + DCA size and
+      DCS csize = block data only, as every game file; selftest checks a grown and a shrunk rewrite.
+    - Tests: Blender 4.5 headless (scripted import, render, edit, default GLB export): o2455, c1040, m2501b0, wp_a_0256, bd_m_0000, m4000b0, bd_f_5010 back with 0.0000 position
+      error (scaled-bone models were off by up to 1.26 before the skeleton fix). In game (a test copy
+      via DES_GAME): all 140 Palace map pieces re-imported + Blender-inflated body
+      armour (skins and animates) + 1.8x shield + a new cube in a map piece: loads, 49.7 fps.
+    - Three agent review rounds (findings checked by skeptics, real Blender round trips) found the DCX
+      field, bone scale, tangent convention, guard, multi-FLVER overwrite, alpha (exact through Blender
+      now: 0 of 36k map vertices wrong), duplicate materials, mirrored objects, Draco, default bone,
+      material routing, quadratic splits -- all fixed. Full selftest: 6485 files byte for byte, DCX
+      resize OK, 40 models export -> import with 0.00000 position error.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

@@ -72,6 +72,7 @@ Double-click **`PLAY.bat`**. The logos and first load take about a minute.
 | `PLAY_CHOOSE_FPS.bat` | a menu of the above, plus **any frame rate you type in** (31–240) |
 | `PLAY_REMASTER.bat` | runs with the *PC Remaster* mod installed (see below) |
 | `PLAY_DUMP_TEXTURES.bat` | saves every texture the game draws, for texture packs (see below) |
+| `PLAY_MODDED.bat` | runs your imported models (see *model import/export* below) |
 
 **Custom frame rate.** `PLAY_CHOOSE_FPS.bat` → *6* → type a number, e.g. 45, 72, 120 or 144. The game
 runs at real speed at any of them. If your monitor's refresh rate is a whole multiple of the number
@@ -154,9 +155,28 @@ Textures can be replaced without unpacking any game files, at any resolution:
 3. Start any launcher. Replacements load in the background; `.dds` files (DXT1/3/5, BC7, BC4 or 32-bit
    RGBA, with or without mipmaps) load faster and use less video memory than PNG.
 
-Details and settings: `textures\README.txt`. Cubemaps (reflections) are not covered; models are file
-mods (see the PC Remaster section). Packs are made from the game's art -- share them only where that
-is allowed.
+Details and settings: `textures\README.txt`. Cubemaps (reflections) are not covered; for models see
+the next section. Packs are made from the game's art -- share them only where that is allowed.
+
+## Optional: model import/export
+
+Armour, weapons, characters, objects and map pieces can be exported to glTF, edited in Blender (or
+anything that reads and writes glTF 2.0) and imported back:
+
+```
+.venv\Scripts\python tools\flver_tool.py export game\PS3_GAME\USRDIR\PARTS\bd_f_5010.partsbnd.dcx
+  -> models\BD_F_5010\BD_F_5010.gltf (+ .bin and the textures as PNG)
+  ... Blender: File > Import > glTF 2.0, edit, File > Export > glTF 2.0 (.glb is fine) ...
+.venv\Scripts\python tools\flver_tool.py import models\BD_F_5010\edited.glb game\PS3_GAME\USRDIR\PARTS\bd_f_5010.partsbnd.dcx
+```
+
+Import writes `game_mod\`, a copy of `game\` made of hard links (no extra disk space); `game\` is
+never changed. Play it with `PLAY_MODDED.bat`; delete `game_mod\` to undo everything. Shape, UVs,
+vertex colours and bone weights come from your file; materials, textures, skeleton, collision and
+animations stay the game's (change textures with texture packs). Edit the `_l` low-detail copy too,
+or the old shape shows from far away. Which file holds what and the rules: `models\README.txt`.
+`flver_tool.py selftest` checks every model in your game reads and writes back byte for byte.
+Exported models are the game's art -- share them only where that is allowed.
 
 ## Repo layout
 
@@ -170,7 +190,8 @@ patches/ps3recomp-local.patch   this port's changes to the ps3recomp runtime/ren
                                 ps3recomp @ 4e8f3ca, v0.18.0)
 patches/lifted-code.patch    this port's edits to the recompiled game code (frame pacing, 60 fps
                              step, god mode, test hooks)
-tools/                       disc extraction, UDF names, SPURS job lifting, perf report + issue zip, mod installer
+tools/                       disc extraction, UDF names, SPURS job lifting, perf report + issue zip, mod installer,
+                             model export/import (flver_tool.py, souls_formats.py)
 docs/NOTES.md                development log: every fix, why, and how it was measured
 ```
 

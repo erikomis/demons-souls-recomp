@@ -1,6 +1,7 @@
 # Everything below comes from YOUR copy of the game or is built from it -- never commit it.
 /game/
 /game_remaster/
+/game_mod/
 /port/
 /deps/
 /hdd0/
@@ -12,6 +13,8 @@
 /captures/
 /textures/dump/
 /textures/replace/
+/models/*
+!/models/README.txt
 /.venv/
 /setup/local_config.json
 *.iso
