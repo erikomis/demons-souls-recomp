@@ -1761,7 +1761,7 @@ index c4eb87d..d924140 100644
  
  /* Dialog and other one-shot completions carry their own OPD, rather than a
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index 298ee7d..dee4823 100644
+index 298ee7d..63f6552 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
 @@ -354,6 +354,10 @@ static CellGcmReportData s_report_data[CELL_GCM_MAX_REPORT_COUNT];
@@ -2202,7 +2202,7 @@ index 298ee7d..dee4823 100644
          if (begin && end > begin && cur >= begin && cur + GCM_RECYCLE_SLACK >= end
                  && head_consumed && s_title_overran) {
              u32 io_begin = gcm_ea2io(begin);
-@@ -3099,12 +3330,16 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
+@@ -3099,13 +3330,23 @@ static s32 gcm_flip_request(u32 bufferId, int in_fifo)
          return CELL_GCM_ERROR_INVALID_VALUE;
  
  
@@ -2218,9 +2218,16 @@ index 298ee7d..dee4823 100644
 +        MemoryBarrier();
 +        s_flip_pending = 1;   /* ticker: present BEFORE the next drain */
          s_flip_direct_pending = 1;
++        /* Wake the ticker now (Demon's Souls NOTES fix 62): it otherwise saw the flag only at its
++         * next idle wake, up to 4 ms later -- Present came ~3.9 ms after every flip, and a frame
++         * the game finished a little late then missed its refresh. LD_FLIP_KICK=0 = old. */
++        { static int kick = -1;
++          if (kick < 0) { const char* e = getenv("LD_FLIP_KICK"); kick = !(e && *e == '0'); }
++          if (kick && s_gcm_kick_ev) SetEvent(s_gcm_kick_ev); }
      }
      /* Flip requested but not yet shown: a subsequent cellGcmSetWaitFlip blocks
-@@ -3256,6 +3491,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
+      * until the present thread's cellGcmTickFlip marks it done (vsync). */
+@@ -3256,6 +3497,7 @@ void cellGcmSetFlipHandler(CellGcmFlipHandler handler)
      s_flip_handler = handler;
      { u32 c = s_flip_handler_opd ? vm_read32(s_flip_handler_opd) : 0; if (c) s_flip_handler_code = c; }
      gcm_update_handler_mask();
@@ -2228,7 +2235,7 @@ index 298ee7d..dee4823 100644
  }
  
  /* NID: 0xA547ADDE */
-@@ -3266,6 +3502,7 @@ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler)
+@@ -3266,6 +3508,7 @@ void cellGcmSetVBlankHandler(CellGcmVBlankHandler handler)
      s_vblank_handler = handler;
      { u32 c = s_vblank_handler_opd ? vm_read32(s_vblank_handler_opd) : 0; if (c) s_vblank_handler_code = c; }
      gcm_update_handler_mask();
@@ -2236,7 +2243,7 @@ index 298ee7d..dee4823 100644
  }
  
  /* NID: 0xF9BFCDA3 */
-@@ -3753,7 +3990,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
+@@ -3753,7 +3996,7 @@ CellGcmReportData* cellGcmGetReportDataAddress(u32 index)
  u32 cellGcmGetReport(u32 type, u32 index)
  {
      { static unsigned n = 0;   /* unsigned: the periodic line keeps counting, and wrapping is defined */
@@ -2412,10 +2419,10 @@ index e55bcc1..5a0e68d 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 2579117..6c1ffaf 100644
+index 2579117..b8b1741 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
-@@ -1,10554 +1,13375 @@
+@@ -1,10554 +1,14043 @@
 -/*
 - * ps3recomp - Track B live NV4097 draw path (implementation)
 - *
@@ -10278,7 +10285,8 @@ index 2579117..6c1ffaf 100644
 +    u64 content_hash;
 +    u32 last_hash_frame;
 +} vtexcache_t;
-+typedef struct { u64 key; ID3D12PipelineState* pso; } psocache_t;
++struct ld_pso_job;
++typedef struct { u64 key; ID3D12PipelineState* pso; struct ld_pso_job* job; } psocache_t;   /* job: being built (fix 62) */
 +typedef struct {
 +    u64 hash;
 +    u32 source_length;
@@ -12350,6 +12358,185 @@ index 2579117..6c1ffaf 100644
 +
 +typedef struct { u32 w, h; const u8* data; u32 row_bytes, rows; } tex_level_t;
 +
++/* Texture creation per frame, for the perf log ("texc <textures> <ms>", NOTES fix 62): arriving
++ * somewhere new creates dozens at once, and each CreateCommittedResource is a driver allocation. */
++extern unsigned long long ps3_qpc_us(void);
++
++/* ---------------------------------------------------------------------------
++ * Guest textures in large heaps (Demon's Souls NOTES fix 63).
++ *
++ * Each CreateCommittedResource is its own driver allocation, ~0.37 ms; arriving in Boletaria 1-1
++ * and running into the first soldiers created ~200 textures in a few frames (one 95 ms frame,
++ * ~70 ms of it this). Now textures are placed resources in LD_TEX_HEAP_MB (default 64) MB heaps:
++ * one heap allocation serves hundreds of textures and CreatePlacedResource is cheap.
++ *
++ * Freeing: textures are already released only after the GPU is done with them (retire list +
++ * fence), so a block can be reused once its resource is destroyed. Each placed texture carries a
++ * private-data object (SetPrivateDataInterface); D3D12 releases it when the resource dies, and its
++ * last Release returns the block -- no release site had to change. A texture whose mips would not
++ * all fit in the upload ring (the copy loop stops there) stays committed, so placed memory is
++ * always fully written before use. LD_TEX_PLACED=0 = committed for every texture, as before.
++ * ------------------------------------------------------------------------*/
++#define TEXH_UNIT 4096u                          /* allocation granule (small-resource alignment) */
++typedef struct { u32 off, len; } texh_ext_t;     /* in units */
++typedef struct {
++    ID3D12Heap* heap;
++    u32 units;
++    texh_ext_t* free;                            /* sorted by off, coalesced */
++    u32 n_free, cap_free;
++} texh_t;
++static texh_t g_texh[64];
++static u32 g_n_texh;
++static SRWLOCK g_texh_lock = SRWLOCK_INIT;
++static int g_texh_on = -1;
++static u32 g_texh_mb = 64;
++static unsigned long long g_texh_placed, g_texh_fallback;
++static volatile LONG64 g_texh_freed;
++
++static int texh_alloc_in(texh_t* h, u32 len, u32 align, u32* out)
++{
++    for (u32 i = 0; i < h->n_free; i++) {
++        texh_ext_t* e = &h->free[i];
++        const u32 start = (e->off + align - 1) / align * align;
++        if (start + len > e->off + e->len) continue;
++        const u32 end = start + len, e_end = e->off + e->len;
++        if (start == e->off && end == e_end) {                      /* whole extent */
++            memmove(e, e + 1, (h->n_free - i - 1) * sizeof *e); h->n_free--;
++        } else if (start == e->off) { e->off = end; e->len = e_end - end; }
++        else if (end == e_end) { e->len = start - e->off; }
++        else {                                                       /* split in two */
++            if (h->n_free == h->cap_free) {
++                texh_ext_t* nf = (texh_ext_t*)realloc(h->free, (h->cap_free * 2) * sizeof *nf);
++                if (!nf) return 0;
++                h->free = nf; h->cap_free *= 2; e = &h->free[i];
++            }
++            memmove(e + 2, e + 1, (h->n_free - i - 1) * sizeof *e); h->n_free++;
++            h->free[i + 1].off = end; h->free[i + 1].len = e_end - end;
++            e->len = start - e->off;
++        }
++        *out = start;
++        return 1;
++    }
++    return 0;
++}
++
++static void texh_free(u32 hi, u32 off, u32 len)
++{
++    AcquireSRWLockExclusive(&g_texh_lock);
++    texh_t* h = &g_texh[hi];
++    u32 i = 0;
++    while (i < h->n_free && h->free[i].off < off) i++;
++    const int join_prev = i > 0 && h->free[i - 1].off + h->free[i - 1].len == off;
++    const int join_next = i < h->n_free && off + len == h->free[i].off;
++    if (join_prev && join_next) {
++        h->free[i - 1].len += len + h->free[i].len;
++        memmove(&h->free[i], &h->free[i + 1], (h->n_free - i - 1) * sizeof h->free[0]); h->n_free--;
++    } else if (join_prev) h->free[i - 1].len += len;
++    else if (join_next) { h->free[i].off = off; h->free[i].len += len; }
++    else {
++        if (h->n_free == h->cap_free) {
++            texh_ext_t* nf = (texh_ext_t*)realloc(h->free, (h->cap_free * 2) * sizeof *nf);
++            if (!nf) { ReleaseSRWLockExclusive(&g_texh_lock); return; }   /* leak the block */
++            h->free = nf; h->cap_free *= 2;
++        }
++        memmove(&h->free[i + 1], &h->free[i], (h->n_free - i) * sizeof h->free[0]); h->n_free++;
++        h->free[i].off = off; h->free[i].len = len;
++    }
++    ReleaseSRWLockExclusive(&g_texh_lock);
++}
++
++/* The private-data object: its last Release (when D3D12 destroys the texture) frees the block. */
++typedef struct texh_tag { const struct texh_tag_vtbl* vt; volatile LONG ref; u32 hi, off, len; } texh_tag_t;
++typedef struct texh_tag_vtbl {
++    HRESULT (STDMETHODCALLTYPE* QueryInterface)(texh_tag_t*, REFIID, void**);
++    ULONG (STDMETHODCALLTYPE* AddRef)(texh_tag_t*);
++    ULONG (STDMETHODCALLTYPE* Release)(texh_tag_t*);
++} texh_tag_vtbl;
++static HRESULT STDMETHODCALLTYPE texh_tag_qi(texh_tag_t* t, REFIID iid, void** out)
++{
++    if (IsEqualIID(iid, &IID_IUnknown)) { *out = t; InterlockedIncrement(&t->ref); return S_OK; }
++    *out = NULL; return E_NOINTERFACE;
++}
++static ULONG STDMETHODCALLTYPE texh_tag_addref(texh_tag_t* t) { return (ULONG)InterlockedIncrement(&t->ref); }
++static ULONG STDMETHODCALLTYPE texh_tag_release(texh_tag_t* t)
++{
++    const LONG r = InterlockedDecrement(&t->ref);
++    if (r == 0) { texh_free(t->hi, t->off, t->len); free(t); InterlockedIncrement64(&g_texh_freed); }
++    return (ULONG)r;
++}
++static const texh_tag_vtbl g_texh_tag_vtbl = { texh_tag_qi, texh_tag_addref, texh_tag_release };
++/* {6A0E8F31-3C5B-4C1D-9B7E-62D0F3A9C541} */
++static const GUID g_texh_guid = { 0x6a0e8f31, 0x3c5b, 0x4c1d, { 0x9b, 0x7e, 0x62, 0xd0, 0xf3, 0xa9, 0xc5, 0x41 } };
++
++/* A texture placed in a heap, or NULL (caller makes it committed). Renderer thread only. */
++static ID3D12Resource* texh_create(D3D12_RESOURCE_DESC* rd)
++{
++    if (g_texh_on < 0) {
++        const char* e = getenv("LD_TEX_PLACED"); g_texh_on = !(e && *e == '0');
++        const char* m = getenv("LD_TEX_HEAP_MB"); if (m && atoi(m) >= 8) g_texh_mb = (u32)atoi(m);
++    }
++    if (!g_texh_on) return NULL;
++    rd->Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT;
++    D3D12_RESOURCE_ALLOCATION_INFO ai;
++    g.dev->lpVtbl->GetResourceAllocationInfo(g.dev, &ai, 0, 1, rd);
++    if (ai.Alignment != D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT) {     /* not small: 64 KB */
++        rd->Alignment = 0;
++        g.dev->lpVtbl->GetResourceAllocationInfo(g.dev, &ai, 0, 1, rd);
++    }
++    if (ai.SizeInBytes == UINT64_MAX || ai.SizeInBytes > (u64)g_texh_mb * 1024 * 1024 / 4) {
++        rd->Alignment = 0; g_texh_fallback++; return NULL;              /* huge: own allocation */
++    }
++    const u32 len = (u32)((ai.SizeInBytes + TEXH_UNIT - 1) / TEXH_UNIT);
++    const u32 align = (u32)(ai.Alignment / TEXH_UNIT);
++    u32 hi = 0, off = 0; int got = 0;
++    AcquireSRWLockExclusive(&g_texh_lock);
++    for (hi = 0; hi < g_n_texh && !got; ) { if (texh_alloc_in(&g_texh[hi], len, align ? align : 1, &off)) got = 1; else hi++; }
++    if (!got && g_n_texh < sizeof g_texh / sizeof g_texh[0]) {
++        D3D12_HEAP_DESC hd = {0};
++        hd.SizeInBytes = (u64)g_texh_mb * 1024 * 1024;
++        hd.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
++        hd.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
++        hd.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
++        texh_t* h = &g_texh[g_n_texh];
++        const unsigned long long t0 = ps3_qpc_us();
++        if (SUCCEEDED(g.dev->lpVtbl->CreateHeap(g.dev, &hd, &IID_ID3D12Heap, (void**)&h->heap))) {
++            h->units = (u32)(hd.SizeInBytes / TEXH_UNIT);
++            h->cap_free = 64; h->free = (texh_ext_t*)malloc(h->cap_free * sizeof *h->free);
++            if (h->free) {
++                h->free[0].off = 0; h->free[0].len = h->units; h->n_free = 1;
++                fprintf(stderr, "[tex-heap] heap %u: %u MB (%.1f ms); so far %llu placed, %llu freed\n",
++                        g_n_texh, g_texh_mb, (ps3_qpc_us() - t0) / 1000.0,
++                        g_texh_placed, (unsigned long long)g_texh_freed);
++                hi = g_n_texh++;
++                got = texh_alloc_in(h, len, align ? align : 1, &off);
++            } else { h->heap->lpVtbl->Release(h->heap); h->heap = NULL; }
++        } else {
++            g_texh_on = 0;
++            fprintf(stderr, "[tex-heap] CreateHeap failed: committed textures from now on\n");
++        }
++    }
++    ReleaseSRWLockExclusive(&g_texh_lock);
++    if (!got) { rd->Alignment = 0; g_texh_fallback++; return NULL; }
++    ID3D12Resource* tex = NULL;
++    if (FAILED(g.dev->lpVtbl->CreatePlacedResource(g.dev, g_texh[hi].heap, (u64)off * TEXH_UNIT, rd,
++                                                   D3D12_RESOURCE_STATE_COPY_DEST, NULL,
++                                                   &IID_ID3D12Resource, (void**)&tex))) {
++        texh_free(hi, off, len); rd->Alignment = 0; g_texh_fallback++; return NULL;
++    }
++    texh_tag_t* tag = (texh_tag_t*)malloc(sizeof *tag);
++    if (!tag) { tex->lpVtbl->Release(tex); texh_free(hi, off, len); rd->Alignment = 0; return NULL; }
++    tag->vt = &g_texh_tag_vtbl; tag->ref = 1; tag->hi = hi; tag->off = off; tag->len = len;
++    if (FAILED(tex->lpVtbl->SetPrivateDataInterface(tex, &g_texh_guid, (const IUnknown*)tag))) {   /* AddRefs */
++        tex->lpVtbl->Release(tex); free(tag); texh_free(hi, off, len);
++        rd->Alignment = 0; g_texh_fallback++; return NULL;
++    }
++    texh_tag_release(tag);   /* now owned by the resource */
++    g_texh_placed++;
++    return tex;
++}
++static u32 g_ld_frame_texc_n;
++static unsigned long long g_ld_frame_texc_us;
++
 +static ID3D12Resource* create_texture_mipped(DXGI_FORMAT fmt, const tex_level_t* lv, u32 n)
 +{
 +    if (n == 0) return NULL;
@@ -12359,9 +12546,34 @@ index 2579117..6c1ffaf 100644
 +    rd.Width = lv[0].w; rd.Height = lv[0].h; rd.DepthOrArraySize = 1;
 +    rd.MipLevels = (u16)n; rd.Format = fmt; rd.SampleDesc.Count = 1;
 +    ID3D12Resource* tex = NULL;
-+    if (FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
-+                                                      D3D12_RESOURCE_STATE_COPY_DEST, NULL,
-+                                                      &IID_ID3D12Resource, (void**)&tex)))
++    const unsigned long long tc0 = ps3_qpc_us();
++    /* Placed in a heap (fix 63) when every level fits in the upload ring now -- the copy loop stops
++     * at a full ring, and placed memory is not cleared, so it must be written completely. */
++    int fits = 1;
++    { u64 at = g.upload_used;
++      for (u32 m = 0; m < n; m++) {
++          at = (at + 511) & ~(u64)511;
++          at += (u64)((lv[m].row_bytes + 255) & ~255u) * lv[m].rows;
++      }
++      fits = at <= UPLOAD_SIZE;
++      for (u32 m = 1; m < n && fits; m++) {
++          const u32 dw = lv[0].w >> m ? lv[0].w >> m : 1, dh = lv[0].h >> m ? lv[0].h >> m : 1;
++          if (lv[m].w < dw || lv[m].h < dh) fits = 0;   /* copy would leave part of it unwritten */
++      } }
++    HRESULT chr = S_OK;
++    if (fits) tex = texh_create(&rd);
++    if (tex) {   /* reused heap memory: tell the GPU the old occupant is gone */
++        D3D12_RESOURCE_BARRIER ab = {0};
++        ab.Type = D3D12_RESOURCE_BARRIER_TYPE_ALIASING;
++        ab.Aliasing.pResourceAfter = tex;
++        g.list->lpVtbl->ResourceBarrier(g.list, 1, &ab);
++    } else
++        chr = g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
++                                                     D3D12_RESOURCE_STATE_COPY_DEST, NULL,
++                                                     &IID_ID3D12Resource, (void**)&tex);
++    g_ld_frame_texc_n++;
++    g_ld_frame_texc_us += ps3_qpc_us() - tc0;
++    if (FAILED(chr))
 +        return NULL;
 +    for (u32 m = 0; m < n; m++) {
 +        const u32 pitch = (lv[m].row_bytes + 255) & ~255u;
@@ -14954,6 +15166,14 @@ index 2579117..6c1ffaf 100644
 +        return 0;
 +
 +    g_ld_shader_disk_ready = 1;
++    { char pat[MAX_PATH], f[MAX_PATH]; WIN32_FIND_DATAA fd;   /* fix 62: half-written files of killed runs */
++      snprintf(pat, sizeof pat, "%s\\*.tmp.*", g_ld_shader_disk_dir);
++      HANDLE h = FindFirstFileA(pat, &fd);
++      if (h != INVALID_HANDLE_VALUE) {
++          do { snprintf(f, sizeof f, "%s\\%s", g_ld_shader_disk_dir, fd.cFileName); DeleteFileA(f); }
++          while (FindNextFileA(h, &fd));
++          FindClose(h);
++      } }
 +    fprintf(stderr, "[shader-disk-cache] enabled dir='%s' version=%u\n",
 +            g_ld_shader_disk_dir, SHADER_DISK_CACHE_VERSION);
 +    return 1;
@@ -14981,7 +15201,7 @@ index 2579117..6c1ffaf 100644
 +
 +    FILE* file = fopen(path, "rb");
 +    if (!file) {
-+        const u64 value = ++g_ld_shader_disk_misses[stage_index];
++        const u64 value = (u64)InterlockedIncrement64((volatile LONG64*)&g_ld_shader_disk_misses[stage_index]);
 +        shader_disk_cache_progress(value);
 +        return NULL;
 +    }
@@ -15016,14 +15236,70 @@ index 2579117..6c1ffaf 100644
 +            blob->lpVtbl->Release(blob);
 +        DeleteFileA(path);
 +        g_ld_shader_disk_rejects++;
-+        const u64 value = ++g_ld_shader_disk_misses[stage_index];
++        const u64 value = (u64)InterlockedIncrement64((volatile LONG64*)&g_ld_shader_disk_misses[stage_index]);
 +        shader_disk_cache_progress(value);
 +        return NULL;
 +    }
 +
-+    const u64 value = ++g_ld_shader_disk_hits[stage_index];
++    const u64 value = (u64)InterlockedIncrement64((volatile LONG64*)&g_ld_shader_disk_hits[stage_index]);
 +    shader_disk_cache_progress(value);
 +    return blob;
++}
++
++
++/* Read the whole disk shader cache into the in-memory blob caches on a background thread at start
++ * (Demon's Souls NOTES fix 63). Opening the files one by one when pipelines are first built cost
++ * ~6 ms each when they were not in the OS file cache (scanned on open): the first gameplay frame
++ * after loading a save built 87 pipelines and froze 584 ms, 542 of it in disk-cache reads. The
++ * whole cache is ~13 MB and is read during the logos. Entries that fail any check are skipped (the
++ * normal per-file path still validates and deletes them). RSX_SHADER_PRELOAD=0 = off. */
++static void shader_blob_cache_insert_accounted(
++    shader_blob_cache_t* cache, const char* source, u32 source_length,
++    u64 hash, ID3DBlob* blob, u32 stage, int hash_seen);
++static DWORD WINAPI shader_disk_preload(LPVOID unused)
++{
++    (void)unused;
++    const unsigned long long t0 = ps3_qpc_us();
++    char pat[MAX_PATH], path[MAX_PATH];
++    snprintf(pat, sizeof pat, "%s\\*.bin", g_ld_shader_disk_dir);
++    WIN32_FIND_DATAA fd;
++    HANDLE fh = FindFirstFileA(pat, &fd);
++    if (fh == INVALID_HANDLE_VALUE) return 0;
++    u32 n = 0; unsigned long long bytes = 0;
++    char* buf = NULL; size_t cap = 0;
++    do {
++        const char st = fd.cFileName[0];
++        if (st != 'V' && st != 'P') continue;
++        const size_t size = (size_t)fd.nFileSizeLow;
++        if (fd.nFileSizeHigh || size < sizeof(shader_disk_cache_header) || size > 2u * 1024 * 1024) continue;
++        if (size > cap) { char* nb = (char*)realloc(buf, size); if (!nb) break; buf = nb; cap = size; }
++        snprintf(path, sizeof path, "%s\\%s", g_ld_shader_disk_dir, fd.cFileName);
++        FILE* f = fopen(path, "rb");
++        if (!f) continue;
++        const size_t got = fread(buf, 1, size, f);
++        fclose(f);
++        if (got != size) continue;
++        shader_disk_cache_header h;
++        memcpy(&h, buf, sizeof h);
++        if (h.magic != SHADER_DISK_CACHE_MAGIC || h.version != SHADER_DISK_CACHE_VERSION ||
++            h.stage != (u32)st || h.source_length > 256u * 1024u || !h.blob_length ||
++            h.blob_length > SHADER_DISK_CACHE_MAX_BLOB ||
++            sizeof h + (size_t)h.source_length + h.blob_length != size) continue;
++        const char* src = buf + sizeof h;
++        if (fnv1a(src, h.source_length, 1469598103934665603ull) != h.source_hash) continue;
++        ID3DBlob* blob = NULL;
++        if (FAILED(D3DCreateBlob(h.blob_length, &blob)) || !blob) continue;
++        memcpy(blob->lpVtbl->GetBufferPointer(blob), src + h.source_length, h.blob_length);
++        shader_blob_cache_insert_accounted(st == 'V' ? &g.vs_blobs : &g.ps_blobs, src, h.source_length,
++                                           h.source_hash, blob, (u32)st, 0);
++        blob->lpVtbl->Release(blob);   /* the cache holds its own reference */
++        n++; bytes += size;
++    } while (FindNextFileA(fh, &fd));
++    FindClose(fh);
++    free(buf);
++    fprintf(stderr, "[shader-disk-cache] preloaded %u shaders (%.1f MB) in %.0f ms\n",
++            n, bytes / 1048576.0, (ps3_qpc_us() - t0) / 1000.0);
++    return 0;
 +}
 +
 +static void shader_disk_cache_store(
@@ -15040,8 +15316,8 @@ index 2579117..6c1ffaf 100644
 +    if (!shader_disk_cache_path(path, stage, hash, source_length))
 +        return;
 +    const int temporary_length = snprintf(
-+        temporary, sizeof(temporary), "%s.tmp.%lu", path,
-+        (unsigned long)GetCurrentProcessId());
++        temporary, sizeof(temporary), "%s.tmp.%lu.%lu", path,
++        (unsigned long)GetCurrentProcessId(), (unsigned long)GetCurrentThreadId());
 +    if (temporary_length <= 0 || temporary_length >= sizeof(temporary))
 +        return;
 +
@@ -15071,7 +15347,7 @@ index 2579117..6c1ffaf 100644
 +    }
 +
 +    const u32 stage_index = shader_disk_cache_stage_index(stage);
-+    const u64 value = ++g_ld_shader_disk_writes[stage_index];
++    const u64 value = (u64)InterlockedIncrement64((volatile LONG64*)&g_ld_shader_disk_writes[stage_index]);
 +    shader_disk_cache_progress(value);
 +}
 +
@@ -15124,7 +15400,60 @@ index 2579117..6c1ffaf 100644
 + * variant that references it.  The source bytes are retained for collision-
 + * safe equality; the 64-bit hash is only an index accelerator.
 + */
++/* Both caches are used by the renderer and the pipeline workers (fix 62). */
++static SRWLOCK g_ld_blob_lock = SRWLOCK_INIT;
++
++/* A shader being compiled right now (fix 62): a second pipeline that needs the same new shader (a
++ * character's main and shadow passes) waits for that compile instead of running fxc on it too. */
++static SRWLOCK g_ld_cc_lock = SRWLOCK_INIT;
++static CONDITION_VARIABLE g_ld_cc_cv = CONDITION_VARIABLE_INIT;
++static struct { u64 hash; u32 len, stage; } g_ld_cc[64];
++static u32 g_ld_n_cc;
++/* 1 = this thread compiles it (call ld_compile_release after inserting); 0 = another thread was
++ * compiling it and has finished -- look in the cache (it may have failed). */
++static int ld_compile_claim(u32 stage, u64 hash, u32 len)
++{
++    AcquireSRWLockExclusive(&g_ld_cc_lock);
++    int waited = 0;
++    for (;;) {
++        u32 i = 0;
++        while (i < g_ld_n_cc && !(g_ld_cc[i].hash == hash && g_ld_cc[i].len == len && g_ld_cc[i].stage == stage)) i++;
++        if (i == g_ld_n_cc) break;
++        waited = 1;
++        SleepConditionVariableSRW(&g_ld_cc_cv, &g_ld_cc_lock, INFINITE, 0);
++    }
++    int mine = 0;
++    if (!waited && g_ld_n_cc < sizeof g_ld_cc / sizeof g_ld_cc[0]) {
++        g_ld_cc[g_ld_n_cc].hash = hash; g_ld_cc[g_ld_n_cc].len = len; g_ld_cc[g_ld_n_cc].stage = stage;
++        g_ld_n_cc++; mine = 1;
++    }
++    ReleaseSRWLockExclusive(&g_ld_cc_lock);
++    return mine ? 1 : (waited ? 0 : 2);   /* 2: table full, compile without a claim */
++}
++static void ld_compile_release(u32 stage, u64 hash, u32 len)
++{
++    AcquireSRWLockExclusive(&g_ld_cc_lock);
++    for (u32 i = 0; i < g_ld_n_cc; i++)
++        if (g_ld_cc[i].hash == hash && g_ld_cc[i].len == len && g_ld_cc[i].stage == stage) {
++            g_ld_cc[i] = g_ld_cc[--g_ld_n_cc]; break; }
++    ReleaseSRWLockExclusive(&g_ld_cc_lock);
++    WakeAllConditionVariable(&g_ld_cc_cv);
++}
++
++static ID3DBlob* shader_blob_cache_find_locked(
++    shader_blob_cache_t* cache, const char* source, u32 source_length,
++    u64 hash, int* post_boundary_hit, int* hash_seen);
 +static ID3DBlob* shader_blob_cache_find(
++    shader_blob_cache_t* cache, const char* source, u32 source_length,
++    u64 hash, int* post_boundary_hit, int* hash_seen)
++{
++    AcquireSRWLockShared(&g_ld_blob_lock);
++    ID3DBlob* b = shader_blob_cache_find_locked(cache, source, source_length, hash,
++                                                post_boundary_hit, hash_seen);
++    ReleaseSRWLockShared(&g_ld_blob_lock);
++    return b;
++}
++static ID3DBlob* shader_blob_cache_find_locked(
 +    shader_blob_cache_t* cache, const char* source, u32 source_length,
 +    u64 hash, int* post_boundary_hit, int* hash_seen)
 +{
@@ -15184,9 +15513,13 @@ index 2579117..6c1ffaf 100644
 +    shader_blob_cache_t* cache, const char* source, u32 source_length,
 +    u64 hash, ID3DBlob* blob, u32 stage, int hash_seen)
 +{
++    AcquireSRWLockExclusive(&g_ld_blob_lock);
 +    const u32 count_before = cache->count;
-+    const shader_blob_insert_result result = shader_blob_cache_insert(
-+        cache, source, source_length, hash, blob);
++    ID3DBlob* already = shader_blob_cache_find_locked(cache, source, source_length, hash, NULL, NULL);
++    const shader_blob_insert_result result = already ? SHADER_BLOB_INSERT_SKIPPED
++        : shader_blob_cache_insert(cache, source, source_length, hash, blob);
++    if (already) already->lpVtbl->Release(already);   /* another thread put it in first */
++    ReleaseSRWLockExclusive(&g_ld_blob_lock);
 +#if defined(YZ_PERF_PROFILE)
 +    if (stage == 'V') {
 +        if (result == SHADER_BLOB_INSERTED) {
@@ -15355,7 +15688,9 @@ index 2579117..6c1ffaf 100644
 +
 +/* LD_PSO_TIME=1: per new PSO, ms spent compiling HLSL (cache misses) and creating the PSO. */
 +extern unsigned long long ps3_qpc_us(void);
-+static unsigned long long g_ld_pso_t_vs, g_ld_pso_t_ps, g_ld_pso_t_create;
++/* Per thread: build_pso also runs on the pipeline workers (NOTES fix 62). */
++static __declspec(thread) unsigned long long g_ld_pso_t_vs, g_ld_pso_t_ps, g_ld_pso_t_create, g_ld_pso_t_disk;
++static __declspec(thread) int g_ld_on_pso_worker;   /* this thread is a pipeline worker */
 +
 +/* Perf log (LD_PRESENT_LOG=<file>): the present lines (see Present below) and "# <us> <what>"
 + * lines from ps3_perf_note() anywhere -- shader compiles, slow file reads, the title's own
@@ -15679,7 +16014,9 @@ index 2579117..6c1ffaf 100644
 +#if defined(YZ_PERF_PROFILE)
 +        g_ld_profile.total.vs_blob_misses++;
 +#endif
++        { const unsigned long long td = ps3_qpc_us();
 +        vs = shader_disk_cache_load('V', vs_hlsl, vs_length, vs_hash);
++        g_ld_pso_t_disk += ps3_qpc_us() - td; }
 +        if (vs) {
 +            shader_blob_cache_insert_accounted(
 +                &g.vs_blobs, vs_hlsl, vs_length, vs_hash, vs,
@@ -15689,22 +16026,30 @@ index 2579117..6c1ffaf 100644
 +            g_ld_profile.total.vs_compile_calls++;
 +            const LONGLONG compile_begin = ld_profile_qpc();
 +#endif
-+            { const unsigned long long t0 = ps3_qpc_us();
++            const int vs_claim = ld_compile_claim('V', vs_hash, vs_length);   /* fix 62 dedupe */
++            if (!vs_claim)
++                vs = shader_blob_cache_find(&g.vs_blobs, vs_hlsl, vs_length, vs_hash, NULL, NULL);
++            int vs_compiled = 0;
++            if (!vs) {
++            const unsigned long long t0 = ps3_qpc_us();
 +            vs_hr = D3DCompile(
 +                vs_hlsl, vs_length, "xvs", NULL, NULL, "main",
 +                "vs_5_0", 0, 0, &vs, &err);
-+            g_ld_pso_t_vs += ps3_qpc_us() - t0; }
++            g_ld_pso_t_vs += ps3_qpc_us() - t0;
++            vs_compiled = 1; }
 +#if defined(YZ_PERF_PROFILE)
 +            g_ld_profile.total.vs_compile_qpc +=
 +                (u64)(ld_profile_qpc() - compile_begin);
 +#endif
-+            if (SUCCEEDED(vs_hr)) {
++            if (vs_compiled && SUCCEEDED(vs_hr)) {
 +                shader_disk_cache_store(
 +                    'V', vs_hlsl, vs_length, vs_hash, vs);
 +                shader_blob_cache_insert_accounted(
 +                    &g.vs_blobs, vs_hlsl, vs_length, vs_hash, vs,
 +                    'V', vs_hash_seen);
 +            }
++            if (vs_claim == 1)
++                ld_compile_release('V', vs_hash, vs_length);
 +        }
 +    }
 +    if (FAILED(vs_hr)) {
@@ -15743,7 +16088,9 @@ index 2579117..6c1ffaf 100644
 +#if defined(YZ_PERF_PROFILE)
 +        g_ld_profile.total.ps_blob_misses++;
 +#endif
++        { const unsigned long long td = ps3_qpc_us();
 +        ps = shader_disk_cache_load('P', ps_hlsl, ps_length, ps_hash);
++        g_ld_pso_t_disk += ps3_qpc_us() - td; }
 +        if (ps) {
 +            shader_blob_cache_insert_accounted(
 +                &g.ps_blobs, ps_hlsl, ps_length, ps_hash, ps,
@@ -15753,22 +16100,30 @@ index 2579117..6c1ffaf 100644
 +            g_ld_profile.total.ps_compile_calls++;
 +            const LONGLONG compile_begin = ld_profile_qpc();
 +#endif
-+            { const unsigned long long t0 = ps3_qpc_us();
++            const int ps_claim = ld_compile_claim('P', ps_hash, ps_length);   /* fix 62 dedupe */
++            if (!ps_claim)
++                ps = shader_blob_cache_find(&g.ps_blobs, ps_hlsl, ps_length, ps_hash, NULL, NULL);
++            int ps_compiled = 0;
++            if (!ps) {
++            const unsigned long long t0 = ps3_qpc_us();
 +            ps_hr = D3DCompile(
 +                ps_hlsl, ps_length, "xps", NULL, NULL, "main",
 +                "ps_5_0", 0, 0, &ps, &err);
-+            g_ld_pso_t_ps += ps3_qpc_us() - t0; }
++            g_ld_pso_t_ps += ps3_qpc_us() - t0;
++            ps_compiled = 1; }
 +#if defined(YZ_PERF_PROFILE)
 +            g_ld_profile.total.ps_compile_qpc +=
 +                (u64)(ld_profile_qpc() - compile_begin);
 +#endif
-+            if (SUCCEEDED(ps_hr)) {
++            if (ps_compiled && SUCCEEDED(ps_hr)) {
 +                shader_disk_cache_store(
 +                    'P', ps_hlsl, ps_length, ps_hash, ps);
 +                shader_blob_cache_insert_accounted(
 +                    &g.ps_blobs, ps_hlsl, ps_length, ps_hash, ps,
 +                    'P', ps_hash_seen);
 +            }
++            if (ps_claim == 1)
++                ld_compile_release('P', ps_hash, ps_length);
 +        }
 +    }
 +    if (FAILED(ps_hr)) {
@@ -15836,10 +16191,279 @@ index 2579117..6c1ffaf 100644
 +                    rs->depth_test, rs->depth_write, rs->depth_func,
 +                    rs->blend_enable, rs->cull_enable, rs->cull_face);
 +        if (removed != S_OK)
-+            ld_dump_dred("CreateGraphicsPipelineState", hr);
++            { if (!g_ld_on_pso_worker) ld_dump_dred("CreateGraphicsPipelineState", hr); }
 +    }
 +    vs->lpVtbl->Release(vs); ps->lpVtbl->Release(ps);
 +    return SUCCEEDED(hr) ? pso : NULL;
++}
++
++/* ---------------------------------------------------------------------------
++ * Pipelines built off the drain thread (Demon's Souls NOTES fix 62).
++ *
++ * The thread that drains the guest FIFO also runs the guest vblank clock and presents
++ * (boot_main vblank_ticker). A new pipeline used to be built right there: D3DCompile (a
++ * skinned-character vertex program takes ~300 ms in fxc), a disk-cache file read, the
++ * driver's CreateGraphicsPipelineState (up to ~100 ms the first time). Every millisecond of
++ * that held up the vblank handler and the frame's fences, so the game's main thread sat
++ * waiting -- the "game step late (thread waiting)" hitches in new areas, and 0.3-1.3 s
++ * freezes for new shaders.
++ *
++ * Now a miss still decompiles here (cheap, static buffers). If both shaders are already compiled
++ * (in memory or the disk cache) the pipeline is built here as before -- identical frames. Only a
++ * pipeline that needs fxc goes to LD_PSO_THREADS (default 2) workers, and its draws are skipped
++ * until it is ready: the object shows a few frames late instead of freezing the game. Draws into a
++ * display buffer and full-screen passes (no depth test, <= 6 vertices: post-process, tone map,
++ * blits later passes read) never skip: they build or wait as before. Two pipelines needing the
++ * same new shader share one compile. LD_PSO_ASYNC=0 = the old path everywhere.
++ * Perf log: "psoa <vs ms> <ps ms> <create ms> <ms from request to ready> <draws skipped>" per
++ * worker-built pipeline, "psow <ms> <built here>" when a must-draw waited >= 1 ms, "psof" per
++ * frame for the builds still done here.
++ * ------------------------------------------------------------------------*/
++typedef struct ld_pso_job {
++    struct ld_pso_job* next;          /* queue link */
++    int state;                        /* 0 queued, 1 building, 2 done -- under g_ld_pq_lock */
++    HANDLE done;                      /* manual reset, set at state 2 */
++    u32 slot;                         /* g.psos[] index */
++    char *vs, *ps;
++    render_state_t rs;
++    rsx_vertex_layout_plan layout;
++    int has_layout, packed;
++    ID3D12PipelineState* pso;
++    unsigned long long t_vs, t_ps, t_create, t_submit, t_done;
++    u32 skipped;
++} ld_pso_job;
++
++static CRITICAL_SECTION g_ld_pq_lock;
++static CONDITION_VARIABLE g_ld_pq_cv;
++static ld_pso_job *g_ld_pq_head, *g_ld_pq_tail;
++static HANDLE g_ld_pq_thr[8];
++static int g_ld_pq_nthr;
++static volatile LONG g_ld_pq_quit;
++static int g_ld_pso_async = -1;
++static u32 g_ld_pso_pending[1024];    /* g.psos[] slots with a job */
++static u32 g_ld_n_pso_pending;
++static u32 g_ld_frame_pso_n;                      /* pipelines built on this thread this frame */
++static unsigned long long g_ld_frame_pso_us, g_ld_frame_pso_disk_us;
++static unsigned long long g_ld_pso_async_n, g_ld_pso_async_skips;
++static u32 g_ld_draw_nverts;   /* defined (tentatively) again below, next to its other users */
++
++static void ld_pso_job_run(ld_pso_job* j)
++{
++    g_ld_pso_t_vs = g_ld_pso_t_ps = g_ld_pso_t_create = 0;
++    j->pso = build_pso(j->vs, j->ps, &j->rs, j->has_layout ? &j->layout : NULL, j->packed);
++    j->t_vs = g_ld_pso_t_vs; j->t_ps = g_ld_pso_t_ps; j->t_create = g_ld_pso_t_create;
++    j->t_done = ps3_qpc_us();
++}
++
++static void ld_pso_job_finish(ld_pso_job* j)
++{
++    /* The event is set before the lock goes: once state 2 is visible the renderer may free j. */
++    EnterCriticalSection(&g_ld_pq_lock);
++    j->state = 2;
++    SetEvent(j->done);
++    LeaveCriticalSection(&g_ld_pq_lock);
++}
++
++static DWORD WINAPI ld_pso_worker(LPVOID unused)
++{
++    (void)unused;
++    g_ld_on_pso_worker = 1;
++    for (;;) {
++        EnterCriticalSection(&g_ld_pq_lock);
++        while (!g_ld_pq_head && !g_ld_pq_quit)
++            SleepConditionVariableCS(&g_ld_pq_cv, &g_ld_pq_lock, INFINITE);
++        if (g_ld_pq_quit) { LeaveCriticalSection(&g_ld_pq_lock); return 0; }
++        ld_pso_job* j = g_ld_pq_head;
++        g_ld_pq_head = j->next;
++        if (!g_ld_pq_head) g_ld_pq_tail = NULL;
++        j->next = NULL;
++        j->state = 1;
++        LeaveCriticalSection(&g_ld_pq_lock);
++        ld_pso_job_run(j);
++        ld_pso_job_finish(j);
++    }
++}
++
++static int ld_pso_async_on(void)
++{
++    if (g_ld_pso_async >= 0) return g_ld_pso_async;
++    const char* e = getenv("LD_PSO_ASYNC");
++    g_ld_pso_async = !(e && *e == '0');
++    if (!g_ld_pso_async) return 0;
++    const char* t = getenv("LD_PSO_THREADS");
++    int n = t ? atoi(t) : 2;
++    if (n < 1) n = 1;
++    if (n > 8) n = 8;
++    InitializeCriticalSection(&g_ld_pq_lock);
++    InitializeConditionVariable(&g_ld_pq_cv);
++    shader_disk_cache_prepare();          /* its lazy init is not thread-safe: do it here */
++    for (int i = 0; i < n; i++) {
++        HANDLE h = CreateThread(NULL, 0, ld_pso_worker, NULL, 0, NULL);
++        if (!h) break;
++        SetThreadPriority(h, THREAD_PRIORITY_BELOW_NORMAL);
++        SetThreadDescription(h, L"rsx_pso_worker");
++        g_ld_pq_thr[g_ld_pq_nthr++] = h;
++    }
++    if (!g_ld_pq_nthr) { g_ld_pso_async = 0; DeleteCriticalSection(&g_ld_pq_lock); }
++    fprintf(stderr, "[pso-async] %s: %d workers for new shader compiles\n",
++            g_ld_pso_async ? "on" : "off (no threads)", g_ld_pq_nthr);
++    return g_ld_pso_async;
++}
++
++/* Queue a build; the g.psos[] slot is the caller's. NULL = could not queue (build it now). */
++static ld_pso_job* ld_pso_submit(u32 slot, const char* vs, const char* ps, const render_state_t* rs,
++                                 const rsx_vertex_layout_plan* layout, int packed)
++{
++    if (g_ld_n_pso_pending >= sizeof g_ld_pso_pending / sizeof g_ld_pso_pending[0]) return NULL;
++    ld_pso_job* j = (ld_pso_job*)calloc(1, sizeof *j);
++    if (!j) return NULL;
++    j->vs = _strdup(vs); j->ps = _strdup(ps);
++    j->done = CreateEventW(NULL, TRUE, FALSE, NULL);
++    if (!j->vs || !j->ps || !j->done) {
++        free(j->vs); free(j->ps); if (j->done) CloseHandle(j->done); free(j);
++        return NULL;
++    }
++    j->slot = slot;
++    j->rs = *rs;
++    if (layout) { j->layout = *layout; j->has_layout = 1; }
++    j->packed = packed;
++    j->t_submit = ps3_qpc_us();
++    g_ld_pso_pending[g_ld_n_pso_pending++] = slot;
++    EnterCriticalSection(&g_ld_pq_lock);
++    if (g_ld_pq_tail) g_ld_pq_tail->next = j; else g_ld_pq_head = j;
++    g_ld_pq_tail = j;
++    LeaveCriticalSection(&g_ld_pq_lock);
++    WakeConditionVariable(&g_ld_pq_cv);
++    g_ld_pso_async_n++;
++    return j;
++}
++
++/* A finished job: its pipeline goes into the table (NULL = failed, cached like before). */
++static void ld_pso_harvest(u32 slot)
++{
++    ld_pso_job* j = g.psos[slot].job;
++    g.psos[slot].pso = j->pso;
++    g.psos[slot].job = NULL;
++    { static int on = -1; if (on < 0) on = getenv("LD_PSO_TIME") ? 1 : 0;
++      if (on) fprintf(stderr, "[pso-time] frame %u pso %u: vs compile %.1f ms, ps compile %.1f ms, "
++                      "create %.1f ms (async: ready after %.1f ms, %u draws skipped)\n",
++                      g_ld_frames, slot, j->t_vs / 1000.0, j->t_ps / 1000.0, j->t_create / 1000.0,
++                      (j->t_done - j->t_submit) / 1000.0, j->skipped); }
++    if (j->t_vs + j->t_ps + j->t_create >= 1000 || j->skipped)
++        ps3_perf_note("psoa %.1f %.1f %.1f %.1f %u", j->t_vs / 1000.0, j->t_ps / 1000.0,
++                      j->t_create / 1000.0, (j->t_done - j->t_submit) / 1000.0, j->skipped);
++    CloseHandle(j->done); free(j->vs); free(j->ps); free(j);
++    for (u32 i = 0; i < g_ld_n_pso_pending; i++)
++        if (g_ld_pso_pending[i] == slot) { g_ld_pso_pending[i] = g_ld_pso_pending[--g_ld_n_pso_pending]; break; }
++}
++
++static int ld_pso_job_done(const ld_pso_job* j)
++{
++    EnterCriticalSection(&g_ld_pq_lock);
++    const int d = j->state == 2;
++    LeaveCriticalSection(&g_ld_pq_lock);
++    return d;
++}
++
++/* Once a frame: finished jobs whose pipeline was not asked for again still get logged / freed. */
++static void ld_pso_sweep(void)
++{
++    for (u32 i = 0; i < g_ld_n_pso_pending; ) {
++        const u32 slot = g_ld_pso_pending[i];
++        if (ld_pso_job_done(g.psos[slot].job)) ld_pso_harvest(slot);   /* swaps the last one in */
++        else i++;
++    }
++}
++
++/* Does skipping this draw show? Display-buffer targets and full-screen passes. */
++static int ld_pso_draw_critical(void)
++{
++    rsx_dsp_surface sf;
++    rsx_dsp_get_surface(&g.rsx, &sf);
++    for (u32 i = 0; i < 8; i++) {
++        const display_buffer_t* d = &g.display_buffers[i];
++        if (d->valid && d->location == sf.color_location[0] && d->offset == sf.color_offset[0])
++            return 1;
++    }
++    if (g_ld_draw_nverts <= 6) {
++        render_state_t rs;
++        decode_render_state(&rs);
++        if (!rs.depth_test) return 1;
++    }
++    return 0;
++}
++
++/* Would this pipeline run fxc? No when both shaders are in memory or in the disk cache: then it
++ * is built right here as before (deterministic, ~1-2 ms), and only real compiles go to a worker. */
++static int ld_pso_needs_compile(const char* vs, const char* ps)
++{
++    for (int k = 0; k < 2; k++) {
++        const char* src = k ? ps : vs;
++        const u32 len = (u32)strlen(src);
++        const u64 h = fnv1a(src, len, 1469598103934665603ull);
++        ID3DBlob* b = shader_blob_cache_find(k ? &g.ps_blobs : &g.vs_blobs, src, len, h, NULL, NULL);
++        if (b) { b->lpVtbl->Release(b); continue; }
++        char path[MAX_PATH];
++        if (shader_disk_cache_path(path, k ? 'P' : 'V', h, len) &&
++            GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) continue;
++        return 1;
++    }
++    return 0;
++}
++
++/* The draw at slot's pipeline is being compiled. A draw whose loss would show (display buffer,
++ * full-screen pass) gets it now -- built here if no worker has started it, else waited for, as
++ * before fix 62. Any other draw is skipped until it is ready (the object appears a few frames late
++ * instead of freezing the game). Returns the pipeline, or NULL = skip. */
++static ID3D12PipelineState* ld_pso_wait(u32 slot)
++{
++    ld_pso_job* j = g.psos[slot].job;
++    if (!ld_pso_draw_critical()) {
++        if (ld_pso_job_done(j)) { ld_pso_harvest(slot); return g.psos[slot].pso; }
++        j->skipped++;
++        g_ld_pso_async_skips++;
++        return NULL;
++    }
++    const unsigned long long t0 = ps3_qpc_us();
++    int run_here = 0;
++    EnterCriticalSection(&g_ld_pq_lock);
++    if (j->state == 0) {   /* still queued: take it out, build it on this thread */
++        ld_pso_job** pp = &g_ld_pq_head; ld_pso_job* prev = NULL;
++        while (*pp && *pp != j) { prev = *pp; pp = &(*pp)->next; }
++        if (*pp) {
++            *pp = j->next;
++            if (g_ld_pq_tail == j) g_ld_pq_tail = prev;
++            j->next = NULL; j->state = 1; run_here = 1;
++        }
++    }
++    LeaveCriticalSection(&g_ld_pq_lock);
++    if (run_here) { ld_pso_job_run(j); ld_pso_job_finish(j); }
++    else WaitForSingleObject(j->done, INFINITE);
++    const unsigned long long waited = ps3_qpc_us() - t0;
++    if (waited >= 1000) ps3_perf_note("psow %.1f %d", waited / 1000.0, run_here);
++    ld_pso_harvest(slot);
++    return g.psos[slot].pso;
++}
++
++/* Shutdown: stop the workers before the device goes (they call into it). */
++static void ld_pso_async_shutdown(void)
++{
++    if (g_ld_pso_async <= 0) return;
++    EnterCriticalSection(&g_ld_pq_lock);
++    g_ld_pq_quit = 1;
++    LeaveCriticalSection(&g_ld_pq_lock);
++    WakeAllConditionVariable(&g_ld_pq_cv);
++    if (g_ld_pq_nthr) WaitForMultipleObjects((DWORD)g_ld_pq_nthr, g_ld_pq_thr, TRUE, 5000);
++    for (int i = 0; i < g_ld_pq_nthr; i++) CloseHandle(g_ld_pq_thr[i]);
++    g_ld_pq_nthr = 0;
++    while (g_ld_n_pso_pending) {
++        const u32 slot = g_ld_pso_pending[0];
++        ld_pso_job* j = g.psos[slot].job;
++        if (j->state != 2) { j->pso = NULL; j->state = 2; }   /* never built */
++        ld_pso_harvest(slot);
++    }
++    fprintf(stderr, "[pso-async] %llu pipelines built off-thread, %llu draws skipped while building\n",
++            g_ld_pso_async_n, g_ld_pso_async_skips);
 +}
 +
 +static int ld_current_vertex_layout(rsx_vertex_layout_plan* layout)
@@ -15976,7 +16600,7 @@ index 2579117..6c1ffaf 100644
 +}
 +
 +static ID3D12PipelineState* get_pso(
-+    const rsx_vertex_layout_plan* masked_layout, int packed_payload)
++    const rsx_vertex_layout_plan* masked_layout, int packed_payload, u32* pending)
 +{
 +    memset(&g_ld_current_pso, 0, sizeof(g_ld_current_pso));
 +    const u32 start = rsx_dsp_vp_start(&g.rsx);
@@ -16366,6 +16990,10 @@ index 2579117..6c1ffaf 100644
 +#if defined(YZ_PERF_PROFILE)
 +            g_ld_profile.total.pso_hits++;
 +#endif
++            if (g.psos[i].job) {   /* being built (fix 62) */
++                if (!ld_pso_job_done(g.psos[i].job)) { *pending = i; return NULL; }
++                ld_pso_harvest(i);
++            }
 +            return g.psos[i].pso;
 +        }
 +    }
@@ -16516,8 +17144,20 @@ index 2579117..6c1ffaf 100644
 +        snprintf(fn, sizeof fn, "%s/hlsl_fp%u_%08X.vs.txt", hd, fp_loc, fp_off);
 +        f = fopen(fn, "wb"); if (f) { fputs(vi > 0 ? vs_hlsl : "<vp fail>", f); fclose(f); }
 +      } }
++    if (vi > 0 && fi > 0 && ld_pso_async_on() && ld_pso_needs_compile(vs_hlsl, ps_hlsl)) {   /* fix 62 */
++        ld_pso_job* job = ld_pso_submit(g.n_psos, vs_hlsl, ps_hlsl, &rs, masked_layout, packed_payload);
++        if (job) {
++            g.psos[g.n_psos].key = key;
++            g.psos[g.n_psos].pso = NULL;
++            g.psos[g.n_psos].job = job;
++            *pending = g.n_psos;
++            g.n_psos++;
++            return NULL;
++        }
++    }
 +    if (vi > 0 && fi > 0) {
-+        g_ld_pso_t_vs = g_ld_pso_t_ps = g_ld_pso_t_create = 0;
++        g_ld_pso_t_vs = g_ld_pso_t_ps = g_ld_pso_t_create = g_ld_pso_t_disk = 0;
++        const unsigned long long tb = ps3_qpc_us();
 +        pso = build_pso(
 +            vs_hlsl, ps_hlsl, &rs, masked_layout, packed_payload);
 +        { static int on = -1; if (on < 0) on = getenv("LD_PSO_TIME") ? 1 : 0;
@@ -16527,10 +17167,14 @@ index 2579117..6c1ffaf 100644
 +        if (g_ld_pso_t_vs + g_ld_pso_t_ps + g_ld_pso_t_create >= 1000)
 +            ps3_perf_note("pso %.1f %.1f %.1f", g_ld_pso_t_vs / 1000.0, g_ld_pso_t_ps / 1000.0,
 +                          g_ld_pso_t_create / 1000.0);
++        g_ld_frame_pso_n++;                                  /* psof (fix 62) */
++        g_ld_frame_pso_us += ps3_qpc_us() - tb;
++        g_ld_frame_pso_disk_us += g_ld_pso_t_disk;
 +    }
 +
 +    g.psos[g.n_psos].key = key;
 +    g.psos[g.n_psos].pso = pso;
++    g.psos[g.n_psos].job = NULL;
 +    g.n_psos++;
 +    return pso;
 +}
@@ -16605,6 +17249,11 @@ index 2579117..6c1ffaf 100644
 + * -----------------------------------------------------------------------*/
 +typedef struct { float a[16][4]; } vtx_t;
 +typedef struct { u32 first, count; } batch_t;
++/* Packets one draw may queue (Demon's Souls NOTES fix 64). An RSX DRAW_ARRAYS / DRAW_INDEX_ARRAY packet
++ * covers at most 256 vertices or indices, so the old 256 entries capped a draw at 65,536 and dropped
++ * the rest ("qfull" in the stats line): the Storm King arena's large meshes lost whole sections.
++ * 16384 packets = 4M vertices per draw. */
++#define DC_MAX_BATCHES 16384u
 +
 +typedef struct {
 +    /* INLINE_ARRAY source for this primitive, or NULL. The stream is the
@@ -16615,8 +17264,8 @@ index 2579117..6c1ffaf 100644
 +     * index order, which is what makes the offsets derivable at all (an
 +     * inline stream carries no per-array offset registers). */
 +    const u8* inl; u32 inl_bytes, inl_stride; u32 inl_off[16];
-+    batch_t arr[256]; u32 n_arr;
-+    batch_t idx[256]; u32 n_idx;
++    batch_t arr[DC_MAX_BATCHES]; u32 n_arr;
++    batch_t idx[DC_MAX_BATCHES]; u32 n_idx;
 +    u32     n_packets;
 +    vtx_t*  verts; u32 n_verts, cap_verts;
 +    rsx_vertex_ref* refs; u32 n_refs, cap_refs;
@@ -17850,7 +18499,7 @@ index 2579117..6c1ffaf 100644
 +        return;
 +    }
 +    dc.n_packets++;
-+    if (dc.n_arr >= 256) { g_ld_stats.packets_queue_full++; return; }
++    if (dc.n_arr >= DC_MAX_BATCHES) { g_ld_stats.packets_queue_full++; return; }
 +    dc.arr[dc.n_arr].first = first; dc.arr[dc.n_arr].count = count; dc.n_arr++;
 +    g_ld_stats.packets_queued++;
 +}
@@ -17874,7 +18523,7 @@ index 2579117..6c1ffaf 100644
 +
 +    dc.inl = data; dc.inl_bytes = bytes; dc.inl_stride = stride;
 +    dc.n_packets++;
-+    if (dc.n_arr >= 256) { g_ld_stats.packets_queue_full++; return; }
++    if (dc.n_arr >= DC_MAX_BATCHES) { g_ld_stats.packets_queue_full++; return; }
 +    dc.arr[dc.n_arr].first = 0; dc.arr[dc.n_arr].count = bytes / stride;
 +    dc.n_arr++;
 +    g_ld_stats.packets_queued++;
@@ -17888,7 +18537,7 @@ index 2579117..6c1ffaf 100644
 +        return;
 +    }
 +    dc.n_packets++;
-+    if (dc.n_idx >= 256) { g_ld_stats.packets_queue_full++; return; }
++    if (dc.n_idx >= DC_MAX_BATCHES) { g_ld_stats.packets_queue_full++; return; }
 +    dc.idx[dc.n_idx].first = first; dc.idx[dc.n_idx].count = count; dc.n_idx++;
 +    g_ld_stats.packets_queued++;
 +}
@@ -19380,9 +20029,17 @@ index 2579117..6c1ffaf 100644
 +    }
 +
 +    g_ld_draw_nverts = dc.n_verts;   /* LD_FPCONST_VERTS */
++    u32 pso_pending = 0xFFFFFFFFu;
 +    ID3D12PipelineState* pso = get_pso(
 +        ld_vertex_mask_signature() ? &used_layout : NULL,
-+        ld_vertex_compact_payload());
++        ld_vertex_compact_payload(), &pso_pending);
++    if (!pso && pso_pending != 0xFFFFFFFFu) {
++        pso = ld_pso_wait(pso_pending);   /* NOTES fix 62 */
++        if (!pso && g.psos[pso_pending].job) {
++            live_draw_csv_emit(prim, n_tri, "drop_pso_pending");
++            return;
++        }
++    }
 +    if (!pso) {
 +#if defined(YZ_PERF_PROFILE)
 +        ld_profile_note_rejected_pso();
@@ -23883,6 +24540,13 @@ index 2579117..6c1ffaf 100644
 +    sink.flip = sink_flip;
 +    rsx_dispatch_init(&g.rsx, &sink);
 +
++    /* Fix 63: shader cache into memory in the background (the logos and first load hide it). */
++    { const char* e = getenv("RSX_SHADER_PRELOAD");
++      if (!(e && *e == '0') && shader_disk_cache_prepare()) {
++          HANDLE t = CreateThread(NULL, 0, shader_disk_preload, NULL, 0, NULL);
++          if (t) { SetThreadPriority(t, THREAD_PRIORITY_BELOW_NORMAL); CloseHandle(t); }
++      } }
++
 +    g.ready = 1;
 +    g.enabled = 1;
 +    return 0;
@@ -25252,6 +25916,16 @@ index 2579117..6c1ffaf 100644
 +      g_ld_last_frame_draws = (u32)(g_ld_stats.packets_seen - packets_at_last_frame);
 +      packets_at_last_frame = g_ld_stats.packets_seen; }
 +    g_ld_frames++;
++    if (g_ld_n_pso_pending) ld_pso_sweep();   /* fix 62 */
++    /* "psof <pipelines built on the drain thread> <ms> <ms of it reading the disk cache>": all of
++     * a frame's builds, also the many under 1 ms that get no "pso" line (fix 62). */
++    if (g_ld_frame_pso_us >= 2000)
++        ps3_perf_note("psof %u %.1f %.1f", g_ld_frame_pso_n, g_ld_frame_pso_us / 1000.0,
++                      g_ld_frame_pso_disk_us / 1000.0);
++    g_ld_frame_pso_n = 0; g_ld_frame_pso_us = g_ld_frame_pso_disk_us = 0;
++    if (g_ld_frame_texc_us >= 2000)   /* "texc <textures created> <ms>" (fix 62) */
++        ps3_perf_note("texc %u %.1f", g_ld_frame_texc_n, g_ld_frame_texc_us / 1000.0);
++    g_ld_frame_texc_n = 0; g_ld_frame_texc_us = 0;
 +    ld_capture_poll();
 +#if defined(YZ_PERF_PROFILE)
 +    ld_profile_present(g_ld_frames);
@@ -26276,6 +26950,7 @@ index 2579117..6c1ffaf 100644
 +                (unsigned long long)g_ld_shader_disk_writes[1],
 +                (unsigned long long)g_ld_shader_disk_rejects);
 +    }
++    ld_pso_async_shutdown();   /* fix 62: workers stop before the device goes */
 +    for (u32 i = 0; i < g.n_psos; i++) if (g.psos[i].pso) g.psos[i].pso->lpVtbl->Release(g.psos[i].pso);
 +    shader_blob_cache_release(&g.vs_blobs);
 +    shader_blob_cache_release(&g.ps_blobs);

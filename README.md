@@ -208,6 +208,9 @@ Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs)
 - **Build tools not found**: install Visual Studio 2022 Build Tools with *Desktop development with C++*
   and LLVM (`winget install LLVM.LLVM`), or set `LLVM_DIR` to an LLVM folder, then run BUILD.bat.
 - **The game window stays black / closes**: look at the end of `logs\last_run_err.txt`.
+- **A character or object is black, or missing, for a moment the first time you see it**: its shaders
+  are being compiled in the background (instead of freezing the game; docs/NOTES.md fix 62). It only
+  happens the first time a shader is ever seen. `set LD_PSO_ASYNC=0` before PLAY.bat = wait instead.
 - **"needs AVX2"** message box: this build was made on a PC with AVX2 and yours has none. Run
   BUILD.bat on this PC (it picks the right setting), or `set DS_AVX2=0` before BUILD.bat on the other one.
 

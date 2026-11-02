@@ -7,6 +7,10 @@ The log (LD_PRESENT_LOG + DES_PERF) has two kinds of lines, all on one microseco
   <us> <frame> <pace us> <Present us> <gpu wait us> <last present> <stat present> <stat vblank> <sync vblank> <render cpu us> [<draws>]
   # <us> <kind> ...   kind = info | step <s> <rx> <ry> <pad src> <polls> <mdx> <mdy> <cpu us> | mark <n>
                               | pso <vs ms> <ps ms> <create ms> | read <sync|aio> <ms> <bytes> <path>
+                              | psof <pipelines> <ms> <disk ms>  (pipeline builds on the drain thread in a frame; fix 62)
+                              | psow <ms> <built here>  (a must-draw waited for a new shader; fix 62)
+                              | psoa <vs> <ps> <create> <ms to ready> <draws skipped>  (built on a worker: no stall)
+                              | texc <textures created> <ms>  (texture creation in a frame; fix 62)
                               | pos <area>,<block> <x> <y> <z>  (the player, once a second + with each mark;
                                 fix 57. Two logs from 2026-11-01 01:00 have "<mcp AA,BB> x y z <block id>")
                               | thr <process %> <thread>=<%> ...  (busiest threads, % of a core, 1/s; fix 58)
@@ -177,7 +181,9 @@ def main():
               'longest alternating stretch %d in a row (%.1f s)' % (len(cu_t), len(cu_t) / (span / 60), best, best * 0.04))
 
     # Index notes by time for the per-hitch breakdown.
-    ev = sorted((n for n in notes if n[1] in ('pso', 'read')), key=lambda n: n[0])
+    ev = sorted((n for n in notes if n[1] in ('pso', 'read', 'psof', 'psow')), key=lambda n: n[0])
+    tx = sorted((n for n in notes if n[1] == 'texc'), key=lambda n: n[0])
+    tx_t = [n[0] for n in tx]
     ev_t = [n[0] for n in ev]
     import bisect
 
@@ -187,7 +193,10 @@ def main():
         pso_ms = pso_n = rd_ms = rd_n = 0
         rd_files = collections.Counter()
         for n in ev[i:j]:
-            if n[1] == 'pso':
+            if n[1] in ('psof', 'psow'):   # fix 62: all of a frame's builds / a must-draw's wait
+                pso_n += int(float(n[2][0])) if n[1] == 'psof' else 1; pso_ms += float(n[2][1] if n[1] == 'psof' else n[2][0])
+            elif n[1] == 'pso':
+                if any(m[1] == 'psof' for m in ev[i:j]): continue   # counted in its frame's psof
                 pso_n += 1; pso_ms += sum(float(x) for x in n[2][:3])
             else:
                 rd_n += 1; rd_ms += float(n[2][1]); rd_files[os.path.basename(n[2][3]) if len(n[2]) > 3 else '?'] += 1
@@ -222,6 +231,11 @@ def main():
         cause = []
         if pso_ms >= 4:
             cause.append('shader compile %d x %.0f ms' % (pso_n, pso_ms))
+        tx_n = tx_ms = 0
+        for n in tx[bisect.bisect_right(tx_t, prev[0]):bisect.bisect_right(tx_t, r[0])]:
+            tx_n += int(n[2][0]); tx_ms += float(n[2][1])
+        if tx_ms >= 4:
+            cause.append('texture creation %d x %.0f ms' % (tx_n, tx_ms))
         if rd_ms >= 4:
             cause.append('file reads %d x %.0f ms (%s)' % (rd_n, rd_ms, ', '.join(k for k, _ in rd_files.most_common(2))))
         if med_s and ws > 1.5 * med_s + 2000:
@@ -246,7 +260,7 @@ def main():
     for h in hitches:
         for c in h[3].split('; '):
             k = c.split(' (')[0].split(' %')[0]
-            for lab in ('shader compile', 'file reads', 'Present blocked', 'GPU wait', 'pacing hold', 'no CPU-side', 'renderer late'):
+            for lab in ('shader compile', 'texture creation', 'file reads', 'Present blocked', 'GPU wait', 'pacing hold', 'no CPU-side', 'renderer late'):
                 if c.startswith(lab): k = lab
             if c.startswith('game step late'):
                 k = 'game step late (thread %s)' % ('busy' if 'busy' in c else 'waiting' if 'waiting' in c else '?')

@@ -1175,6 +1175,95 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       now: 0 of 36k map vertices wrong), duplicate materials, mirrored objects, Draco, default bone,
       material routing, quadratic splits -- all fixed. Full selftest: 6485 files byte for byte, DCX
       resize OK, 40 models export -> import with 0.00000 position error.
+62. **New-area stutters: shaders built off the drain thread, a flip wakes the ticker (2026-11-01, a
+    9-min Latria 4-2 recording + "loading into 1-1 and running forward at once is stuttery"):**
+    - Recording: worst frame 828 ms = two skinned-character vertex shaders, D3DCompile ~300 ms each
+      (cache files V_1F5A80C6132AF6C2 / V_5E922260BCA37EA9). fxc takes as long at every optimisation
+      level; SKIP_OPTIMIZATION still 120 ms with 4x the bytecode. The bone reads
+      `vp_c[(K + a0.w) & 511u]` cost about half (unmasked 278 -> 159 ms) but an unmasked index can read
+      outside the constant ring (root CBV: no bounds check) -- not done; vp_mul (0*x = 0) ~40% more.
+    - Most "game step late (thread waiting)" steps are the drain thread being stuck: boot_main's
+      vblank_ticker drains the FIFO, presents AND runs the guest vblank clock, so vbh notes arrive in
+      bursts with jumped counts; main waits for HighGraphics, which waits for the vblank handler's
+      DLSingleSignal. Sandbox late-step stacks: main sys_cond_wait, HighGraphics sys_semaphore_wait,
+      rsx in build_pso (D3DCompile), shader_disk_cache_load (fopen) and CreateCommittedResource.
+    - Fix (rsx_live_draw.c): a pipeline whose shaders are already compiled (memory or disk cache) is
+      still built on the drain thread -- identical frames. One that needs fxc goes to LD_PSO_THREADS
+      (2) workers and its draws are skipped until it is ready (the object appears a few frames late),
+      except "critical" draws -- display-buffer target, or a full-screen pass (no depth test, <= 6
+      vertices) -- which build it here (taking the queued job) or wait, as before. Also: blob caches
+      under an SRW lock with a duplicate-insert check, ld_compile_claim (two pipelines needing the same
+      new shader share one compile), thread-local compile timers, interlocked disk-cache counters,
+      thread id in the temp name, stale *.tmp.* swept at start, no DRED dump from a worker.
+      LD_PSO_ASYNC=0 = the old path everywhere.
+    - A design-review agent found a use-after-free in the first version (worker published state 2,
+      then SetEvent on a job the renderer could already have freed) and that a per-frame wait budget
+      made warm-cache output timing-dependent and wasted the budget on compiles that cannot finish;
+      both fixed by the narrowed design above.
+    - cellGcmSys.c gcm_flip_request: a direct flip now signals the kick event; Present came ~3.9 ms
+      after every flip (the ticker's idle wait). LD_FLIP_KICK=0 = old.
+    - Perf log: "psof <n> <ms> <disk ms>" (all pipeline builds on the drain thread in a frame, also
+      those under 1 ms), "psow" (a critical draw waited), "psoa" (worker-built, no stall), "texc <n>
+      <ms>" (texture creation in a frame); perf_report counts psof/psow as shader compile and texc as
+      "texture creation".
+    - Results, pinned A/B (AFF=FFFF), both runs from the same pre-test shader-cache snapshot, a
+      Latria 4-2 save, walk from the archstone + teleport to marks 3/4: worst frame
+      1571 / 808 ms -> 139 ms, big hitches 15 -> 5, frames up exactly 2 refreshes 99.52 -> 99.81%.
+      Cold-cache frame dumps at the compiles: while the
+      player's armour shaders compiled (~0.36 s, up to 156 draws skipped) the body armour showed as a
+      black shape -- its depth pass was drawn, its colour pass skipped (the reviewer predicted these
+      holes); normal a few frames later. Only the first time a shader is ever seen; accepted over a
+      0.3-1.3 s freeze (LD_PSO_ASYNC=0 for the old behaviour).
+    - Boletaria 1-1 arrival + immediate run (warm cache): unchanged, other causes. ~126 s: two game
+      steps of ~180 ms with the game thread busy (game script code right after arrival). ~130 s: a 95 ms
+      render frame, ~70 ms of it CreateCommittedResource for ~200 new textures (0.37 ms each; tried
+      D3D12_HEAP_FLAG_CREATE_NOT_ZEROED: no change, removed) + 15 ms pipeline builds. Next: create
+      textures as placed resources in large heaps (needs an allocator: textures are LRU-evicted at
+      1024 and refreshed) or keep pre-created spares of common sizes.
+    - Also from the analysis, not acted on: marks 3/4 are a ~1000-draw view where the frame chain runs
+      21-22 ms (flip period tracks render CPU); an agent claims 0-draw catch-up flips show the buffer
+      from two flips back -- unverified (fix 50 saw ~150-draw HUD catch-up frames).
+63. **Textures in big heaps + shader cache read at start (2026-11-01, Boletaria 1-1 arrival + run):**
+    - Fix 62 left the arrival frame (~130 s in the b11 test: running into the first soldiers) at 95-138
+      ms: ~200-250 new textures that frame, each its own CreateCommittedResource (~0.37 ms; driver
+      allocation -- D3D12_HEAP_FLAG_CREATE_NOT_ZEROED made no difference).
+    - Textures from create_texture_mipped are now placed resources in LD_TEX_HEAP_MB (64) MB heaps
+      (ALLOW_ONLY_NON_RT_DS_TEXTURES, 4 KB small-resource alignment when allowed, else 64 KB; first-fit
+      free list per heap, coalescing). Freeing needs no release-site change: each placed texture
+      carries a private-data IUnknown (SetPrivateDataInterface) whose last Release -- when D3D12
+      destroys the texture, which retire_texture already delays past the GPU fence -- returns the
+      block. Reused memory gets an aliasing barrier and is fully overwritten by the copies; textures
+      whose mips would not all fit in the upload ring, or whose mip copies would not cover the whole
+      subresource (DXT with a base not a multiple of 4), stay committed. LD_TEX_PLACED=0 = old.
+      Arrival texture creation 126 ms -> 11 ms (worst frame 51 -> 6 ms); Latria needed one 64 MB heap.
+    - Review (2 lenses + a skeptic per finding): unchecked SetPrivateDataInterface (would free a live
+      texture's block) and new-heap malloc -- fixed; the partial-mip-copy case above -- fixed; extent
+      math, locking, fence discipline confirmed. Heaps are not torn down at shutdown (nothing calls
+      rsx_live_draw_shutdown).
+    - Disk shader cache read whole at start (shader_disk_preload, background thread from
+      rsx_live_draw_init; RSX_SHADER_PRELOAD=0 = off): when the cache files were not in the OS file
+      cache, each first-use read cost ~6 ms and the first gameplay frame after loading the save built
+      87 pipelines in 584 ms, 542 of it disk reads (a 670 ms freeze). Now 602 shaders (8.6 MB) load in
+      ~2 s during the logos; load-in frame disk time 0, worst frame there 104 ms.
+    - Boletaria arrival, pinned, all of fixes 62/63 off (LD_PSO_ASYNC=0 LD_FLIP_KICK=0 LD_TEX_PLACED=0
+      RSX_SHADER_PRELOAD=0) vs on: worst frame at the soldiers 169 -> 88 ms (texture creation 23 -> 4 ms
+      in it), catch-up frames 51 -> 22; the ~180 ms game-script steps at ~126 s unchanged.
+    - Remaining at the arrival: ~180 ms of game script code on the main thread (~126 s); at ~130 s
+      ~45 ms where main/HighGraphics wait with the drain idle (likely SPU work), then the drain's
+      ~50 ms of texture decode (decode_texel) and draw submission for ~1100 draws, plus ~14 ms
+      creating ~40 pipelines from cached shaders (driver). Ideas: pipeline pre-creation from a saved
+      list at start; texture decode off the drain thread.
+64. **Storm King arena missing geometry: a draw's packet list held 256 entries (2026-11-02, user report):**
+    - The live renderer queued a draw's DRAW_ARRAYS / DRAW_INDEX_ARRAY packets in dc.arr / dc.idx[256].
+      An RSX packet covers at most 256 vertices/indices, so any draw over 65,536 indices silently lost
+      the rest: the stats line's packets[... qfull=N] counted them. The Shrine 3-3 beach (Storm King)
+      has such meshes: the user's 4-min session there dropped 416,836 packets, their 2-hour session
+      16M; Latria / Boletaria runs 0. Old limit, not from fixes 62/63.
+    - Fix: DC_MAX_BATCHES 16384 (4M vertices per draw); everything downstream already loops over the
+      counts and grows its vertex buffers.
+    - Repro: a save in the Nexus, DES_GOD=1, DES_WARP_AT=125:3,3,995 (Storm King archstone; the
+      Nexus script m01_00_00_00.lua lists every archstone's warp). Before: qfull 724,905, rock spires
+      behind the archstone missing; after: qfull 0, 49.8 fps, 99.3% of frames up 2 refreshes. Lesson: grep "qfull=" when geometry is missing.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
