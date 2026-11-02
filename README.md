@@ -12,8 +12,8 @@ It is not an emulator: the game's code runs as a normal x64 program.
 ## Status
 
 **The entire game seems playable.** It runs with sound and music at 60 fps (or 50 on a 100 Hz
-screen, 30, uncapped, or any frame rate you pick), with keyboard + mouse or an Xbox controller. Intro movies are skipped and
-there is no online play.
+screen, 30, uncapped, or any frame rate you pick), with keyboard + mouse or an Xbox controller. The game's movies play (title screen, intro,
+story and endings; `set DES_MOVIES=0` skips them). There is no online play.
 
 I'm currently playing through the whole game to find and fix any spots that still run slower
 than they should (stutters, frame drops in heavy scenes). Boletarian Palace, the heaviest area

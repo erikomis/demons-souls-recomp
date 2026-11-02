@@ -41,7 +41,9 @@ set "PS3_NP_STRICT_OFFLINE=1"
 set "SPU_INTERP_UNLIFTED=1"
 set "PS3_DEV_FLASH=%D%\no_flash"
 set "SPURS_JC_EVENTS=0"
-set "PS3_NO_SAIL=1"
+rem Movies play (title logo, intro, story, endings -- NOTES fix 71). "set DES_MOVIES=0" before
+rem launching skips them, as before.
+if "%DES_MOVIES%"=="0" (set "PS3_NO_SAIL=1") else (set "PS3_NO_SAIL=")
 set "PAD_KEYMAP=souls"
 set "OSK_TEXT=%DES_NAME%"
 set "PAD_SCRIPT="

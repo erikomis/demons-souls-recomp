@@ -1370,6 +1370,63 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
     - Result: tutorial corridor (frame dumps, LD_SHADOW_COMPARE=0 vs default): the bright glow on the wall around the player becomes a proper darker shadow, floor shadow ahead of the player appears; 171 programs compile with _rsx_shadow7 (LESS). Final build: no [shadow] fallbacks or pso-fail in the tutorial or a Latria run (99.85% frames even, frames normal).
     - Repro: a save in the Nexus, DES_WARP_AT=130:8,1,10 (tutorial corridor), DES_GOD=1;
       LD_F12_CAPTURE + LD_CAPTURE_AT=<frame> for per-draw captures, LD_HLSL_DUMP for the programs.
+71. **Movies play: real cellSail + PAMF playback (2026-11-02, GitHub issues #4 black title screen and #11):**
+    - Before: cellSail was a stub and every launcher sets PS3_NO_SAIL=1, so the player failed to create and
+      the game skipped all six movies: ds_title (the logo drawing itself out of smoke on the title screen),
+      ds_advertise (the attract film after the boot logos and on title idle), ds_oldtale, ds_opening,
+      ds_goodending, ds_badending. The title screen stayed black where the logo should be (issue #4).
+      Without PS3_NO_SAIL the stub never sent the events the game waits for and it hung on a black screen.
+    - How the game drives it (ppu_recomp_089.cpp 5951-16042, wrapper ppu_recomp_056.cpp 52431-55473):
+      MemAllocatorInitialize -> PlayerInitialize2 -> sound/graphics adapter init (callbacks: makeup, cleanup,
+      formatChanged [, alloc, free]) -> SetParameter(0x19 = buffer release delay 2) -> FutureInitialize ->
+      Boot (its CALL_COMPLETED(BOOT) handler calls FutureSet + ReplaceEventHandler) -> per movie
+      CreateDescriptor("x-cell-fs://...pam") -> OpenStream -> on STREAM_OPENED: DescriptorGetStreamType (the
+      RETURN value), CreateDatabase (= a CellPamfReader) + OpenEsVideo -> on ES_OPENED(video): PAMF reader
+      queries (0x15 = any audio) + OpenEsAudio -> on ES_OPENED(audio) "ready" -> Start -> per frame
+      GraphicsAdapterGetFrame (RGBA into the title's 4 buffers, texture remap 0xA993) + UpdateAvSync; its
+      sound thread pulls SoundAdapterGetFrame. End: SOURCE_EOS, STATE 7, STATE 4 -> CloseStream -> teardown
+      (Unsubscribe x9, adapter Finalize, PlayerFinalize). The game finalizes and re-creates the player for
+      every movie. The wrapper is a state machine (handler table EBOOT 0x18716C0: 2 wait-open, 3 start,
+      4 wait-finished, 5 close); its close (func_00FDBEC8) polls with no timeout until STREAM_CLOSED arrives.
+    - New: libs/codec/sail_engine.c (reader thread: 64 KB reads -> sail_mpegps.c program-stream demux;
+      decoder thread: vdec_mf.c = the Windows Media Foundation MPEG-2 decoder MFT -> I420 -> RGBA BT.709,
+      ring of 6 frames; LPCM into a 4 s byte ring). cellSail.c rewritten: real state machine and events,
+      futures, descriptors in guest memory, adapters keep their callbacks, frame buffers and PCM slots from
+      the title's own allocator, movie clock = host QPC since Start (never guest time, so PS3_CLOCK_SCALE does
+      not speed movies up), frames handed out when due (late ones dropped), PCM as f32 BE, end of stream once
+      the pictures are out and the audio drained (or 1 s past the movie's end). cellPamf.c: readers bound to
+      the header copy (pamf_reader_bind_host / unbind), SDK error codes and struct sizes, the 0x14/0x15
+      wildcards, SetStreamWithTypeAndIndex / GetStreamTypeAndChannel. Movie paths resolve like cellFs
+      (ppu_vfs_root + PS3_GAME fallback); sys_fs_translate_path gave .\USRDIR\movie\... (wrong root).
+      mfplat + mfuuid linked. ppu_loader.cpp: ppu_guest_callers() = the whole guest call chain (debug).
+    - Gotcha (the last bug): the game reads ONE event per poll, and its start routine (func_00FD8FB8) only
+      calls cellSailPlayerStart when the state it has recorded is OPENED (4). ES_OPENED(audio) marks the movie
+      ready, so it must come AFTER CALL_COMPLETED(OPEN_STREAM) + STATE_CHANGED(4); in the other order the game
+      tried to start in state 3, skipped Start, judged the movie finished and closed it.
+    - Agent review (4 areas + adversarial verify, 11 findings, 3 confirmed, all fixed): a skipped movie
+      (PS3_SAIL_SKIP / no decoder) sent no STREAM_CLOSED, so the close loop hung; Initialize2 refused every
+      title's player when no decoder was found (would break Midway/Tokyo Jungle's legacy path -- the player is
+      now always created and only PAMF movies are skipped); end of stream cut the audio tail. Also fixed: the
+      reader no longer waits forever if the decoder fails to open, GetUri writes through guest memory,
+      INVALID_STATE = 0x80610702.
+    - Kept: anything that is not a playable PAMF (other containers, no allocator) takes the old
+      instant-open/instant-end path that Midway Arcade Origins and Tokyo Jungle rely on.
+    - Switches: PS3_NO_SAIL=1 (skip all movies, the old behaviour), PS3_SAIL_SKIP=<name,...>,
+      PS3_SAIL_DECODER=none, PS3_SAIL_FORCE=<host .pam> (tests), PS3_SAIL_PCM=s16, PS3_SAIL_AV_MS=<n>,
+      PS3_SAIL_LOG=1 (events, Open/CloseStream call chains, a line a second: frames shown/dropped, PCM
+      buffered, sound pulls).
+    - Result (sandbox, frame dumps + AUDIO_WAV): boot logos -> ds_advertise plays (picture right, captured
+      mix vs the movie's own LPCM: envelope correlation 0.92); ENTER stops it -> ds_title draws the logo,
+      the last frame stays up under PRESS START BUTTON, ~20 s later the attract film again (as on a PS3).
+      Each other movie forced through the first slot for 75 s: opening 0.95, old tale 0.98, good ending
+      0.82, bad ending 0.65 correlation, all programme audio (spectral flatness < 0.08), 0-1 frames dropped
+      (17 in one run where the game itself ran at 29.7 fps: the movie keeps real time). 60 fps mode (200%
+      guest clock): 30.0 movie fps, same flow. PS3_NO_SAIL=1, PS3_SAIL_SKIP=ds_advertise and
+      PS3_SAIL_DECODER=none: movies skipped, no hang.
+    - Launchers: movies on by default; `set DES_MOVIES=0` sets PS3_NO_SAIL=1 (skip them, the old
+      behaviour). An inherited PS3_NO_SAIL is cleared.
+    - Repro: PS3_SAIL_LOG=1, no PS3_NO_SAIL; past the auto-save notice the attract movie starts ~44 s in;
+      ENTER skips it to the title. Audio check: AUDIO_WAV capture vs the movie's own LPCM track.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
