@@ -516,7 +516,7 @@ index 3a473eb..1db35bd 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..d60c2f9 100644
+index afdd93d..7a9b219 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -268,8 +268,12 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
@@ -532,7 +532,7 @@ index afdd93d..d60c2f9 100644
      HWND fg = GetForegroundWindow();
      if (!fg) return 0;
      DWORD pid = 0;
-@@ -277,6 +281,174 @@ static int pad_host_window_focused(void)
+@@ -277,6 +281,206 @@ static int pad_host_window_focused(void)
      return pid == GetCurrentProcessId();
  }
  
@@ -585,6 +585,36 @@ index afdd93d..d60c2f9 100644
 +    }
 +    return (GetAsyncKeyState(vk) & 0x8000) != 0;
 +}
++
++/* Letter keys by POSITION (Demon's Souls NOTES fix 69): the layouts below name keys by their US
++ * QWERTY letter, which put WASD in the wrong place on AZERTY / QWERTZ keyboards. A letter is turned
++ * into the US key's scan code and back into whatever virtual key that physical key is on the game
++ * window's layout (Z on AZERTY for W). Scripted keys (PAD_KEY_SCRIPT) stay by letter.
++ * PAD_KEYS_BY_LETTER=1 = by letter, as before. */
++static int pad_pos_key(int us_letter)
++{
++    static const unsigned char sc[26] = { 0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24,
++        0x25, 0x26, 0x32, 0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14, 0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C };
++    static int by_letter = -1;
++    if (by_letter < 0) by_letter = getenv("PAD_KEYS_BY_LETTER") ? 1 : 0;
++    if (by_letter || pad_key_script_active() || us_letter < 'A' || us_letter > 'Z') return us_letter;
++    static HKL hkl; static int vk_of[26]; static unsigned long long at;
++    const unsigned long long now = GetTickCount64();
++    if (!at || now - at > 1000) {   /* the layout can be switched while playing */
++        at = now;
++        HWND fg = GetForegroundWindow();
++        const HKL h = GetKeyboardLayout(fg ? GetWindowThreadProcessId(fg, NULL) : 0);
++        if (h != hkl || !vk_of[0]) {
++            hkl = h;
++            for (int i = 0; i < 26; i++) {
++                const UINT v = MapVirtualKeyExA(sc[i], MAPVK_VSC_TO_VK, h);
++                vk_of[i] = v ? (int)v : 'A' + i;
++            }
++        }
++    }
++    return vk_of[us_letter - 'A'];
++}
++static int pad_pos_down(int us_letter) { return pad_key_down(pad_pos_key(us_letter)); }
 +
 +/* Port hotkeys (Demon's Souls god mode, NOTES fix 44): ps3_host_hotkey(vk) is 1 once per press of
 + * vk while the game window is in front (or from PAD_KEY_SCRIPT). Call it from one thread only.
@@ -655,21 +685,23 @@ index afdd93d..d60c2f9 100644
 +        { VK_RETURN, CELL_PAD_CTRL_START }, { VK_BACK, CELL_PAD_CTRL_SELECT },
 +    };
 +    u16 btns = 0;
++    /* Alt+Enter toggles fullscreen (rsx_null_backend.c, fix 69): that Enter is not START. */
++    const int alt = !pad_key_script_active() && (GetAsyncKeyState(VK_MENU) & 0x8000);
 +    for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
-+        if (pad_key_down(map[i].vk)) btns |= map[i].btn;
++        if (!(alt && map[i].vk == VK_RETURN) && pad_pos_down(map[i].vk)) btns |= map[i].btn;
 +    hs->buttons = btns;
 +    hs->connected = 1;
 +
 +    /* Left stick from WASD; a diagonal is scaled so it is not faster than a straight line. */
-+    int lx = (pad_key_down('D') ? 1 : 0) - (pad_key_down('A') ? 1 : 0);
-+    int ly = (pad_key_down('S') ? 1 : 0) - (pad_key_down('W') ? 1 : 0);
++    int lx = (pad_pos_down('D') ? 1 : 0) - (pad_pos_down('A') ? 1 : 0);
++    int ly = (pad_pos_down('S') ? 1 : 0) - (pad_pos_down('W') ? 1 : 0);
 +    const int lmag = (lx && ly) ? 90 : 127;
 +    hs->analog_lx = (u8)(128 + lx * lmag);
 +    hs->analog_ly = (u8)(128 + ly * lmag);
 +
 +    /* Right stick from IJKL, plus the mouse while it is captured. */
-+    double rx = (pad_key_down('L') ? 127 : 0) - (pad_key_down('J') ? 127 : 0);
-+    double ry = (pad_key_down('K') ? 127 : 0) - (pad_key_down('I') ? 127 : 0);
++    double rx = (pad_pos_down('L') ? 127 : 0) - (pad_pos_down('J') ? 127 : 0);
++    double ry = (pad_pos_down('K') ? 127 : 0) - (pad_pos_down('I') ? 127 : 0);
 +    static int mouse_on = -1, f1_was = 0;
 +    static double sens = 0;
 +    if (mouse_on < 0) { const char* e = getenv("PAD_MOUSE"); mouse_on = (e && e[0] == '0') ? 0 : 1;
@@ -707,7 +739,7 @@ index afdd93d..d60c2f9 100644
  static void pad_poll_keyboard(void)
  {
      static int off = -1;
-@@ -284,7 +456,7 @@ static void pad_poll_keyboard(void)
+@@ -284,7 +488,7 @@ static void pad_poll_keyboard(void)
      if (off) return;
  
      PadHostState* hs = &s_host_state[0];
@@ -716,7 +748,7 @@ index afdd93d..d60c2f9 100644
          /* Release everything on focus loss, or a key held while alt-tabbing
           * would stay down forever. */
          hs->buttons = 0;
-@@ -294,6 +466,10 @@ static void pad_poll_keyboard(void)
+@@ -294,6 +498,10 @@ static void pad_poll_keyboard(void)
          return;
      }
  
@@ -727,16 +759,19 @@ index afdd93d..d60c2f9 100644
      static const struct { int vk; u16 btn; } map[] = {
          { VK_UP,     CELL_PAD_CTRL_UP },      { VK_DOWN,  CELL_PAD_CTRL_DOWN },
          { VK_LEFT,   CELL_PAD_CTRL_LEFT },    { VK_RIGHT, CELL_PAD_CTRL_RIGHT },
-@@ -306,7 +482,7 @@ static void pad_poll_keyboard(void)
+@@ -305,8 +513,10 @@ static void pad_poll_keyboard(void)
+     };
  
      u16 btns = 0;
++    /* Alt+Enter toggles fullscreen (rsx_null_backend.c, fix 69): that Enter is not START. */
++    const int alt = !pad_key_script_active() && (GetAsyncKeyState(VK_MENU) & 0x8000);
      for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
 -        if (GetAsyncKeyState(map[i].vk) & 0x8000) btns |= map[i].btn;
-+        if (pad_key_down(map[i].vk)) btns |= map[i].btn;
++        if (!(alt && map[i].vk == VK_RETURN) && pad_pos_down(map[i].vk)) btns |= map[i].btn;
  
      hs->buttons   = btns;
      hs->connected = 1;
-@@ -706,17 +882,34 @@ static void pad_poll_backend(void)
+@@ -706,17 +916,34 @@ static void pad_poll_backend(void)
      for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) s_data_fresh[_i] = 1;
  
  #if PAD_BACKEND_XINPUT
@@ -773,7 +808,7 @@ index afdd93d..d60c2f9 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -949,7 +1142,13 @@ skip_inject: ;
+@@ -949,7 +1176,13 @@ skip_inject: ;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
                    static int said[256];
                    if (!said[i]) { said[i] = 1;
@@ -788,7 +823,7 @@ index afdd93d..d60c2f9 100644
                }
            }
        } }
-@@ -1015,6 +1214,24 @@ skip_inject: ;
+@@ -1015,6 +1248,24 @@ skip_inject: ;
        if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
@@ -2419,10 +2454,10 @@ index e55bcc1..5a0e68d 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 2579117..b8b1741 100644
+index 2579117..f21ef97 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
-@@ -1,10554 +1,14043 @@
+@@ -1,10554 +1,14101 @@
 -/*
 - * ps3recomp - Track B live NV4097 draw path (implementation)
 - *
@@ -16893,6 +16928,48 @@ index 2579117..b8b1741 100644
 +    key = fnv1a(&fp_ctrl_key, sizeof(fp_ctrl_key), key);
 +    key = fnv1a(&cube_mask, sizeof(cube_mask), key);
 +    key = fnv1a(&vtex_mask, sizeof(vtex_mask), key);
++    /* Depth-texture comparison (Demon's Souls NOTES fix 70). A shadow map is a depth texture whose
++     * TEXTURE_ADDRESS zfunc asks the RSX to compare the stored depth with the lookup's reference
++     * and return 0 or 1; the fragment program only sees that result. The translator supports it
++     * (rsx_fp_shadow_desc, the shared engine and Metal use it) but this renderer never passed the
++     * state, so every shadow lookup returned the raw stored depth (~1.0) and the game lit what it
++     * meant to shadow ("white shadows", GitHub issue #10). Layouts the translator cannot compare
++     * (enabled=2: float depth, cubes, mips...) keep the raw sampling instead of failing the draw.
++     * LD_SHADOW_COMPARE=0 = raw sampling everywhere, as before. */
++    rsx_fp_shadow_desc shadow[16];
++    memset(shadow, 0, sizeof shadow);
++    int any_shadow = 0;
++    { static int on = -1;
++      if (on < 0) { const char* e = getenv("LD_SHADOW_COMPARE"); on = !(e && *e == '0'); }
++      const u32 sampled = on ? rsx_fp_texture_units(fp_uc, fp_size) : 0;
++      for (u32 u = 0; u < 16; u++) {
++          if (!(sampled & (1u << u))) continue;
++          rsx_dsp_texture t;
++          rsx_dsp_get_texture(&g.rsx, u, &t);
++          if (!t.enabled) continue;
++          rsx_fp_shadow_desc_from_texture(&shadow[u], t.format, t.dimension, t.cubemap, t.mipmaps,
++                                          t.filter, t.wrap, t.control0);
++          /* The compare reads depth from .r, which only the R32F zeta snapshot provides: a D16
++           * texture, or a D24 one that will be read from guest memory, keeps raw sampling. */
++          if (shadow[u].enabled == 1) {
++              int snap = 0;
++              if ((t.format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM) == TEX_FMT_DEPTH24_D8)
++                  for (u32 zi = 0; zi < g.n_zdepths; zi++)
++                      if (g.zdepths[zi].location == t.location && g.zdepths[zi].offset == t.offset &&
++                          (g.zdepths[zi].had_write || g.zdepths[zi].snapshot_valid)) { snap = 1; break; }
++              if (!snap) memset(&shadow[u], 0, sizeof shadow[u]);
++          }
++          if (shadow[u].enabled == 2) {
++              static u32 said;
++              if (PS3_LOG_FIRST(said, 8))
++                  fprintf(stderr, "[shadow] unit %u: comparison layout not supported (fmt 0x%X dim %u "
++                          "cube %u mips %u filter 0x%X) -- raw depth\n", u, t.format, t.dimension,
++                          t.cubemap, t.mipmaps, t.filter);
++              memset(&shadow[u], 0, sizeof shadow[u]);
++          }
++          if (shadow[u].enabled) any_shadow = 1;
++      } }
++    if (any_shadow) key = fnv1a(shadow, sizeof shadow, key);
 +    /* BRB/CLB outcomes are baked into the program (rsx_vp_set_branch_bits). */
 +    const int vp_branch_bits_used = rsx_vp_uses_branch_bits(vp_uc, vp_instrs * 16);
 +    const u32 vp_branch_bits = vp_branch_bits_used ? rsx_dsp_reg(&g.rsx, 0x1FF8u) : 0;
@@ -17025,9 +17102,21 @@ index 2579117..b8b1741 100644
 +    u32 decompiled_constant_count = 0;
 +    int fi;
 +    if (ld_fp_constants_buffered()) {
-+        fi = rsx_fp_decompile_buffered_ex(
-+            fp_uc, fp_size, fp_ctrl, cube_mask, ps_hlsl,
-+            sizeof(ps_hlsl), &decompiled_constant_count);
++        fi = any_shadow   /* fix 70 */
++            ? rsx_fp_decompile_buffered_shadow_ex(
++                fp_uc, fp_size, fp_ctrl, cube_mask, shadow, ps_hlsl,
++                sizeof(ps_hlsl), &decompiled_constant_count)
++            : rsx_fp_decompile_buffered_ex(
++                fp_uc, fp_size, fp_ctrl, cube_mask, ps_hlsl,
++                sizeof(ps_hlsl), &decompiled_constant_count);
++        if (any_shadow && fi <= 0) {   /* e.g. TXB/TXL on a compare unit: raw sampling, as before */
++            static u32 said;
++            if (PS3_LOG_FIRST(said, 8))
++                fprintf(stderr, "[shadow] comparison not translatable for fp 0x%08X -- raw depth\n", fp_off);
++            fi = rsx_fp_decompile_buffered_ex(
++                fp_uc, fp_size, fp_ctrl, cube_mask, ps_hlsl,
++                sizeof(ps_hlsl), &decompiled_constant_count);
++        }
 +        if (fi > 0 &&
 +            decompiled_constant_count != g.fp_constants.count)
 +            fi = -1;
@@ -17083,7 +17172,8 @@ index 2579117..b8b1741 100644
 +           * only the return still showed nothing for a failing alpha. */
 +          for (char* d = strstr(ps_hlsl, "discard;"); d; d = strstr(d, "discard;"))
 +              memcpy(d, "        ", 8);
-+          char* r = strstr(ps_hlsl, "    return ");
++          char* r = NULL;   /* the LAST return: helpers (shadow compare, fix 70) come first */
++          for (char* q = strstr(ps_hlsl, "    return "); q; q = strstr(q + 1, "    return ")) r = q;
 +          if (r) {
 +              char* semi = strchr(r, ';');
 +              if (semi) {
@@ -24409,6 +24499,9 @@ index 2579117..b8b1741 100644
 +    }
 +    sc1->lpVtbl->QueryInterface(sc1, &IID_IDXGISwapChain3, (void**)&g.swap);
 +    sc1->lpVtbl->Release(sc1);
++    /* Alt+Enter is the window's borderless toggle (rsx_null_backend.c, fix 69), not DXGI's
++     * exclusive-fullscreen switch, which would change the display mode under the vblank lock. */
++    factory->lpVtbl->MakeWindowAssociation(factory, (HWND)hwnd, DXGI_MWA_NO_ALT_ENTER);
 +    if (g.swap) ldvb_start();   /* NOTES fix 53 */
 +    factory->lpVtbl->Release(factory);
 +
@@ -27016,7 +27109,7 @@ index 2579117..b8b1741 100644
 +
 +#endif /* _WIN32 */
 diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
-index 32e8a95..3a5f82d 100644
+index 32e8a95..eebe369 100644
 --- a/libs/video/rsx_null_backend.c
 +++ b/libs/video/rsx_null_backend.c
 @@ -9,6 +9,7 @@
@@ -27061,7 +27154,13 @@ index 32e8a95..3a5f82d 100644
  /* ---------------------------------------------------------------------------
   * Internal state
   * -----------------------------------------------------------------------*/
-@@ -57,6 +85,7 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+@@ -52,11 +80,13 @@ static NullBackendState s_state;
+ 
+ static int s_present_suppressed = 0;
+ 
++static void null_toggle_fullscreen(HWND h);   /* fix 69, below */
+ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+ {
      switch (msg) {
      case WM_CLOSE:
          s_state.window_closed = 1;
@@ -27069,7 +27168,73 @@ index 32e8a95..3a5f82d 100644
          DestroyWindow(hwnd);
          return 0;
  
-@@ -297,12 +326,21 @@ void rsx_null_backend_shutdown(void)
+@@ -92,7 +122,17 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+         return 0;
+     }
+ 
++    case WM_SYSKEYDOWN:   /* Alt+Enter: borderless fullscreen on/off (Demon's Souls NOTES fix 69) */
++        if (wp == VK_RETURN && (lp & (1 << 29))) {   /* bit 30: auto-repeat of a held key */
++            if (!(lp & (1 << 30))) null_toggle_fullscreen(hwnd);
++            return 0;
++        }
++        break;
++    case WM_SYSCHAR:
++        if (wp == VK_RETURN) return 0;   /* no "ding" for Alt+Enter */
++        break;
+     case WM_KEYDOWN:
++        if (wp == VK_F11) { if (!(lp & (1 << 30))) null_toggle_fullscreen(hwnd); return 0; }
+         if (wp == VK_ESCAPE) {
+             s_state.window_closed = 1;
+             DestroyWindow(hwnd);
+@@ -103,6 +143,38 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+     return DefWindowProcA(hwnd, msg, wp, lp);
+ }
+ 
++/* ---------------------------------------------------------------------------
++ * Borderless fullscreen (Demon's Souls NOTES fix 69): the window loses its frame and covers its
++ * monitor; the swap chain keeps the game's resolution and DXGI stretches it to the window (also
++ * the aspect ratio: a monitor that is not 16:9 shows the picture stretched, as a resized window
++ * already did). No display-mode change, which would also upset the vblank lock.
++ * Alt+Enter or F11 toggles it; DES_FULLSCREEN=1 starts in it.
++ * -----------------------------------------------------------------------*/
++static int  s_fs;
++static RECT s_fs_rc;
++static LONG s_fs_style;
++static void null_toggle_fullscreen(HWND h)
++{
++    if (!s_fs) {
++        MONITORINFO mi; mi.cbSize = sizeof mi;
++        if (!GetWindowRect(h, &s_fs_rc) ||
++            !GetMonitorInfoA(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi)) return;
++        s_fs_style = GetWindowLongA(h, GWL_STYLE);
++        SetWindowLongA(h, GWL_STYLE, (s_fs_style & ~WS_OVERLAPPEDWINDOW) | WS_POPUP | WS_VISIBLE);
++        SetWindowPos(h, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
++                     mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
++                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
++        s_fs = 1;
++    } else {
++        SetWindowLongA(h, GWL_STYLE, s_fs_style);
++        SetWindowPos(h, NULL, s_fs_rc.left, s_fs_rc.top, s_fs_rc.right - s_fs_rc.left,
++                     s_fs_rc.bottom - s_fs_rc.top, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW);
++        s_fs = 0;
++    }
++    printf("[RSX null] %s\n", s_fs ? "borderless fullscreen" : "windowed");
++    fflush(stdout);
++}
++
+ /* ---------------------------------------------------------------------------
+  * Backend callbacks
+  * -----------------------------------------------------------------------*/
+@@ -264,6 +336,8 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
+         return -1;
+     }
+ 
++    { const char* e = getenv("DES_FULLSCREEN");   /* fix 69 */
++      if (e && *e == '1') null_toggle_fullscreen(s_state.hwnd); }
+     s_state.hdc = GetDC(s_state.hwnd);
+     s_state.last_fps_time = GetTickCount64();
+     snprintf(s_state.title, sizeof(s_state.title), "%s", title ? title : "ps3recomp");
+@@ -297,12 +371,21 @@ void rsx_null_backend_shutdown(void)
  int rsx_null_backend_pump_messages(void)
  {
      MSG msg;

@@ -1337,6 +1337,39 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       lifted VMX keeps vector registers in guest byte order in ctx->vr, so each op loads, shuffles,
       computes and stores -- a lifter-level change, not a runtime one. ctx __restrict would not help
       that code. Lock-line lock contention (3.9%) would need per-line lock striping.
+69. **Borderless fullscreen + keyboard by key position (2026-11-02, GitHub issues #2/#14 and #8):**
+    - rsx_null_backend.c: Alt+Enter or F11 toggles a borderless window covering the monitor
+      (DES_FULLSCREEN=1 starts in it); key auto-repeat ignored. rsx_live_draw.c: MakeWindowAssociation
+      (DXGI_MWA_NO_ALT_ENTER) -- before, Alt+Enter was DXGI's exclusive-fullscreen switch, and in a test
+      every Present then failed with 0x887A0001 (the picture froze).
+      The swap chain stays at 1280x720 and DXGI stretches it: a monitor that is not 16:9 shows the
+      picture stretched (as a resized window already did) -- letterboxing would need the present path
+      to draw into a sub-rect of a client-sized swap chain.
+    - cellPad.c: the keyboard layouts name keys by US letter; pad_pos_key turns a letter into the US
+      scan code and back into the virtual key of that physical key on the game window's layout
+      (MapVirtualKeyEx, refreshed once a second), so WASD/IJKL/E/F/R/C sit in the same place on AZERTY /
+      QWERTZ. PAD_KEYS_BY_LETTER=1 = old. Enter is not START while Alt is held (Alt+Enter = fullscreen;
+      a review agent caught that every toggle opened the game menu). The mouse is already released when
+      the window loses focus (the recentre only runs while it has focus); F1 toggles it.
+70. **White shadows: depth-texture comparison was never enabled in the live renderer (2026-11-02,
+    GitHub issue #10, tutorial screenshot: the player's shadow on a torch-lit wall came out brighter):**
+    - Demon's Souls' lit materials (171 fragment programs in the tutorial) sample the 2048x2048 D24
+      shadow map on unit 7 with TXP and a TEXTURE_ADDRESS zfunc (LESS): the RSX compares and returns 0/1.
+      The translator supports it (rsx_fp_shadow_desc; the shared engine and Metal pass it), but
+      rsx_live_draw.c called rsx_fp_decompile_buffered_ex, which takes no shadow state, so every lookup
+      returned the raw stored depth (~1.0) and the shader subtracted light where it should not.
+    - get_pso builds the descriptors for sampled units (rsx_fp_shadow_desc_from_texture, as
+      rsx_draw_engine.c does), hashes them into the PSO key and uses
+      rsx_fp_decompile_buffered_shadow_ex. Raw sampling is kept where the compare cannot work: layouts
+      the translator rejects (enabled=2), a compare unit read by TXB/TXL/TXD/TEXBEM/TXPBEM (translation
+      fails -> retried raw), DEPTH16 and D24 textures not backed by a written zeta snapshot (the
+      compare reads depth from .r of the R32F snapshot). Literal-constant mode (non-buffered) is
+      unchanged. LD_SHADOW_COMPARE=0 = raw everywhere. LD_FORCE_GREEN now patches main's return.
+    - Agent review (3 lenses + verify) found: Alt+Enter = START, auto-repeat, non-16:9 stretch, the
+      TXB fallback, D16 / guest-memory D24, LD_FORCE_GREEN -- all handled above except the stretch.
+    - Result: tutorial corridor (frame dumps, LD_SHADOW_COMPARE=0 vs default): the bright glow on the wall around the player becomes a proper darker shadow, floor shadow ahead of the player appears; 171 programs compile with _rsx_shadow7 (LESS). Final build: no [shadow] fallbacks or pso-fail in the tutorial or a Latria run (99.85% frames even, frames normal).
+    - Repro: a save in the Nexus, DES_WARP_AT=130:8,1,10 (tutorial corridor), DES_GOD=1;
+      LD_F12_CAPTURE + LD_CAPTURE_AT=<frame> for per-draw captures, LD_HLSL_DUMP for the programs.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

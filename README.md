@@ -101,7 +101,11 @@ DS4Windows. Keyboard + mouse:
 | arrows | d-pad (switch items) |
 | Enter / Backspace | Start / Select |
 | F1 | capture / release the mouse |
+| Alt+Enter / F11 | borderless fullscreen on/off (`set DES_FULLSCREEN=1` starts in it) |
 | F9 | god mode on/off (no death, HP/MP/stamina stay full) |
+
+Keys go by position, not by letter: on an AZERTY or QWERTZ keyboard you move with the keys where
+WASD would be (ZQSD on AZERTY), and the others follow the same way. `set PAD_KEYS_BY_LETTER=1` = by letter.
 
 At *Create Profile* a text box opens for the character name. Saves go to `gamedata/`. Each run
 writes logs to `logs/` (they grow by ~600 MB an hour; the previous run is kept as `*_prev.txt`).
