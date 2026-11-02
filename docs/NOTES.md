@@ -1264,6 +1264,79 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
     - Repro: a save in the Nexus, DES_GOD=1, DES_WARP_AT=125:3,3,995 (Storm King archstone; the
       Nexus script m01_00_00_00.lua lists every archstone's warp). Before: qfull 724,905, rock spires
       behind the archstone missing; after: qfull 0, 49.8 fps, 99.3% of frames up 2 refreshes. Lesson: grep "qfull=" when geometry is missing.
+65. **Valley of Defilement judder in the 100 fps mode: pin the game to the biggest L3 (2026-11-02, a
+    25-min recording, 9 F8 marks, DES_FPS=100 on a 100 Hz monitor):**
+    - Not freezes: in the busy swamp parts (5-1 area, map 5,1) the game could not hold 100 fps, so frames
+      mixed 1 and 2 refreshes (and fix 50's catch-up pairs). Sandbox at mark 4/5 (117.6,-25.7,-350.1):
+      100 fps mode 77 fps (68% one refresh, 31% two); the 50 fps mode at the same spot (and marks 1, 2)
+      99.9-100% exactly 2 refreshes -- 50 is smooth there.
+    - PS3_FTRACE at the spot (100 fps): one serial chain per frame -- main ~2 ms, HighGraphics ~7 ms
+      running (draw-list build, SPU jobs alongside), ~3 ms of hand-off waits; renderer drain 3.3 ms, not
+      the limit. Late-step stacks (the recorder has them now): main in sys_cond_wait under
+      func_001D1A80, HighGraphics in sys_cond_wait (60/68), renderer idle.
+    - Fix (boot_main.cpp pin_to_biggest_l3): at start, with two or more L3 caches and the biggest serving
+      >= 12 logical CPUs, the process is pinned to it (the 96 MB V-Cache CCD on a 7950X3D). The
+      HighGraphics <-> SPU dispatcher lock-line hand-offs no longer cross dies. 77 -> 89.8 fps at the
+      spot (same as AFF=FFFF by hand). DES_AFFINITY=0 = off, =<hex> = mask. Single-L3 CPUs untouched.
+66. **Lifted PPU code built with SSE4.1 / AVX2 / FMA, no stack cookies, fp-contract off (2026-11-02):**
+    - port/project/CMakeLists.txt (copy in patches/port-project-CMakeLists.txt): clang-cl lifted PPU
+      units get "-msse4.1;-mavx2;-mfma;/GS-;/clang:-ffp-contract=off" (DS_PPU_SIMD), like the SPU
+      sources. ppu_vmx.h's fast paths can inline; fma()/trunc()/nearbyint() become instructions with
+      the same results; -ffp-contract=off keeps every PPC multiply and add separate. Full rebuild 4.8 min.
+    - Exactness: a VMX fast-vs-scalar test (fix 54's) with these flags at -O1 and -O2: 16 M ops, 0 mismatches.
+    - Valley spot, 100 fps, pinned, back to back: 89.2 -> 92.8 fps, frames held 2 refreshes 12.1 ->
+      8.1%, catch-up frames 29 -> 7. Latria 50 fps sanity: 99.8% even, frames normal.
+    - Left for 100 fps in the heaviest spots (scoping agents, fact-checked): the HighGraphics stores to
+      SPU-reserved lines (vm_write32 -> lock-line lock, PPU reservation walk, SPU walk with a seq_cst
+      fence; reservation fields share cache lines with hot registers), the out-of-line ds_toc_check
+      after every guest call (DRAIN_TRAMPOLINE), ctx __restrict; or an automatic 100<->50 switch
+      (vblank 200<->100 Hz + present interval 1<->2 at a fixed clock 167; clock scale must not change
+      mid-run: absolute multiply in sys_timer.c / ppu_sysprx.cpp). Repro: a save in the Nexus,
+      DES_WARP_AT=125:5,1,997 (lands at a boss arena; DES_GOD=1) + DES_TELEPORT_AT=150:<mark>.
+67. **Cheaper PPU stores to SPU-reserved lines: a held-line table (2026-11-02, Valley 100 fps):**
+    - Profile (DES_PERF_STACK_EVERY=2, HighGraphics at the Valley spot, 100 fps): 16.9% of its samples
+      in the store path for lines an SPU kernel has reserved -- vm_write32 -> lock-line lock ->
+      spu_coh_notify_write (walk of ~8.7 listed SPU contexts reading resv_valid/resv_ea from cache
+      lines their threads write, seq_cst fence) + ppu_resv_break_line (walk of the PPU contexts).
+      SPU_COH_STATS: 2.5 M such stores/s, 2.1 M of them to one line (0x01B51080), a holder found 6%.
+      The per-call ds_toc_check was only 0.7% -- left alone.
+    - spu_coherency.c: each listed context gets a slot in s_coh_held[64] (line|1 it may hold). The
+      locked GETLLAR path publishes under the lock-line lock, spu_coh_reserve_fast before its seq_cst
+      fence (the same store-buffering argument as resv_valid); only the owner clears its slot
+      (spu_coh_release after PUTLLC / PUTLLUC / lost-poll / failed GETLLAR) or the lock when the context
+      leaves the list; a notifier never clears one (it could erase a fresh publication). A write visits
+      only the contexts whose slot shows its line (s_coh_slot_ctx), or the whole list when some listed
+      context has no slot. SPU_COH_HELD=0 = walk everything as before.
+    - spu_coh_notify_write_ppu (VM_WRITE_COH in ppu_loader.cpp / ppu_memory.h): a plain PPU store no
+      longer breaks other PPU threads' lwarx reservations on such a line -- ordinary lines never did
+      (value-CAS per word); SPU writes (PUTLLC, PUTLLUC, DMA, workload) still do, which is what the
+      Havok queue needed. SPU_COH_PPU_BREAK=1 = as before. MSVC /alternatename falls the new symbol
+      back to spu_coh_notify_write in builds without spu_coherency.c (unit tests).
+    - Two agent review rounds: round 1 found a real hole -- spu_context_init memsets a context that is
+      still listed (raw SPU stop/restart), its coh_slot became 0 while its node kept the slot, so its
+      reservations were never published and stores skipped it (missed SPU_EVENT_LR); fixed by
+      re-syncing coh_slot from the node in spu_coh_reserve's existing-node branch. Round 2 (final
+      version): no findings. runtime/spu/tests/test_spu_coherency.c: 195 passed, 0 failed.
+    - Result: store path 16.9% -> 7.6% of HighGraphics' samples, its idle (usleep) 16.7 -> 20.3%.
+      Valley spot fps is noisy run to run (87.5 / 91.4 old vs 95.7 / 91.6 new); HighGraphics CPU per
+      step 10.8 / 10.4 -> 9.0 / 10.1 ms. Safety: Boletaria 1-1 arrival fight at 50 fps (Havok + SPU heavy), 75 s: no hangs, game time 1.000 s/s, 99.0% of frames 2 refreshes.
+68. **Guest function-pointer calls: a fast path (2026-11-02, Valley 100 fps):**
+    - After fix 67 the HighGraphics profile (DES_PERF_STACK_EVERY=2 samples, self time by function):
+      lifted game code 53%, waits (usleep / SPURS queue pop / semaphore / cond) ~30%, ps3_indirect_call
+      4.9%, lock-line lock 3.9%, notify 2.6%, ds_toc_check 0.8%.
+    - ppu_loader.cpp ps3_indirect_call: when none of its debug switches is set (PPU_CSCHECK,
+      PS3_ICALL_GATE, BCTRL_RING, PS3_BREADCRUMB, PPU_TOCWATCH, PS3_CALLTRACE*, FLOW_FORCE_RTCFG,
+      PPU_TOCFIX, PPU_RETWATCH -- checked once), a call goes straight to lookup + call + trampoline
+      drain, with a per-thread direct-mapped cache (1024 entries) in front of the registry's
+      two-array hash probe. Explicit targets, null / unregistered addresses and the depth cap take
+      the full path. PS3_ICALL_SLOW=1 = always the full path.
+    - Dispatcher share of HighGraphics 4.9 -> 2.4%; fps within noise (90.7 vs 90.8 at the spot).
+      Boletaria arrival fight at 50 fps: game time 1.000, 99.3% even, no null-call / recursion /
+      garbage-vcall reports (same as before).
+    - Where the rest goes: the hottest lifted function (func_00A43718, 4.9%) is VMX culling maths;
+      lifted VMX keeps vector registers in guest byte order in ctx->vr, so each op loads, shuffles,
+      computes and stores -- a lifter-level change, not a runtime one. ctx __restrict would not help
+      that code. Lock-line lock contention (3.9%) would need per-line lock striping.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

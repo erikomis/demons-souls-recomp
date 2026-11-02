@@ -28104,10 +28104,18 @@ index 15d4ef6..a1bde9a 100644
  
  /* An unresolved NID is a firmware import we never registered. Returning
 diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
-index 9309f2d..5eb859d 100644
+index 9309f2d..83e1758 100644
 --- a/runtime/ppu/ppu_loader.cpp
 +++ b/runtime/ppu/ppu_loader.cpp
-@@ -937,15 +937,21 @@ extern "C" void ppu_resv_register(ppu_context* c)
+@@ -862,6 +862,7 @@ extern "C" int  spu_coh_is_reserved(uint32_t addr);
+ extern "C" void spu_lockline_lock(void);
+ extern "C" void spu_lockline_unlock(void);
+ extern "C" void spu_coh_notify_write(uint32_t addr);
++extern "C" void spu_coh_notify_write_ppu(uint32_t addr);   /* fix 67 */
+ 
+ /* ---------------------------------------------------------------------------
+  * lwarx/stwcx. cross-thread reservation invalidation.
+@@ -937,15 +938,21 @@ extern "C" void ppu_resv_register(ppu_context* c)
   * while calling out every pass. Reading a pinned lr as "no calls since
   * entry" narrowed a search to the wrong loop once already. lr names the
   * last DIRECT call site and nothing more. */
@@ -28132,7 +28140,16 @@ index 9309f2d..5eb859d 100644
          /* With BCTRL_RING armed, follow it with that thread's recent INDIRECT
           * targets. lr cannot see those (bctrl does not write it), so for a
           * thread looping on a vtable call the ring is the only record of where
-@@ -1942,8 +1948,10 @@ static __attribute__((noinline)) void barrier_watch_hit_slow(uint32_t a, uint32_
+@@ -1574,7 +1581,7 @@ extern "C" int* ps3_ppu_vcall_sp_slot(void) { return &g_vcall_sp; }
+         if (spu_coh_line_reserved((uint32_t)(a))) {                           \
+             spu_lockline_lock();                                              \
+             memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
+-            spu_coh_notify_write((uint32_t)(a));                              \
++            spu_coh_notify_write_ppu((uint32_t)(a));   /* fix 67 */           \
+             spu_lockline_unlock();                                            \
+         } else {                                                              \
+             memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
+@@ -1942,8 +1949,10 @@ static __attribute__((noinline)) void barrier_watch_hit_slow(uint32_t a, uint32_
        if (s_wvg == (const char*)-1) s_wvg = getenv("PPU_WVAL_GATE");
        if (s_wv && v == s_wv && a >= s_wvlo && a < s_wvhi &&
            (!s_wvg || GetFileAttributesA(s_wvg) != INVALID_FILE_ATTRIBUTES)) {
@@ -28145,7 +28162,7 @@ index 9309f2d..5eb859d 100644
                fprintf(stderr, "[wv] 0x%08X <- 0x%X (w%d) guest-fn=0x%08X\n",
                        a, v, width, ppu_prof_resolve_host(ra));
                extern PPU_THREAD_LOCAL ppu_context* g_active_ctx;
-@@ -2015,10 +2023,19 @@ static __attribute__((noinline)) void barrier_watch_hit_slow(uint32_t a, uint32_
+@@ -2015,10 +2024,19 @@ static __attribute__((noinline)) void barrier_watch_hit_slow(uint32_t a, uint32_
                        a, v, width, ppu_prof_resolve_host(ra),
                        g_active_ctx ? (uint32_t)g_active_ctx->lr : 0u,
                        g_active_ctx ? (unsigned)g_active_ctx->thread_id : 0u);
@@ -28166,6 +28183,85 @@ index 9309f2d..5eb859d 100644
            } else if (_i == _cap + 1) {
                fprintf(stderr, "[ww] --- print cap %ld reached; further writes to "
                                "this window are NOT shown (raise PPU_WWATCH_MAX, "
+@@ -2564,8 +2582,53 @@ extern "C" void ps3_indirect_call_to(ppu_context* ctx, uint32_t target)
+     ps3_indirect_call(ctx);
+ }
+ 
++/* Fast path (Demon's Souls NOTES fix 68). HighGraphics makes a guest function-pointer call for
++ * nearly every scene-graph node, and the full dispatcher below first tests a dozen debug switches
++ * and then probes the registry's open-address table (two big arrays: a cache miss or two per call).
++ * When none of those switches is set the dispatcher's only work is lookup + call + trampoline
++ * drain, done here with a small per-thread direct-mapped cache in front of the lookup (the
++ * registry is filled at boot and never rewritten; misses are not cached). Anything unusual -- an
++ * explicit target, a null or unregistered address, the depth cap -- takes the full path. */
++static int ps3_icall_fast_on(void)
++{
++    static int on = -1;
++    if (on < 0) {
++        static const char* const sw[] = { "PPU_CSCHECK", "PS3_ICALL_GATE", "BCTRL_RING", "PS3_BREADCRUMB",
++            "PPU_TOCWATCH", "PS3_CALLTRACE", "PS3_CALLTRACE_LR", "PS3_CALLTRACE_TO", "PS3_CALLTRACE_FROM",
++            "PS3_CALLTRACE_R5", "FLOW_FORCE_RTCFG", "PPU_TOCFIX", "PPU_RETWATCH", "PS3_ICALL_SLOW" };
++        int ok = 1;
++        for (unsigned i = 0; i < sizeof sw / sizeof sw[0]; i++) if (getenv(sw[i])) ok = 0;
++        on = ok;
++    }
++    return on;
++}
++enum { ICACHE_N = 1024 };
++static PPU_THREAD_LOCAL struct { uint32_t a; ppu_fn f; } g_icache[ICACHE_N];
++
+ extern "C" void ps3_indirect_call(ppu_context* ctx)
+ {
++    if (!g_icall_target_set && ps3_icall_fast_on()) {
++        const uint32_t addr = (uint32_t)ctx->ctr;
++        const uint32_t ci = (addr >> 2) & (ICACHE_N - 1);
++        ppu_fn fn = (g_icache[ci].a == addr && addr) ? g_icache[ci].f : nullptr;
++        if (!fn && addr) { fn = ppu_lookup(addr); if (fn) { g_icache[ci].a = addr; g_icache[ci].f = fn; } }
++        int& depth = g_dispatch_depth;
++        if (fn && depth <= 4000) {
++            g_active_ctx = ctx;
++            depth++;
++            if (g_vcall_sp < 128) g_vcall_stk[g_vcall_sp] = addr;
++            g_vcall_sp++;
++            fn(ctx);
++            while (g_trampoline_fn) {
++                void (*tf)(void*) = g_trampoline_fn;
++                g_trampoline_fn = 0;
++                tf(ctx);
++            }
++            if (g_vcall_sp > 0) g_vcall_sp--;
++            depth--;
++            return;
++        }
++    }
+     static int on = -1;
+     if (on < 0) on = getenv("PPU_CSCHECK") ? 1 : 0;
+     { static int hg = -1; if (hg < 0) hg = getenv("PS3_ICALL_GATE") ? 1 : 0;
+diff --git a/runtime/ppu/ppu_memory.h b/runtime/ppu/ppu_memory.h
+index 97a9d17..38040fb 100644
+--- a/runtime/ppu/ppu_memory.h
++++ b/runtime/ppu/ppu_memory.h
+@@ -137,6 +137,11 @@ int         spu_coh_is_reserved(uint32_t addr);
+ void        spu_lockline_lock(void);
+ void        spu_lockline_unlock(void);
+ void        spu_coh_notify_write(uint32_t addr);
++void        spu_coh_notify_write_ppu(uint32_t addr);   /* plain PPU store (fix 67) */
++#if defined(_MSC_VER)
++/* Builds without spu_coherency.c (unit tests stub the coherence API) fall back to the old entry. */
++#pragma comment(linker, "/alternatename:spu_coh_notify_write_ppu=spu_coh_notify_write")
++#endif
+ #ifdef __cplusplus
+ }
+ #endif
+@@ -146,7 +151,7 @@ void        spu_coh_notify_write(uint32_t addr);
+         if (spu_coh_line_reserved((uint32_t)(addr))) {                        \
+             spu_lockline_lock();                                              \
+             memcpy(vm_ptr8((uint32_t)(addr)), (src), (n));                    \
+-            spu_coh_notify_write((uint32_t)(addr));                           \
++            spu_coh_notify_write_ppu((uint32_t)(addr));                       \
+             spu_lockline_unlock();                                            \
+         } else {                                                              \
+             memcpy(vm_ptr8((uint32_t)(addr)), (src), (n));                    \
 diff --git a/runtime/ppu/ppu_sysprx.cpp b/runtime/ppu/ppu_sysprx.cpp
 index 9cb5040..f28469b 100644
 --- a/runtime/ppu/ppu_sysprx.cpp
@@ -28309,7 +28405,7 @@ index 35052c6..56e782d 100644
  #define VMX_FUN(name, expr, flush_in, nanmode) \
  VMX_INL void name(VMX_D, VMX_B, uint32_t vscr) { const uint8_t* b = (const uint8_t*)b_; uint8_t r[16]; \
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb0..a04dabe 100644
+index a55afb0..e319fa3 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -73,7 +73,7 @@ void     ps3_load_prx_modules(void) {}
@@ -28574,8 +28670,58 @@ index a55afb0..a04dabe 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1085,6 +1135,17 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
+@@ -1083,8 +1133,67 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
+ }
+ #endif
  
++#ifdef _WIN32
++/* Keep the game on one L3 cache (Demon's Souls NOTES fix 65). On a CPU with several core
++ * complexes (Ryzen CCDs) Windows spreads the game's threads over all of them, and the
++ * HighGraphics <-> SPU dispatcher hand-offs (lock-line stores, reservation checks) then cross
++ * dies on every command. Pinned to the biggest L3 (the 3D V-Cache die on X3D parts) a heavy
++ * Valley of Defilement spot ran 89.5 instead of 77 fps in the 100 fps mode. Only when there are
++ * two or more L3s and the chosen one serves at least 12 logical CPUs; single-L3 CPUs (most
++ * Intel, small Ryzens) are left alone. DES_AFFINITY=0 = off, DES_AFFINITY=<hex mask> = that mask. */
++static void pin_to_biggest_l3(void)
++{
++    const char* e = getenv("DES_AFFINITY");
++    if (e && e[0] == '0' && e[1] == 0) return;
++    DWORD_PTR proc = 0, sys = 0;
++    if (!GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys)) return;
++    if (e && *e) {
++        const DWORD_PTR m = (DWORD_PTR)_strtoui64(e, NULL, 16) & sys;
++        if (m && SetProcessAffinityMask(GetCurrentProcess(), m))
++            fprintf(stderr, "[affinity] DES_AFFINITY: mask 0x%llX\n", (unsigned long long)m);
++        return;
++    }
++    DWORD len = 0;
++    GetLogicalProcessorInformationEx(RelationCache, NULL, &len);
++    if (!len) return;
++    char* buf = (char*)malloc(len);
++    if (!buf) return;
++    if (!GetLogicalProcessorInformationEx(RelationCache, (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf, &len)) {
++        free(buf); return; }
++    int n_l3 = 0; DWORD best_size = 0; KAFFINITY best_mask = 0;
++    for (DWORD at = 0; at < len; ) {
++        const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* p = (const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(buf + at);
++        if (!p->Size) break;
++        if (p->Relationship == RelationCache && p->Cache.Level == 3 && p->Cache.GroupMask.Group == 0) {
++            n_l3++;
++            if (p->Cache.CacheSize > best_size) { best_size = p->Cache.CacheSize; best_mask = p->Cache.GroupMask.Mask; }
++        }
++        at += p->Size;
++    }
++    free(buf);
++    const DWORD_PTR m = (DWORD_PTR)best_mask & proc;
++    int cpus = 0;
++    for (DWORD_PTR b = m; b; b &= b - 1) cpus++;
++    if (n_l3 < 2 || cpus < 12) return;
++    if (SetProcessAffinityMask(GetCurrentProcess(), m))
++        fprintf(stderr, "[affinity] %d L3 caches: pinned to the biggest (%lu MB, %d logical CPUs, mask 0x%llX); "
++                "DES_AFFINITY=0 = off\n", n_l3, (unsigned long)(best_size >> 20), cpus, (unsigned long long)m);
++}
++#endif
++
  int main(int argc, char** argv)
  {
 +#ifdef _WIN32
@@ -28592,8 +28738,16 @@ index a55afb0..a04dabe 100644
      /* <PPU ELF> [--username NAME] [--psnr host[:port]], flags in any order. */
      const char* elf = NULL;
      const char* username = NULL;
+@@ -1106,6 +1215,7 @@ int main(int argc, char** argv)
+ 
+ #ifdef _WIN32
+ #pragma comment(lib, "winmm.lib")
++    pin_to_biggest_l3();  /* NOTES fix 65 */
+     timeBeginPeriod(1);   /* 1ms timer resolution: the default ~15.6ms granularity
+                            * inflates every sub-15ms wait (the game's event polls,
+                            * usleeps) and throttled the whole title. */
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 5fc5020..6c557ba 100644
+index 5fc5020..2c168ec 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -233,6 +233,12 @@ void spu_stop(spu_context* ctx)
@@ -28698,6 +28852,15 @@ index 5fc5020..6c557ba 100644
      uint32_t ea  = ctx->mfc_eal & ~(uint32_t)(MFC_ATOMIC_LINE - 1);
      uint32_t lsa = ctx->mfc_lsa & SPU_LS_MASK;
      uint8_t* ls  = &ctx->ls[lsa];
+@@ -646,7 +708,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+                     cmd, ea, (uint32_t)ctx->pc & SPU_LS_MASK, ctx->image_id);
+         if (cmd == MFC_GETLLAR_CMD) {
+             memset(ls, 0, MFC_ATOMIC_LINE);
+-            ctx->resv_ea = ea; ctx->resv_valid = 0; ctx->atomic_stat = 4;
++            ctx->resv_ea = ea; ctx->resv_valid = 0; ctx->atomic_stat = 4; spu_coh_release(ctx);
+         } else {
+             ctx->atomic_stat = 1;   /* PUTLLC failure (line "moved") */
+         }
 @@ -760,6 +822,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
           * GETLLAR until that bit is set, and spun forever on 0. PUTLLUC is 2. */
          if (!llar_fast) { ctx->resv_ea = ea; ctx->resv_valid = 1; }   /* the fast path published it already */
@@ -28717,7 +28880,23 @@ index 5fc5020..6c557ba 100644
              /* SPU_PUTLLC_WHY=1: which of the three conditions failed.
               * A PUTLLC retry loop that never succeeds is a livelock, and
               * "failed" alone cannot distinguish a lost reservation from a line
-@@ -989,6 +1054,59 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+@@ -927,6 +992,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+                       ctx->atomic_stat ? "FAIL" : "OK",
+                       ctx->gpr[0]._u32[0] & SPU_LS_MASK, ea); }
+         ctx->resv_valid = 0;                           /* reservation consumed */
++        spu_coh_release(ctx);                          /* fix 67 */
+         spu_lockline_unlock();
+         if (ctx->atomic_stat == 0) {
+             spu_taskset_line_committed(ea & ~127u);
+@@ -947,6 +1013,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+          * has already overwritten. */
+         spu_coh_notify_write(ea);
+         ctx->resv_valid = 0; ctx->atomic_stat = 2;   /* PUTLLUC complete */
++        spu_coh_release(ctx);                        /* fix 67 */
+         spu_lockline_unlock();
+         spu_taskset_line_committed(ea & ~127u);
+         if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
+@@ -989,6 +1056,59 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
      uint32_t v = value._u32[0];  /* channel writes use the preferred slot */
  
      if (channel_is_mfc(channel)) {
@@ -28777,7 +28956,7 @@ index 5fc5020..6c557ba 100644
          /* Atomic line ops (GETLLAR/PUTLLC/...) need real reservation semantics,
           * not the plain GET/PUT the DMA engine would do. */
          if (channel == MFC_Cmd && spu_mfc_atomic(ctx, v))
-@@ -1052,16 +1170,21 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+@@ -1052,16 +1172,21 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
      case SPU_WrDec:          ctx->decrementer = v;
                               ctx->dec_base_ns = spu_host_ns();              break;
      case SPU_WrEventMask:    ctx->event_mask = v;                           break; /* WrEventMask */
@@ -28809,7 +28988,7 @@ index 5fc5020..6c557ba 100644
          SPU_EVENT_CLEAR(ctx, v);
          /* A stall-and-notify nobody has read yet stays pending. We run a
           * resumed list inline, inside the MFC_WrListStallAck that resumes it,
-@@ -1071,8 +1194,8 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+@@ -1071,8 +1196,8 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
           * (list_stall_stat set, Sn clear). */
          if ((v & 0x2u) && ctx->list_stall_stat)
              SPU_EVENT_SET(ctx, 0x2u);
@@ -28820,7 +28999,15 @@ index 5fc5020..6c557ba 100644
      case SPU_WrSRR0:         ctx->srr0 = v;                                 break;
      default:
          /* Unknown / unhandled channel write -- ignore (matches a no-op SPU). */
-@@ -1234,6 +1357,40 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
+@@ -1131,6 +1256,7 @@ static void spu_resv_lost_poll(spu_context* ctx)
+     if (!vm_base || ctx->resv_ea == 0) return;
+     if (memcmp(vm_base + ctx->resv_ea, ctx->resv_line, 128) != 0) {
+         ctx->resv_valid = 0;
++        spu_coh_release(ctx);   /* fix 67 */
+         SPU_EVENT_SET(ctx, 0x400u);
+     }
+ }
+@@ -1234,6 +1360,40 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
       * raise above), but only block it when the SPU has actually enabled events
       * (event_mask != 0) -- a masked-off read must return 0 immediately, not
       * park forever. RdInMbox/RdSigNotify park on their PPU producers. */
@@ -28861,7 +29048,7 @@ index 5fc5020..6c557ba 100644
      if (channel == SPU_RdInMbox || channel == SPU_RdSigNotify1 || channel == SPU_RdSigNotify2)
          spu_ch_wait(ctx, channel, "rdch");
      else if (channel == SPU_RdEventStat && ctx->event_mask != 0)
-@@ -1298,7 +1455,20 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
+@@ -1298,7 +1458,20 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
          break;
      }
      case SPU_RdEventMask:   v = ctx->event_mask;                        break;
@@ -28884,7 +29071,7 @@ index 5fc5020..6c557ba 100644
       * This runtime models nonisolated SPUs, so the isolation bit stays clear. */
      case SPU_RdMachStat:    v = ctx->int_enable & 1u; break;
 diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
-index ed2bcf5..fefed60 100644
+index ed2bcf5..9273ac2 100644
 --- a/runtime/spu/spu_coherency.c
 +++ b/runtime/spu/spu_coherency.c
 @@ -40,15 +40,54 @@ static volatile long g_lockline = 0;
@@ -28944,10 +29131,212 @@ index ed2bcf5..fefed60 100644
  }
  void spu_lockline_unlock(void) { _InterlockedExchange(&g_lockline, 0); }
  #elif defined(_WIN32)
-@@ -368,6 +407,34 @@ void spu_coh_notify_write_except(uint32_t ea, const void* self)
+@@ -135,8 +174,113 @@ static unsigned char s_coh_bitmap[SPU_COH_BITMAP_SZ];
+ typedef struct spu_coh_entry {
+     spu_context* ctx;
+     struct spu_coh_entry* next;
++    int slot;                  /* 1 + held-line slot, 0 = none (fix 67) */
+ } spu_coh_entry;
+ static spu_coh_entry* s_coh_ctxs;
++
++/* Held-line table (Demon's Souls NOTES fix 67). HighGraphics stores ~2 M times a second into lines
++ * SPU kernels have reserved, and each store walked every listed context (~9), reading resv_valid /
++ * resv_ea from cache lines their SPU threads write all the time -- a cross-core miss each -- to find
++ * a holder 6% of the time. Each listed context now also publishes the line it may hold in one small
++ * table: line|1, or 0. A store reads that table (after its seq_cst fence) and walks only on a match.
++ *  - Publishing: the locked GETLLAR path writes the slot under the lock-line lock (every notifier
++ *    holds it); the lock-free path (spu_coh_reserve_fast) writes it before its seq_cst fence, the
++ *    same store-buffering argument as resv_valid below: a writer that reads 0 fenced first, so the
++ *    holder's copy already has the write.
++ *  - Clearing: only by the owning thread, after it dropped its own reservation (spu_coh_release),
++ *    or under the lock when the context leaves the list. Notifiers never clear a slot (they could
++ *    erase a fresh publication); a stale slot only costs a walk.
++ *  - A listed context without a slot (more than SPU_COH_SLOTS) makes every store walk.
++ * SPU_COH_HELD=0 = always walk, as before. */
++#define SPU_COH_SLOTS 64
++static volatile uint32_t s_coh_held[SPU_COH_SLOTS] __attribute__((aligned(64)));
++static unsigned char s_coh_slot_used[SPU_COH_SLOTS];       /* under the lock */
++static spu_context* s_coh_slot_ctx[SPU_COH_SLOTS];         /* under the lock: the slot's context */
++static volatile int s_coh_nslot;                           /* high-water, under the lock */
++static volatile int s_coh_unslotted;                       /* listed contexts with no slot */
++static int s_coh_held_on = -1, s_coh_ppu_break = -1;
++static unsigned long long s_coh_walks, s_coh_skips;        /* SPU_COH_STATS */
++
++static void spu_coh_cfg(void)
++{
++    if (s_coh_held_on < 0) { const char* e = getenv("SPU_COH_HELD"); s_coh_held_on = !(e && *e == '0'); }
++    if (s_coh_ppu_break < 0) s_coh_ppu_break = getenv("SPU_COH_PPU_BREAK") ? 1 : 0;
++}
++
++/* Could any listed context hold `line`? Called after the writer's fence. */
++static int spu_coh_line_maybe_held(uint32_t line)
++{
++    spu_coh_cfg();
++    if (!s_coh_held_on || __atomic_load_n(&s_coh_unslotted, __ATOMIC_RELAXED)) return 1;
++    const uint32_t want = line | 1u;
++    const int n = __atomic_load_n(&s_coh_nslot, __ATOMIC_RELAXED);
++    for (int i = 0; i < n; i++)
++        if (__atomic_load_n(&s_coh_held[i], __ATOMIC_RELAXED) == want) return 1;
++    return 0;
++}
++
++/* The contexts to visit for a write to `line` (lock held, after the writer's fence): with every
++ * listed context slotted, only those whose slot shows the line -- a context holding the line has
++ * published it (see above) -- instead of the whole list. Returns -1 when the whole list must be
++ * walked (table off, or unslotted contexts), else the count written to out[]. */
++static int spu_coh_holders(uint32_t line, spu_context** out)
++{
++    spu_coh_cfg();
++    if (!s_coh_held_on || __atomic_load_n(&s_coh_unslotted, __ATOMIC_RELAXED)) return -1;
++    const uint32_t want = line | 1u;
++    const int n = __atomic_load_n(&s_coh_nslot, __ATOMIC_RELAXED);
++    int k = 0;
++    for (int i = 0; i < n; i++)
++        if (__atomic_load_n(&s_coh_held[i], __ATOMIC_RELAXED) == want && s_coh_slot_ctx[i])
++            out[k++] = s_coh_slot_ctx[i];
++    return k;
++}
++
++static void spu_coh_publish(spu_context* ctx, uint32_t ea)
++{
++    const int s = ctx->coh_slot;
++    if (!s) return;
++    const uint32_t v = (ea & ~127u) | 1u;
++    if (__atomic_load_n(&s_coh_held[s - 1], __ATOMIC_RELAXED) != v)   /* keep the line shared when unchanged */
++        __atomic_store_n(&s_coh_held[s - 1], v, __ATOMIC_RELAXED);
++}
++
++void spu_coh_release(spu_context* ctx)
++{
++    if (!ctx) return;
++    const int s = ctx->coh_slot;
++    if (s && __atomic_load_n(&s_coh_held[s - 1], __ATOMIC_RELAXED))
++        __atomic_store_n(&s_coh_held[s - 1], 0, __ATOMIC_RELAXED);
++}
++
++/* Under the lock: give a newly listed context a slot (or count it as unslotted). */
++static void spu_coh_slot_take(spu_coh_entry* entry, spu_context* ctx)
++{
++    entry->slot = 0;
++    for (int i = 0; i < SPU_COH_SLOTS; i++) {
++        if (s_coh_slot_used[i]) continue;
++        s_coh_slot_used[i] = 1;
++        s_coh_slot_ctx[i] = ctx;
++        __atomic_store_n(&s_coh_held[i], 0, __ATOMIC_RELAXED);
++        entry->slot = i + 1;
++        if (i + 1 > s_coh_nslot) __atomic_store_n(&s_coh_nslot, i + 1, __ATOMIC_RELAXED);
++        break;
++    }
++    if (!entry->slot) __atomic_add_fetch(&s_coh_unslotted, 1, __ATOMIC_RELAXED);
++    ctx->coh_slot = entry->slot;
++}
++
++/* Under the lock: the entry leaves the list (its context may already be gone -- no ctx access). */
++static void spu_coh_slot_drop(spu_coh_entry* entry)
++{
++    if (entry->slot) {
++        __atomic_store_n(&s_coh_held[entry->slot - 1], 0, __ATOMIC_RELAXED);
++        s_coh_slot_used[entry->slot - 1] = 0;
++        s_coh_slot_ctx[entry->slot - 1] = NULL;
++    } else {
++        __atomic_sub_fetch(&s_coh_unslotted, 1, __ATOMIC_RELAXED);
++    }
++}
+ static spu_coh_watch* s_coh_watches;
+ 
+ unsigned long g_spu_lr_raise = 0;
+@@ -156,7 +300,15 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
+ 
+     if (!ctx) return;
+     for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next)
+-        if (entry->ctx == ctx) { __atomic_store_n(&ctx->coh_listed, 1, __ATOMIC_RELAXED); return; }
++        if (entry->ctx == ctx) {
++            /* The node is the slot's owner of record: a context re-initialised while listed
++             * (spu_context_init memsets it -- a raw SPU's stop/restart) lost its copy of it. */
++            ctx->coh_slot = entry->slot;
++            if (entry->slot) s_coh_slot_ctx[entry->slot - 1] = ctx;
++            __atomic_store_n(&ctx->coh_listed, 1, __ATOMIC_RELAXED);
++            spu_coh_publish(ctx, ea);
++            return;
++        }
+     spu_coh_entry* entry = (spu_coh_entry*)malloc(sizeof(*entry));
+     if (!entry) {
+         fprintf(stderr, "[spu-coh] cannot register reservation holder %p\n", (void*)ctx);
+@@ -165,8 +317,10 @@ void spu_coh_reserve(spu_context* ctx, uint32_t ea)
+     }
+     entry->ctx = ctx;
+     entry->next = s_coh_ctxs;
++    spu_coh_slot_take(entry, ctx);
+     s_coh_ctxs = entry;
+     __atomic_store_n(&ctx->coh_listed, 1, __ATOMIC_RELAXED);
++    spu_coh_publish(ctx, ea);
+ }
+ 
+ void spu_coh_watch_add(spu_coh_watch* watch, uint32_t ea,
+@@ -221,9 +375,11 @@ void spu_coh_unregister(spu_context* ctx)
+         if ((*link)->ctx != ctx) continue;
+         spu_coh_entry* entry = *link;
+         *link = entry->next;
++        spu_coh_slot_drop(entry);
+         free(entry);
+         break;
+     }
++    ctx->coh_slot = 0;
+     __atomic_store_n(&ctx->coh_listed, 0, __ATOMIC_RELAXED);
+     spu_lockline_unlock();
+ }
+@@ -246,6 +402,7 @@ void spu_coh_forget_range(uintptr_t lo, uintptr_t hi)
+                 fprintf(stderr, "[spu-coh] leaked ctx %p (img=%d) dropped at thread exit\n",
+                         (void*)c, entry->ctx->image_id);
+             *link = entry->next;
++            spu_coh_slot_drop(entry);
+             free(entry);
+         } else {
+             link = &entry->next;
+@@ -343,6 +500,7 @@ int spu_coh_reserve_fast(spu_context* ctx, uint32_t ea)
+     __atomic_store_n(&ctx->resv_valid, 0, __ATOMIC_RELAXED);
+     __atomic_store_n(&ctx->resv_ea, ea, __ATOMIC_RELAXED);
+     __atomic_store_n(&ctx->resv_valid, 1, __ATOMIC_RELAXED);
++    spu_coh_publish(ctx, ea);   /* fix 67: before the fence, like resv_valid */
+     __atomic_thread_fence(__ATOMIC_SEQ_CST);
+     return 1;
+ }
+@@ -353,8 +511,14 @@ void spu_coh_notify_write_except(uint32_t ea, const void* self)
+     ppu_resv_break_line(ea);
+     spu_coh_writer_fence();
+     spu_coh_wake_watches(line);
+-    for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next) {
+-        spu_context* c = entry->ctx;
++    spu_context* hs[SPU_COH_SLOTS];
++    const int nh = spu_coh_holders(line, hs);   /* fix 67 */
++    if (nh == 0) return;
++    spu_coh_entry* entry = s_coh_ctxs; int hi = 0;
++    for (;;) {
++        spu_context* c;
++        if (nh > 0) { if (hi >= nh) break; c = hs[hi++]; }
++        else { if (!entry) break; c = entry->ctx; entry = entry->next; }
+         if (!c || (const void*)c == self) continue;
+         if (spu_coh_holds(c, line)) {
+             SPU_EVENT_SET(c, SPU_EVENT_LR);
+@@ -365,14 +529,63 @@ void spu_coh_notify_write_except(uint32_t ea, const void* self)
+     }
+ }
+ 
++/* Set by spu_coh_notify_write_ppu around its call (the lock-line lock is held, so one at a time). */
++static int s_coh_from_ppu;
++
++void spu_coh_notify_write_ppu(uint32_t ea)
++{
++    spu_coh_cfg();
++    s_coh_from_ppu = 1;
++    spu_coh_notify_write(ea);
++    s_coh_from_ppu = 0;
++}
++
  void spu_coh_notify_write(uint32_t ea)
  {
      uint32_t line = ea & ~127u;
+-    ppu_resv_break_line(ea);
 +    /* SPU_COH_STATS=1: every 5 s, the lines written under the lock-line lock
 +     * most often (every store to an SPU-reserved line comes through here),
 +     * how many contexts the walk below visits, and how many held the line. */
@@ -28964,8 +29353,11 @@ index ed2bcf5..fefed60 100644
 +          if (!t0) t0 = now;
 +          if (now - t0 >= 5000) {
 +              const double s = (now - t0) / 1000.0;
-+              fprintf(stderr, "[coh] %.0f notified stores/s, %.1f contexts walked each, %.2f held\n",
-+                      calls / s, calls ? (double)walked / calls : 0.0, calls ? (double)held / calls : 0.0);
++              fprintf(stderr, "[coh] %.0f notified stores/s, %.1f contexts walked each, %.2f held; "
++                      "held-table: %llu walks, %llu skipped (fix 67)\n",
++                      calls / s, calls ? (double)walked / calls : 0.0, calls ? (double)held / calls : 0.0,
++                      s_coh_walks, s_coh_skips);
++              s_coh_walks = s_coh_skips = 0;
 +              for (int t = 0; t < 8; t++) {
 +                  int b = -1;
 +                  for (int i = 0; i < 1024; i++) if (cnt[i] && (b < 0 || cnt[i] > cnt[b])) b = i;
@@ -28976,9 +29368,252 @@ index ed2bcf5..fefed60 100644
 +              memset(cnt, 0, sizeof cnt); memset(key, 0, sizeof key);
 +              calls = walked = held = 0; t0 = now;
 +          } } }
-     ppu_resv_break_line(ea);
++    if (!s_coh_from_ppu || s_coh_ppu_break) ppu_resv_break_line(ea);   /* fix 67: not for PPU plain stores */
      spu_coh_writer_fence();
      spu_coh_wake_watches(line);
+-    for (spu_coh_entry* entry = s_coh_ctxs; entry; entry = entry->next) {
+-        spu_context* c = entry->ctx;
++    spu_context* hs[SPU_COH_SLOTS];
++    const int nh = spu_coh_holders(line, hs);   /* fix 67 */
++    if (nh == 0) { s_coh_skips++; return; }
++    s_coh_walks++;
++    spu_coh_entry* entry = s_coh_ctxs; int hi = 0;
++    for (;;) {
++        spu_context* c;
++        if (nh > 0) { if (hi >= nh) break; c = hs[hi++]; }
++        else { if (!entry) break; c = entry->ctx; entry = entry->next; }
+         if (!c) continue;
+         if (spu_coh_holds(c, line)) {
+             SPU_EVENT_SET(c, SPU_EVENT_LR);
+diff --git a/runtime/spu/spu_coherency.h b/runtime/spu/spu_coherency.h
+index ea2e835..73cedad 100644
+--- a/runtime/spu/spu_coherency.h
++++ b/runtime/spu/spu_coherency.h
+@@ -1,101 +1,108 @@
+-/*
+- * ps3recomp - PPU <-> SPU lock-line coherence
+- *
+- * An SPU that issues GETLLAR holds a reservation on a 128-byte line and then
+- * spins, waiting for someone else to change it. On real hardware a store by
+- * ANY other processor to that line kills the reservation and raises
+- * SPU_EVENT_LR on the reserving SPU, which is how a parked SPURS idle service
+- * learns that the PPU has posted work. Emulated, the two halves live on
+- * different host threads with nothing between them, so the SPU half alone gets
+- * PUTLLC right (it compares the line before committing) while the PPU half
+- * never tells anyone it wrote. The service sleeps through the signal.
+- *
+- * This is the missing half. Every line an SPU reserves is marked in a bitmap;
+- * the PPU store paths (runtime/ppu/ppu_memory.h and runtime/ppu/ppu_loader.cpp)
+- * check the bitmap, and on a hit commit the store under the same lock-line lock
+- * the SPU's GETLLAR/PUTLLC transaction takes, then notify. That does two things
+- * at once: the store can no longer land inside a PUTLLC's compare/commit window
+- * (where it would be silently reverted), and the reserving SPU gets its event.
+- *
+- * The bitmap check is a shift and a load against a global that stays zero until
+- * an SPU actually reserves something, so a title that never runs SPU code pays
+- * one predictable branch per store.
+- */
+-
+-#ifndef SPU_COHERENCY_H
+-#define SPU_COHERENCY_H
+-
+-#include "spu_context.h"
+-
+-#include <stdint.h>
+-
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-
+-/* SPU external event: lock-line reservation lost. */
+-#define SPU_EVENT_LR  0x400u
+-
+-/* The lock-line lock. One process-wide spinlock serializing every lock-line
+- * transaction, SPU and PPU alike: the SPU's GETLLAR snapshot and PUTLLC
+- * compare-and-commit, and a PPU store or stwcx to a line some SPU has
+- * reserved. The critical sections are two 128-byte memcpy and a memcmp. */
+-void spu_lockline_lock(void);
+-void spu_lockline_unlock(void);
+-
+-/* Mark `ea`'s 128-byte line as SPU-reserved and remember `ctx` as a possible
+- * reservation holder. Called from the SPU's GETLLAR with the lock held.
+- *
+- * Lines are marked and never unmarked. A line the SPURS kernel reserves is
+- * reserved again microseconds later, so unmarking would buy nothing; a stale
+- * mark costs one locked PPU store to a line the kernel owns anyway. */
+-void spu_coh_reserve(spu_context* ctx, uint32_t ea);
+-
+-/* GETLLAR fast path: publish ctx's reservation of ea WITHOUT the lock-line
+- * lock, when ctx is already a registered holder and ea's line already marked.
+- * Returns 0 when the caller must take the lock and call spu_coh_reserve
+- * instead. On 1 the caller copies the line, also without the lock. */
+-int spu_coh_reserve_fast(spu_context* ctx, uint32_t ea);
+-
+-/* Is `addr`'s line marked? The PPU store fast path -- a range-free O(1) bitmap
+- * lookup guarded by a global that is zero until the first GETLLAR. */
+-int spu_coh_is_reserved(uint32_t addr);
+-
+-/* A store by the PPU landed on `ea`'s line. Raise SPU_EVENT_LR on every SPU
+- * whose live reservation covers it, drop that reservation, and wake the host
+- * thread in case it is parked in `rdch SPU_RdEventStat`.
+- *
+- * Expects the lock-line lock held, so that the store this is reporting and the
+- * reservation state it clears are seen by an SPU's PUTLLC as one transaction. */
+-void spu_coh_notify_write(uint32_t ea);
+-/* Remove a context from the reserving set. MUST be called before a
+- * transient (stack-allocated) spu_context goes out of scope. */
+-void spu_coh_unregister(spu_context* ctx);
++/*
++ * ps3recomp - PPU <-> SPU lock-line coherence
++ *
++ * An SPU that issues GETLLAR holds a reservation on a 128-byte line and then
++ * spins, waiting for someone else to change it. On real hardware a store by
++ * ANY other processor to that line kills the reservation and raises
++ * SPU_EVENT_LR on the reserving SPU, which is how a parked SPURS idle service
++ * learns that the PPU has posted work. Emulated, the two halves live on
++ * different host threads with nothing between them, so the SPU half alone gets
++ * PUTLLC right (it compares the line before committing) while the PPU half
++ * never tells anyone it wrote. The service sleeps through the signal.
++ *
++ * This is the missing half. Every line an SPU reserves is marked in a bitmap;
++ * the PPU store paths (runtime/ppu/ppu_memory.h and runtime/ppu/ppu_loader.cpp)
++ * check the bitmap, and on a hit commit the store under the same lock-line lock
++ * the SPU's GETLLAR/PUTLLC transaction takes, then notify. That does two things
++ * at once: the store can no longer land inside a PUTLLC's compare/commit window
++ * (where it would be silently reverted), and the reserving SPU gets its event.
++ *
++ * The bitmap check is a shift and a load against a global that stays zero until
++ * an SPU actually reserves something, so a title that never runs SPU code pays
++ * one predictable branch per store.
++ */
++
++#ifndef SPU_COHERENCY_H
++#define SPU_COHERENCY_H
++
++#include "spu_context.h"
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* SPU external event: lock-line reservation lost. */
++#define SPU_EVENT_LR  0x400u
++
++/* The lock-line lock. One process-wide spinlock serializing every lock-line
++ * transaction, SPU and PPU alike: the SPU's GETLLAR snapshot and PUTLLC
++ * compare-and-commit, and a PPU store or stwcx to a line some SPU has
++ * reserved. The critical sections are two 128-byte memcpy and a memcmp. */
++void spu_lockline_lock(void);
++void spu_lockline_unlock(void);
++
++/* Mark `ea`'s 128-byte line as SPU-reserved and remember `ctx` as a possible
++ * reservation holder. Called from the SPU's GETLLAR with the lock held.
++ *
++ * Lines are marked and never unmarked. A line the SPURS kernel reserves is
++ * reserved again microseconds later, so unmarking would buy nothing; a stale
++ * mark costs one locked PPU store to a line the kernel owns anyway. */
++void spu_coh_reserve(spu_context* ctx, uint32_t ea);
++
++/* GETLLAR fast path: publish ctx's reservation of ea WITHOUT the lock-line
++ * lock, when ctx is already a registered holder and ea's line already marked.
++ * Returns 0 when the caller must take the lock and call spu_coh_reserve
++ * instead. On 1 the caller copies the line, also without the lock. */
++int spu_coh_reserve_fast(spu_context* ctx, uint32_t ea);
++
++/* Is `addr`'s line marked? The PPU store fast path -- a range-free O(1) bitmap
++ * lookup guarded by a global that is zero until the first GETLLAR. */
++int spu_coh_is_reserved(uint32_t addr);
++
++/* A store by the PPU landed on `ea`'s line. Raise SPU_EVENT_LR on every SPU
++ * whose live reservation covers it, drop that reservation, and wake the host
++ * thread in case it is parked in `rdch SPU_RdEventStat`.
++ *
++ * Expects the lock-line lock held, so that the store this is reporting and the
++ * reservation state it clears are seen by an SPU's PUTLLC as one transaction. */
++void spu_coh_notify_write(uint32_t ea);
++/* Remove a context from the reserving set. MUST be called before a
++ * transient (stack-allocated) spu_context goes out of scope. */
++void spu_coh_unregister(spu_context* ctx);
+ void spu_coh_forget_range(uintptr_t lo, uintptr_t hi);  /* thread exit */
+-/* As above, but leaves `self`'s own reservation alone: an SPU's own MFC
+- * write does not cost it its reservation on hardware. */
+-void spu_coh_notify_write_except(uint32_t ea, const void* self);
+-
+-/* Scoped host waiters for real writes to a guest 128-byte line. Add, remove,
+- * and callbacks all run under the lock-line lock. A watch remains caller-owned
+- * until remove returns; callbacks must not re-enter coherence or alter watches.
+- * They may wake a host waiter, but must not manufacture guest state. */
+-typedef struct spu_coh_watch {
+-    uint32_t line;
+-    void (*wake)(void* opaque);
+-    void* opaque;
+-    struct spu_coh_watch* next;
+-} spu_coh_watch;
+-void spu_coh_watch_add(spu_coh_watch* watch, uint32_t ea,
+-                       void (*wake)(void*), void* opaque);
+-void spu_coh_watch_remove(spu_coh_watch* watch);
+-
+-/* Count of LR events delivered. A parked SPURS service that never wakes with
+- * this at zero is a coherence miss; nonzero moves the question downstream. */
+-extern unsigned long g_spu_lr_raise;
+-
+-#ifdef __cplusplus
+-}
+-#endif
+-
+-#endif /* SPU_COHERENCY_H */
++/* As above, but leaves `self`'s own reservation alone: an SPU's own MFC
++ * write does not cost it its reservation on hardware. */
++void spu_coh_notify_write_except(uint32_t ea, const void* self);
++/* A plain PPU store landed on `ea`'s line (vm_write*, VM_WRITE_COH): as spu_coh_notify_write, but
++ * other PPU threads' lwarx reservations on the line are left alone, as for any ordinary line
++ * (SPU_COH_PPU_BREAK=1 = break them too, as before fix 67). Lock-line lock held. */
++void spu_coh_notify_write_ppu(uint32_t ea);
++/* The owning SPU thread dropped its own reservation (PUTLLC/PUTLLUC done, lost-poll, failed
++ * GETLLAR): clear its held-line slot so later stores to that line skip the holder walk. */
++void spu_coh_release(spu_context* ctx);
++
++/* Scoped host waiters for real writes to a guest 128-byte line. Add, remove,
++ * and callbacks all run under the lock-line lock. A watch remains caller-owned
++ * until remove returns; callbacks must not re-enter coherence or alter watches.
++ * They may wake a host waiter, but must not manufacture guest state. */
++typedef struct spu_coh_watch {
++    uint32_t line;
++    void (*wake)(void* opaque);
++    void* opaque;
++    struct spu_coh_watch* next;
++} spu_coh_watch;
++void spu_coh_watch_add(spu_coh_watch* watch, uint32_t ea,
++                       void (*wake)(void*), void* opaque);
++void spu_coh_watch_remove(spu_coh_watch* watch);
++
++/* Count of LR events delivered. A parked SPURS service that never wakes with
++ * this at zero is a coherence miss; nonzero moves the question downstream. */
++extern unsigned long g_spu_lr_raise;
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* SPU_COHERENCY_H */
+diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
+index c5ccbec..beee278 100644
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -425,6 +425,11 @@ typedef struct spu_context {
+      * spu_coh_reserve_fast). Written under that lock, read by the context's
+      * own thread. */
+     int coh_listed;
++
++    /* 1 + this context's slot in spu_coherency.c's held-line table, 0 = none (Demon's Souls NOTES
++     * fix 67). Written under the lock-line lock when the context is listed or dropped; the context's
++     * own thread publishes its reserved line in that slot. */
++    int coh_slot;
+ } spu_context;
+ 
+ /* event_status is written from more than one host thread: the SPU's own
 diff --git a/runtime/spu/spu_dma.h b/runtime/spu/spu_dma.h
 index 8c4ccaa..4edf7c1 100644
 --- a/runtime/spu/spu_dma.h

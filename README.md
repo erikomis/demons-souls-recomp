@@ -208,6 +208,10 @@ Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs)
 - **Build tools not found**: install Visual Studio 2022 Build Tools with *Desktop development with C++*
   and LLVM (`winget install LLVM.LLVM`), or set `LLVM_DIR` to an LLVM folder, then run BUILD.bat.
 - **The game window stays black / closes**: look at the end of `logs\last_run_err.txt`.
+- **Uneven frames at 100+ fps in busy areas** (e.g. the Valley of Defilement swamp): the game's own
+  frame work can need more than 10 ms there; the 50 fps mode is even everywhere. On CPUs with two
+  core complexes the game pins itself to the one with the biggest L3 (docs/NOTES.md fix 65);
+  `set DES_AFFINITY=0` turns that off.
 - **A character or object is black, or missing, for a moment the first time you see it**: its shaders
   are being compiled in the background (instead of freezing the game; docs/NOTES.md fix 62). It only
   happens the first time a shader is ever seen. `set LD_PSO_ASYNC=0` before PLAY.bat = wait instead.

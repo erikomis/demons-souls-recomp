@@ -309,9 +309,21 @@ endif()
 #     default; a PPC fmadd is spelt as one where the lifter means one.
 #   - /bigobj on MSVC. A single lifted file routinely passes the 65,536-section
 #     limit of the default object format.
+# clang-cl (docs/NOTES.md fix 66): the lifted PPU code also gets SSE4.1 (and with DS_AVX2, AVX2 +
+# FMA), so ppu_vmx.h's fast paths inline instead of being out-of-line target() calls and fma() /
+# trunc() / nearbyint() become single instructions (same results) -- and no stack cookies.
+# -ffp-contract=off is required with -mfma: clang would otherwise fuse a multiply and an add the
+# PPC code does separately (different rounding).
+set(DS_PPU_SIMD "")
+if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(DS_PPU_SIMD ";-msse4.1;/GS-;/clang:-ffp-contract=off")
+    if(DS_AVX2)
+        set(DS_PPU_SIMD "${DS_PPU_SIMD};-mavx2;-mfma")
+    endif()
+endif()
 if(MSVC)
     set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
-        COMPILE_OPTIONS "/w;/bigobj")
+        COMPILE_OPTIONS "/w;/bigobj${DS_PPU_SIMD}")
 else()
     set_source_files_properties(${RECOMP_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-w;-ffp-contract=off")
@@ -325,7 +337,7 @@ set(DS_PPU_O2_UNITS 013 014 015 016 040 056 061 074 075 116 126 CACHE STRING
     "ppu_recomp_NNN.cpp units built at -O2")
 foreach(u IN LISTS DS_PPU_O2_UNITS)
     if(MSVC)
-        set_source_files_properties("${RECOMP_DIR}/ppu_recomp_${u}.cpp" PROPERTIES COMPILE_OPTIONS "/w;/bigobj;-O2")
+        set_source_files_properties("${RECOMP_DIR}/ppu_recomp_${u}.cpp" PROPERTIES COMPILE_OPTIONS "/w;/bigobj${DS_PPU_SIMD};-O2")
     else()
         set_source_files_properties("${RECOMP_DIR}/ppu_recomp_${u}.cpp" PROPERTIES COMPILE_OPTIONS "-w;-ffp-contract=off;-O2")
     endif()
