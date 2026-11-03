@@ -1962,7 +1962,7 @@ index acf393c..0c7b50a 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/codec/cellSail.c b/libs/codec/cellSail.c
-index df6d4b3..949932a 100644
+index df6d4b3..e2df969 100644
 --- a/libs/codec/cellSail.c
 +++ b/libs/codec/cellSail.c
 @@ -1,19 +1,105 @@
@@ -2075,7 +2075,7 @@ index df6d4b3..949932a 100644
  
  /* Internal state */
  
-@@ -31,8 +117,31 @@ static SailPlayer s_players[CELL_SAIL_PLAYER_MAX];
+@@ -31,8 +117,32 @@ static SailPlayer s_players[CELL_SAIL_PLAYER_MAX];
  /* Players registered by cellSailPlayerInitialize2, keyed by the guest struct EA
   * the title passed as `pSelf`. Declared here because the adapter setters below
   * need it -- they take that same pointer, not an index into s_players[]. */
@@ -2099,6 +2099,7 @@ index df6d4b3..949932a 100644
 +    uint64_t t0_us, paused_at_us;  /* clock: start_pts + (now - t0) */
 +    int64_t start_pts;
 +    u32 fb_arr_ea, fb[8]; int nfb, fb_next; u32 vtag, gpu_tag;
++    u32 last_buf; int64_t last_pts; unsigned repeats;  /* the frame handed out last (0 = none yet) */
 +    u32 pcm_ea, pcm_slot_bytes; int pcm_slots, pcm_next; u32 atag; int pcm_ch, pcm_alloc_ch;
 +    int16_t* pcm_tmp;
 +    unsigned snd_pulls, snd_real;   /* PS3_SAIL_LOG: sound GetFrame calls / sample frames of movie audio */
@@ -2109,7 +2110,7 @@ index df6d4b3..949932a 100644
  
  /* A CellSailPlayer is a GUEST POINTER, not a small integer handle.
   *
-@@ -56,6 +165,56 @@ static int sail_player_slot(u32 self_ea)
+@@ -56,6 +166,56 @@ static int sail_player_slot(u32 self_ea)
      return -1;
  }
  
@@ -2166,7 +2167,7 @@ index df6d4b3..949932a 100644
  /* Lifecycle */
  
  s32 cellSailInit(void)
-@@ -119,15 +278,23 @@ s32 cellSailPlayerDestroy(CellSailPlayerHandle handle)
+@@ -119,15 +279,23 @@ s32 cellSailPlayerDestroy(CellSailPlayerHandle handle)
   * (CALL_COMPLETED) with minor = the CellSailPlayerCall id that finished; a
   * title that drives SAIL asynchronously blocks until its handler sees that.
   * We run every call synchronously, so notify right after each one. */
@@ -2191,7 +2192,7 @@ index df6d4b3..949932a 100644
      g_ps3_guest_caller(cb, s_sail_players[slot].arg_ea,
                         ((u64)major << 32) | minor, arg0, arg1, 0, 0, 0, 0);
  }
-@@ -144,26 +311,96 @@ enum { SAIL_ST_BOOT_TRANSITION = 1, SAIL_ST_CLOSED = 2, SAIL_ST_OPEN_TRANSITION
+@@ -144,26 +312,96 @@ enum { SAIL_ST_BOOT_TRANSITION = 1, SAIL_ST_CLOSED = 2, SAIL_ST_OPEN_TRANSITION
         SAIL_ST_OPENED = 4, SAIL_ST_START_TRANSITION = 5, SAIL_ST_RUNNING = 6,
         SAIL_ST_STOP_TRANSITION = 7, SAIL_ST_CLOSE_TRANSITION = 8 };
  
@@ -2293,7 +2294,7 @@ index df6d4b3..949932a 100644
  s32 cellSailPlayerOpenStream(CellSailPlayerHandle handle, const char* path)
  {
      /* path is a GUEST address; printing it as a host char* faulted here the
-@@ -180,51 +417,243 @@ s32 cellSailPlayerOpenStream(CellSailPlayerHandle handle, const char* path)
+@@ -180,51 +418,244 @@ s32 cellSailPlayerOpenStream(CellSailPlayerHandle handle, const char* path)
          }
          path_host[n] = '\0';
      }
@@ -2503,6 +2504,7 @@ index df6d4b3..949932a 100644
 +        if (p->started_once || p->eos_sent) sail_engine_start(p->eng);
 +        p->started_once = 1;
 +        p->eos_sent = 0;
++        p->last_buf = 0;
 +        sail_state(_sp, SAIL_ST_START_TRANSITION);
 +        sail_notify(_sp, SAIL_EV_SESSION_STARTED, 0, p->session, 0);
 +        sail_notify(_sp, SAIL_EV_CALL_COMPLETED, SAIL_CALL_START, 0, 0);
@@ -2553,7 +2555,7 @@ index df6d4b3..949932a 100644
      return CELL_OK;
  }
  
-@@ -277,35 +706,25 @@ s32 cellSailPlayerGetStreamInfo(CellSailPlayerHandle handle, u32 streamIndex,
+@@ -277,35 +708,25 @@ s32 cellSailPlayerGetStreamInfo(CellSailPlayerHandle handle, u32 streamIndex,
   * during audio init, and on failure abandons the whole path -- it closes a
   * resource it never opened ("sgxResClose unknown ID (0)"), terminates its SGX
   * sound system, and then blocks forever joining an audio thread that is not
@@ -2602,7 +2604,7 @@ index df6d4b3..949932a 100644
  }
  
  s32 cellSailPlayerCancel(CellSailPlayerHandle handle)
-@@ -332,24 +751,145 @@ s32 cellSailPlayerSetRepeatMode(CellSailPlayerHandle handle, s32 repeatMode, voi
+@@ -332,24 +753,145 @@ s32 cellSailPlayerSetRepeatMode(CellSailPlayerHandle handle, s32 repeatMode, voi
      const int _sp = sail_player_slot((u32)handle);
      if (_sp < 0)
          return (s32)CELL_SAIL_ERROR_INVALID_ARGUMENT;
@@ -2757,7 +2759,7 @@ index df6d4b3..949932a 100644
  
  s32 cellSailPlayerCreateDescriptor(CellSailPlayerHandle handle,
                                       s32 streamType, void* mediaInfo,
-@@ -380,88 +920,136 @@ s32 cellSailPlayerCreateDescriptor(CellSailPlayerHandle handle,
+@@ -380,88 +922,136 @@ s32 cellSailPlayerCreateDescriptor(CellSailPlayerHandle handle,
             streamType, uri ? uri_host : "null");
      if (!desc) return (s32)CELL_SAIL_ERROR_INVALID_ARGUMENT;
  
@@ -2923,7 +2925,7 @@ index df6d4b3..949932a 100644
      return CELL_OK;
  }
  
-@@ -503,7 +1091,9 @@ s32 cellSailPlayerInitialize2(u32 pSelf, u32 pAllocator, u32 pCallback,
+@@ -503,7 +1093,9 @@ s32 cellSailPlayerInitialize2(u32 pSelf, u32 pAllocator, u32 pCallback,
       * this call spawns the SAIL player's own worker threads, and a title that
       * then waits for one of them to signal readiness will wait forever against
       * a stub that spawns nothing. Failing cleanly lets a title take its
@@ -2934,7 +2936,7 @@ index df6d4b3..949932a 100644
      if (getenv("PS3_NO_SAIL")) {
          printf("[cellSail] PS3_NO_SAIL -- reporting player creation failure\n");
          return (s32)CELL_SAIL_ERROR_INVALID_ARGUMENT;
-@@ -511,27 +1101,44 @@ s32 cellSailPlayerInitialize2(u32 pSelf, u32 pAllocator, u32 pCallback,
+@@ -511,27 +1103,44 @@ s32 cellSailPlayerInitialize2(u32 pSelf, u32 pAllocator, u32 pCallback,
  
      sail_zero_guest(pSelf, SAIL_PLAYER_CLEAR);
  
@@ -2985,7 +2987,7 @@ index df6d4b3..949932a 100644
      return CELL_OK;
  }
  
-@@ -541,46 +1148,253 @@ s32 cellSailSoundAdapterInitialize(u32 pSelf, u32 pCallbacks, u32 pArg)
+@@ -541,46 +1150,266 @@ s32 cellSailSoundAdapterInitialize(u32 pSelf, u32 pCallbacks, u32 pArg)
   * so the import returned whatever was in r3 and the guest read an adapter it
   * believed was initialised. Same treatment as the sound adapter: zero the guest
   * struct so every pointer the title reads back is NULL (which callers check)
@@ -3066,7 +3068,9 @@ index df6d4b3..949932a 100644
 +
 +/* cellSailGraphicsAdapterGetFrame(pSelf, pInfo): the next due frame, copied
 + * into the next of the title's buffers. FrameInfo {be32 buffer, be32 session,
-+ * be32 tag, be32 status, be64 pts}. No new frame = negative. */
++ * be32 tag, be32 status, be64 pts}. No new frame due yet = the last one again:
++ * Demon's Souls draws the movie only on game frames where this succeeds (+0x7B4
++ * in its player), so at 50/60 fps an "empty" here was a black frame 2 times in 5. */
 +s32 cellSailGraphicsAdapterGetFrame(u32 pSelf, u32 pInfo)
 +{
 +    sail_lock();
@@ -3090,17 +3094,28 @@ index df6d4b3..949932a 100644
 +        vm_write32(pInfo + 12, 0);
 +        vm_write32(pInfo + 16, (u32)((u64)pts >> 32));
 +        vm_write32(pInfo + 20, (u32)pts);
++        p->last_buf = buf; p->last_pts = pts;
 +        r = CELL_OK;
 +    } else {
 +        sail_check_eos(slot);
++        if (p->running && p->last_buf) {
++            vm_write32(pInfo + 0, p->last_buf);
++            vm_write32(pInfo + 4, p->session);
++            vm_write32(pInfo + 8, ++p->vtag);
++            vm_write32(pInfo + 12, 0);
++            vm_write32(pInfo + 16, (u32)((u64)p->last_pts >> 32));
++            vm_write32(pInfo + 20, (u32)p->last_pts);
++            p->repeats++;
++            r = CELL_OK;
++        }
 +    }
 +    if (sail_log_on() && sail_now_us() - p->log_us >= 1000000ull && p->eng) {
 +        unsigned shown, dropped, queued, pcm_ms, under;
 +        sail_engine_stats(p->eng, &shown, &dropped, &queued, &pcm_ms, &under);
 +        fprintf(stderr, "[cellSail] clock %.2f s: shown %u dropped %u queued %u pcm %u ms underruns %u gpu tag %u/%u "
-+                "sound pulls %u (%.2f s real)\n",
++                "sound pulls %u (%.2f s real) repeats %u\n",
 +                (double)(clock - p->start_pts) / 90000.0, shown, dropped, queued, pcm_ms, under,
-+                p->gpu_tag, p->vtag, p->snd_pulls, (double)p->snd_real / 48000.0);
++                p->gpu_tag, p->vtag, p->snd_pulls, (double)p->snd_real / 48000.0, p->repeats);
 +        p->log_us = sail_now_us();
 +    }
 +    sail_unlock();

@@ -1427,6 +1427,14 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       behaviour). An inherited PS3_NO_SAIL is cleared.
     - Repro: PS3_SAIL_LOG=1, no PS3_NO_SAIL; past the auto-save notice the attract movie starts ~44 s in;
       ENTER skips it to the title. Audio check: AUDIO_WAV capture vs the movie's own LPCM track.
+    - Follow-up (same day): at 50 and 60 fps the movie flashed black 2 game frames in 5 (50) or every other
+      one (60). The game's player (func_00FDBB10) clears "frame this tick" (+0x7B4) on every poll and sets it
+      only when cellSailGraphicsAdapterGetFrame succeeds; the movie is drawn only when it is set. At 30 fps a
+      ~30 fps movie has a frame due almost every tick, so sparse frame dumps never caught it. Fix: GetFrame
+      hands the last frame back again (same buffer and pts, new tag) while the movie runs and nothing new is
+      due; Start clears it, close/Stop end it. Stats line: "repeats N". Result (LD_VIDEO on a 100 fps grid,
+      per-frame luma): 50 fps 1390 of 3457 movie frames black -> 0; 60 fps -> 0; 30 fps 0 with 0 repeats
+      (unchanged). The title logo still draws and holds under PRESS START BUTTON.
 72. **Boletaria choppy on a Ryzen 7 5800X: the game's frame skip locked in (2026-11-02, recordings from a
     5800X + RTX 3070, 60 Hz):**
     - Symptom: tutorial and Nexus smooth, Boletarian Palace "super choppy" at 60 fps; unlimited better but uneven.
