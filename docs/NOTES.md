@@ -1725,6 +1725,31 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       Sandbox: Esc -> still presenting 30 s later; X -> gone in 3 s. Agent review (3 areas + verify): 2 real,
       fixed (the pad thread could clip the cursor again right after an Esc release from the window thread -- it
       re-checks after ClipCursor; the D3D12 fallback window's Esc still quit), signs confirmed.
+79. **Linux perf logs were half blind; sleep precision in the log (2026-11-03, Ubuntu 24.04 + Proton, i7 Haswell
+    4c/8t + GTX 980, tutorial):**
+    - The two Ubuntu recordings: 57.5 / 57.8 fps average in 60 fps mode, median frame 16.7 ms, game speed right;
+      35-42 hitches a minute, nearly all one missed refresh (27-35 ms). Present returns in ~7 us (vkd3d-proton
+      presents on its own thread) and the GPU wait is 1-4 ms even on slow frames, and slow frames draw more
+      (median 291 vs 204 draws): CPU-bound, not GPU / vsync. 113 of 130 HighGraphics stack samples in late steps
+      are one chain (runtime usleep -> syscall -> thunk -> one lifted caller): the same shape as fix 77's
+      HighGraphics usleep(30) poll on the SPU dispatcher. The 450-550 ms hitches are first-time shader builds.
+    - But every "thr" line read 0 and there was no render / step CPU: Wine's QueryThreadCycleTime /
+      QueryProcessCycleTime are stubs (0). rsx_live_draw.c now falls back to GetThreadTimes / GetProcessTimes
+      when the process cycle counter reads 0 (100 ns units at scheduler-tick resolution: right for the 1 s
+      lines, coarse per frame); "info cpu_clock cycles|thread_times" says which, "info host windows|wine <ver>"
+      the host. LD_PERF_CPU_TIMES=1 (TEST) forces the fallback on Windows: the same sandbox spot read
+      spu_job 103 / synth2 52 / HighGraphics 50 by cycles and 101-108 / 53-55 / 49-51 by thread times.
+    - Wine's waitable timers go through wineserver and may be ~1 ms coarse, which would stretch every
+      0.2-1 ms usleep. Now measured: sys_timer.c counts the sleeps taken (timer / Sleep path), microseconds asked
+      and microseconds past the deadline; once a second "slp <sleeps> <us asked> <us late> <1 ms+ late>" in the
+      perf log, summarised by tools/perf_report.py. Windows baseline (5950X sandbox, 50 fps): ~1000 sleeps/s,
+      7.0 ms asked on average, 0.26-0.28 ms late on average, 0.5% 1 ms or more late. Next: the same tutorial
+      route recorded on the Ubuntu box, then act on what it shows.
+      Agent review (2 areas + verify): 5 real, fixed -- per-frame / per-step CPU are not read under the
+      times clock (10 ms ticks are noise per frame, and each read was a wineserver round trip under the log
+      lock): 0 in the log and "not measured" in the report, which also treats all-zero older Linux logs so;
+      the first slp line counted all of start-up (cleared when the perf thread starts); a failed / 0 thread
+      read wrapped into an absurd %; threads that never used a tick were never dropped from the table.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

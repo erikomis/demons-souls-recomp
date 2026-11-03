@@ -72,6 +72,13 @@ def main():
     if os.path.isdir(path):
         path = os.path.join(path, 'perf.txt')
     pres, steps, notes = load(path)
+    # Per-frame render / per-step game CPU need a cycle counter. Under Wine / Proton there is none ("info
+    # cpu_clock thread_times", fix 79; older Linux logs have all zeros): unknown, not "0 ms, waiting".
+    clock = next((a[1] for t, k, a in notes if k == 'info' and len(a) > 1 and a[0] == 'cpu_clock'), '')
+    no_cpu = clock == 'thread_times' or (bool(pres) and all(r[9] <= 0 for r in pres) and all(s[8] <= 0 for s in steps))
+    if no_cpu:
+        pres = [r[:9] + (-1,) + r[10:] for r in pres]
+        steps = [s[:8] + (-1,) for s in steps]
     if len(pres) < 10:
         sys.exit('%s: only %d frames logged' % (path, len(pres)))
     t0 = min([pres[0][0]] + [s[0] for s in steps[:1]] + [n[0] for n in notes[:1]])
@@ -314,9 +321,20 @@ def main():
             for k, v in d.items(): acc[k] += v
         return {k: v / len(rows) for k, v in acc.items()} if rows else {}
     thr_all = thr_mean(thr)
+    if no_cpu:
+        print('per-frame / per-step CPU: not measured on this host (no cycle counter, e.g. Wine / Proton); '
+              'the thread CPU lines below are 1 s averages')
     if thr_all:
         print('thread CPU, whole log (%% of one core): %s' % ', '.join(
             '%s %.0f' % kv for kv in sorted(thr_all.items(), key=lambda kv: -kv[1])[:9]))
+    # "slp <sleeps> <us asked> <us late> <1 ms+ late>" once a second (fix 79): how precisely the game's
+    # sleeps wake -- Wine / Proton timers can be much coarser than Windows'.
+    slp = [[int(x) for x in n[2][:4]] for n in notes if n[1] == 'slp' and len(n[2]) >= 4]
+    sn = sum(v[0] for v in slp)
+    if sn:
+        print('game sleeps (usleep >= 0.2 ms): %.0f a second, %.2f ms asked on average, woke %.0f us late on '
+              'average, %.1f%% of them 1 ms or more late' % (sn / len(slp), sum(v[1] for v in slp) / sn / 1000.0,
+                                                           sum(v[2] for v in slp) / sn, 100.0 * sum(v[3] for v in slp) / sn))
     for m in marks:
         near = [h for h in hitches if m[0] - 10000000 <= h[0] <= m[0]]
         print('  mark %s at %.1f s: %s' % (m[2][0] if m[2] else '?', sec(m[0]),
