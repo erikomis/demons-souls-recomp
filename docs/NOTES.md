@@ -1520,6 +1520,41 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       a stray file + an edited README in deps/ps3recomp survive a runtime update; 99feea3 -> 1 file.
     - Gotcha: with core.autocrlf=true, git apply writes CRLF even outside a repository, so port/ files are CRLF after
       step 5 on most PCs (compiles the same; compare ignoring CR).
+74. **Higher internal resolution + the swap chain follows the window (2026-11-03, GitHub #14/#15):**
+    - DES_RES_SCALE=<2..4> (or LD_RES_SCALE) renders the game's targets at that multiple; default 1. Fixed at
+      startup. Measured (Palace torch hall, 60 fps mode, 7950X3D): 1x and 2x both 59 fps, 0 catch-ups, game
+      time right, brightness equal (frame mean 31.6 vs 31.6); full-frame gap sd 1.2 -> 3.4 ms (>25 ms 0.2% ->
+      0.6%). 2x is visibly sharper (hair, face, edges).
+    - rsx_live_draw.c: surface_t / zdepth_t keep the GUEST w/h (cache key, texture-alias size match, swin,
+      surface_containing, write-back, every guest comparison) and gain sc; the D3D12 resources are w*sc x h*sc
+      (LD_HW/LD_HH). ld_surface_scale: targets from 128x128 up inside the canvas get S; bigger than the canvas
+      (2048 shadow map + its dummy colour target) only with LD_RES_SCALE_SHADOW=1; under 128 stay 1x (the
+      16x16 / 64x64 FP32 luminance results written back to guest memory, fix 21; write-back also skips sc!=1).
+      Zetas scale by their canvas-padded backing. First rule (>= half the canvas) thrashed: zeta 0xB50000 is
+      bound by the 1280x720 scene AND by four 128x128 passes (logged "live new #0" on every switch) -> 128 rule.
+      The 64x64 / 16x16 luminance passes still bind the 2x zeta 0x0 at 1x ("[res-scale] colour ... drawn with
+      zeta" logged); they do not depth-test (review checked the captured state).
+    - Draw: host viewport = clip*tsc, the NDC transform stays over guest pixels, scissor *aa*tsc. Blits:
+      same-scale copies multiply their boxes; across scales ld_scaled_blit (guest units both sides now, the
+      destination multiplied inside). Occlusion: each query's count divided by its target's sc^2, rounded up
+      (flares stay at native brightness, fix 38). get_pso: programs reading WPOS on a scaled target get
+      rsx_fp_apply_wpos_grid; UNNORM depth compares on a scaled snapshot get coordinate*(sc/size) -- both only
+      in the key when > 1, so 1x keys and the disk shader cache are unchanged. Frame dumps / LD_VIDEO at host
+      size (LD_VIDEO over 4096 wide: ffmpeg scales to 2160 lines for NVENC). Movie caption overlay skips scaled
+      surfaces. Legacy DSV slot 0 at canvas*S.
+    - Present: ld_swap_follow_window() -- the swap chain was fixed at 1280x720 and DXGI stretched it to any window
+      or borderless fullscreen (aspect too), which also threw a higher resolution away. Now a client size stable
+      for 3 presents waits for the GPU and ResizeBuffers; a surface of another size than the back buffer is drawn
+      letterboxed at its own aspect (black bars): box filter (ld_downsample_to) when the host size is an exact
+      multiple, bilinear (ld_present_bilinear) otherwise; same size = the old CopyResource. LD_SWAP_RESIZE=0 =
+      old. Checked with back-buffer dumps (TEST LD_TEST_CLIENT=<w>x<h>, LD_BB_DUMP=<ppm> + LD_BB_DUMP_AT=<frame>):
+      2x in 1720x720 = 1280x720 box + bars, 2x / 1x in 1920x1080 = bilinear, full window.
+    - Agent reviews: map (5 readers + critic) before; after, 3 lenses + verify: 7 real
+      (zeta size merged across scales -> 4096^2 + rebuilds; UNNORM shadow compare used host GetDimensions; WPOS
+      patch only in the buffered branch; movie overlay copy; LD_VIDEO over NVENC width; duplicate), all fixed;
+      7 refuted (descriptor ring, VRAM growth -- the table fills with 16x16 targets first --, 1x behaviour).
+    - Not done: DLSS/FSR (no motion vectors in a PS3 game; the GPU is idle anyway, supersampling is better here);
+      a launcher option (next: the launcher replacing the .bat files).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

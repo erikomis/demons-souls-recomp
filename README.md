@@ -90,6 +90,12 @@ refreshes and motion is perfectly even. Otherwise vsync is turned off, which loo
 G-Sync / FreeSync screen but can tear on others. The launcher says which one you got. You can also
 `set DES_FPS=<number>` before running `PLAY.bat`.
 
+**Higher resolution.** `set DES_RES_SCALE=2` (up to 4) before running a launcher renders the game at
+2x its 1280x720 (2560x1440), much sharper, at no cost on the CPU side; a mid-range GPU handles 2x easily.
+The window and borderless fullscreen show the picture at the window's own size, at the game's 16:9
+with black bars on other screens (`set LD_SWAP_RESIZE=0` = the old stretched picture).
+`set LD_RES_SCALE_SHADOW=1` also renders the 2048x2048 shadow map at the higher resolution.
+
 **Controls.** An Xbox (XInput) controller works when plugged in (A = Cross, B = Circle, X = Square,
 Y = Triangle, LB/RB = L1/R1, LT/RT = L2/R2, Back = Select). A DualShock/DualSense needs Steam Input or
 DS4Windows. Keyboard + mouse work too, also with a controller connected (the mouse takes over the
