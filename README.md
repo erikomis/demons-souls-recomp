@@ -59,6 +59,15 @@ That's it. SETUP.bat then:
 \* on a fast 16-core PC; the first compile is the long part. If anything fails, fix what it says
 and run SETUP.bat again: finished steps are skipped.
 
+## Updating
+
+Get the new version (`git pull` in the repo folder, or download the ZIP again and unpack it over
+the old folder, keeping `game/`, `port/` and `deps/`), then run **`BUILD.bat`**. It re-applies
+the patches that changed since your last setup and recompiles only the files they touch. If it
+says so, run `SETUP.bat` instead: that also works, keeps the game files and skips what is done.
+Setups made before 2026-11-03 could not take updates (the patches were applied once and never
+again); the first `BUILD.bat` or `SETUP.bat` with this version brings them up to date.
+
 ## Play
 
 Double-click **`PLAY.bat`**. The logos and first load take about a minute.
@@ -83,7 +92,8 @@ G-Sync / FreeSync screen but can tear on others. The launcher says which one you
 
 **Controls.** An Xbox (XInput) controller works when plugged in (A = Cross, B = Circle, X = Square,
 Y = Triangle, LB/RB = L1/R1, LT/RT = L2/R2, Back = Select). A DualShock/DualSense needs Steam Input or
-DS4Windows. Keyboard + mouse:
+DS4Windows. Keyboard + mouse work too, also with a controller connected (the mouse takes over the
+camera once you press a key or mouse button, and the controller takes it back when you use it):
 
 | | |
 |---|---|

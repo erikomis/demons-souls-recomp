@@ -1479,6 +1479,47 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       drops below 60 in the Palace).
     - Debug used (removed again): DES_TB_CALLERS (callers of the timer vtable 0x018796D0 +4/+8 per thread:
       HighGraphics reads it ~20 times a frame, profiling scopes) and DES_SKIP_LOG at 0x00D1F564.
+73. **Keyboard dead with a controller connected; repo updates never applied (2026-11-03: no way past PRESS START
+    BUTTON with mouse + keyboard; GitHub issue #8: AZERTY tested, not working):**
+    - cellPad.c read the keyboard only when XInput slot 0 had no pad. A pad that was merely on, or a virtual one
+      (Steam Input, DS4Windows/ViGEm, Parsec), made Enter = START and every key do nothing: stuck at PRESS START
+      BUTTON with mouse + keyboard. Now pad_poll_keyboard runs after every XInput poll while the window has focus:
+      no pad -> the keyboard is port 0 (as before); with a pad its buttons are ORed in (pressure 255), a stick the
+      keys / mouse move replaces the pad's, triggers take the max. The souls layout captures the mouse only when
+      there is no pad or the keyboard / mouse was used last (kb_last: a key or mouse button sets it, any pad input
+      clears it), so a pad player's cursor stays free. Focus loss releases keys only when there is no pad.
+      PAD_TEST_FAKE_PAD=1 (TEST) = port 0 is a connected idle pad. Default layout = pad_poll_keyboard_basic.
+    - Sandbox (PAD_TEST_FAKE_PAD=1, PAD_KEY_SCRIPT E at 30-38 s, ENTER at 75 / 80 s): log "keyboard input on port 0
+      (merged with the XInput pad)"; PRESS START BUTTON -> NEW GAME / LOAD GAME -> LOAD GAME (server notice).
+    - Updates: SETUP.bat applied patches/ps3recomp-local.patch (step 3, mark deps/ps3recomp/.ds_patched) and
+      patches/lifted-code.patch (step 5, mark port/.lifted) ONCE; a later SETUP said "already done" and BUILD.bat
+      only compiled. So no pushed fix since the first setup reached anyone who updated (the AZERTY tester still had
+      keys by letter: fix 69 was in the patch, never applied). setup/patch_sync.py (repo): the marks now hold the
+      patch's sha256; on a change the runtime files the old patch touched (git status) go back to the commit and the
+      new patch is applied in the checkout; the lifted code has the old patch reversed (the saved port/.lifted.patch,
+      or for old setups the version from the checkout's git history whose reverse --check passes) and the new one
+      applied. Files whose bytes end up the same get their old mtimes back, so ninja rebuilds only what changed.
+      No match -> 'relift' (SETUP recompiles, a few minutes); HEAD moved -> step 3 from scratch. BUILD.bat runs the
+      sync first (and says to run SETUP when it needs a relift). README: "Updating".
+    - Update tests (scripted, on throwaway copies): installs at 1e51be0's and 5e9f3a7's patches
+      with old-style marks -> only ppu_recomp_011/015 (lifted) or cellPad.c (runtime) rewritten, trees equal the new
+      patch; again -> 'current'; hand-edited file -> 'relift'; moved ps3recomp HEAD -> set up again.
+    - Agent review (2 areas + adversarial verify, 9 confirmed, 8 fixed): kb_last started at 1 (an idle pad player's
+      cursor was captured from launch) -> 0; WASD / IJKL now count as keyboard use; the click that focuses the
+      window, Alt+Tab's Tab and Alt+Enter with Alt let go first reached the game (R1 / R3 / START): pad_game_down
+      ignores a key that was down when focus came back or while Alt / Win was held until it is released (replaces
+      the Enter-only Alt check); focus loss without a pad releases triggers too (pad_host_release). patch_sync:
+      the runtime update reverted everything that differed from the commit (user files too) -> only paths the old
+      and new patch name, old version from the saved deps/ps3recomp/.ds_patched.patch or the history; a new lifted
+      patch that does not fit -> 'relift' instead of an exit on every SETUP; the lifted mark holds the lift inputs
+      (commit, LIFT_ARGS, SPURS_JOBS, lift_spurs_jobs.py hash: setup.lift_inputs) -> relift when they change; the
+      history pick takes, of all versions that reverse cleanly, the one whose +/- lines contain the others'
+      (comparing whole hunks failed: context shifts between versions). Not fixed: a poll publishes port 0 in two
+      steps (XInput, then the keys), so a reader can see one report without the keys -- the XInput poll already
+      wrote field by field. Extra tests: inputs changed -> relift; new patch broken -> relift, files unchanged;
+      a stray file + an edited README in deps/ps3recomp survive a runtime update; 99feea3 -> 1 file.
+    - Gotcha: with core.autocrlf=true, git apply writes CRLF even outside a repository, so port/ files are CRLF after
+      step 5 on most PCs (compiles the same; compare ignoring CR).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

@@ -1,7 +1,8 @@
 """One-shot setup: your Demon's Souls disc image -> a native Windows build.
 
 Run through SETUP.bat (which makes the Python environment). Every step is skipped when its
-output is already there, so after a failure just fix the cause and run SETUP.bat again.
+output is already there, so after a failure just fix the cause and run SETUP.bat again. After an
+update of this repo, steps 3 and 5 re-apply the patches that changed (setup/patch_sync.py).
 
   1. extract the game files from the disc image          -> game/
   2. decrypt EBOOT.BIN with RPCS3 (SELF -> ELF)           -> game/PS3_GAME/USRDIR/EBOOT.elf
@@ -19,6 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 sys.path.insert(0, os.path.join(ROOT, 'setup'))
 import build                                                    # noqa: E402
+import patch_sync                                               # noqa: E402
 
 GAME = os.path.join(ROOT, 'game')
 USRDIR = os.path.join(GAME, 'PS3_GAME', 'USRDIR')
@@ -259,7 +261,12 @@ def step_ps3recomp():
     step(3, 'ps3recomp (static recompiler + PS3 runtime) at the tested commit, with this port\'s patch')
     mark = os.path.join(PS3RECOMP, '.ds_patched')
     if os.path.isfile(mark):
-        say('  already set up'); return
+        state = patch_sync.sync_runtime(PS3RECOMP_COMMIT)   # an update since: re-apply the patch
+        if state == 'current':
+            say('  already set up')
+        if state in ('current', 'updated'):
+            return
+        say('  setting it up again')
     if not os.path.isdir(os.path.join(PS3RECOMP, '.git')):
         os.makedirs(os.path.dirname(PS3RECOMP), exist_ok=True)
         say(f'  cloning {PS3RECOMP_URL}')
@@ -270,17 +277,31 @@ def step_ps3recomp():
     git('reset', '-q', '--hard', cwd=PS3RECOMP)
     git('clean', '-q', '-fd', cwd=PS3RECOMP)
     git('apply', '--whitespace=nowarn', os.path.join(ROOT, 'patches', 'ps3recomp-local.patch'), cwd=PS3RECOMP)
-    open(mark, 'w').write(PS3RECOMP_COMMIT + '\n')
+    with open(os.path.join(ROOT, 'patches', 'ps3recomp-local.patch'), 'rb') as f:
+        patch_sync.save_runtime_state(PS3RECOMP_COMMIT, f.read())
     say('  patched')
 
 
 # --- 4 + 5. recompile ---------------------------------------------------------------------------
 
+def lift_inputs():
+    """What the recompiled code is made from besides the EBOOT; if this changes, an update needs a
+    full recompile, not just lifted-code.patch again (setup/patch_sync.py)."""
+    with open(os.path.join(ROOT, 'tools', 'lift_spurs_jobs.py'), 'rb') as f:
+        tool = hashlib.sha256(f.read().replace(b'\r\n', b'\n')).hexdigest()[:16]
+    return f'{PS3RECOMP_COMMIT} {" ".join(LIFT_ARGS)} {SPURS_JOBS} {tool}'
+
+
 def step_lift():
     step(4, 'recompile the game code (PPU + SPU) -- a few minutes')
     mark = os.path.join(PORT, '.lifted')
     if os.path.isfile(mark):
-        say('  already done'); return
+        state = patch_sync.sync_lifted(lift_inputs())   # an update since: re-apply lifted-code.patch
+        if state == 'current':
+            say('  already done')
+        if state in ('current', 'updated'):
+            return
+        os.remove(mark)   # 'relift': recompile from scratch below
     for d in ('out', 'recompiled', 'spu', 'spu_miss'):
         shutil.rmtree(os.path.join(PORT, d), ignore_errors=True)
     os.makedirs(os.path.join(PORT, 'game'), exist_ok=True)
@@ -322,7 +343,8 @@ def step_lift():
                        text=True, env=dict(os.environ, GIT_CEILING_DIRECTORIES=ROOT))
     if r.returncode:
         fail(f'patches/lifted-code.patch did not apply:\n{r.stdout}{r.stderr}')
-    open(mark, 'w').write('ok\n')
+    with open(patch, 'rb') as f:
+        patch_sync.save_lifted_state(f.read(), lift_inputs())
     say('  done')
 
 

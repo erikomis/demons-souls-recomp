@@ -189,7 +189,20 @@ def build(jobs=None, targets=()):
     return rc
 
 
+def sync_patches():
+    """An update of this repo since SETUP.bat: re-apply the patches that changed (setup/patch_sync.py).
+    Returns False when that needs SETUP.bat."""
+    import patch_sync
+    from setup import PS3RECOMP_COMMIT, lift_inputs
+    if patch_sync.sync_runtime(PS3RECOMP_COMMIT) == 'redo' or patch_sync.sync_lifted(lift_inputs()) == 'relift':
+        say('  Run SETUP.bat to bring this setup up to date (it keeps the game files).')
+        return False
+    return True
+
+
 if __name__ == '__main__':
+    if not sync_patches():
+        sys.exit(1)
     a = sys.argv[1:]
     jobs = None
     if '--jobs' in a:

@@ -5118,10 +5118,29 @@ index 0000000..d9edd4d
 +
 +#endif /* PS3RECOMP_VDEC_MF_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..ec32db7 100644
+index afdd93d..17ed3b1 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
-@@ -268,8 +268,12 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
+@@ -16,6 +16,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <stddef.h>
+ #include <math.h>
+ #include "../../runtime/platform/win32_compat.h"   /* GetTickCount64 on POSIX */
+ #include "../../runtime/ppu/ppu_memory.h"   /* GUEST_PTR, vm_write*: guest EA -> host */
+@@ -258,8 +259,8 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
+  * it can be watched but not played. That is what The Simpsons Arcade Game hit:
+  * it reached its attract loop and no input existed to start a game.
+  *
+- * Only fills in for port 0, only when XInput found nothing there, so a real
+- * controller always wins and nothing changes for a port that has one. Keys are
++ * Port 0 only. With no XInput pad there it is the whole pad; beside one its
++ * keys are merged into the pad's state (pad_poll_keyboard). Keys are
+  * read only while a window of THIS process is in the foreground, so typing in
+  * another application does not drive the game. Set PAD_NO_KEYBOARD=1 to
+  * disable it entirely.
+@@ -268,8 +269,12 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
   * 1/2 = L2/R2, Enter = START, Tab = SELECT. The left stick mirrors the d-pad
   * so a title that reads the stick instead is playable too. */
  #ifdef _WIN32
@@ -5134,10 +5153,11 @@ index afdd93d..ec32db7 100644
      HWND fg = GetForegroundWindow();
      if (!fg) return 0;
      DWORD pid = 0;
-@@ -277,6 +281,206 @@ static int pad_host_window_focused(void)
+@@ -277,23 +282,218 @@ static int pad_host_window_focused(void)
      return pid == GetCurrentProcessId();
  }
  
+-static void pad_poll_keyboard(void)
 +/* PAD_KEY_SCRIPT="<sec>:<key>:<dur>,..." -- TEST input for the keyboard layouts: holds <key> (a
 + * letter/digit or SPACE SHIFT CTRL TAB ENTER BACK UP DOWN LEFT RIGHT LMB RMB MMB F1) for <dur>
 + * seconds from <sec> (PAD_CLOCK applies). It goes through the same mapping as real keys, and
@@ -5147,7 +5167,10 @@ index afdd93d..ec32db7 100644
 +static int s_key_ev_n = -1;
 +static unsigned long long s_key_t0;
 +static int pad_vk_from_name(const char* s, size_t n)
-+{
+ {
+-    static int off = -1;
+-    if (off < 0) off = getenv("PAD_NO_KEYBOARD") ? 1 : 0;
+-    if (off) return;
 +    static const struct { const char* name; int vk; } names[] = {
 +        {"SPACE", VK_SPACE}, {"SHIFT", VK_LSHIFT}, {"CTRL", VK_LCONTROL}, {"TAB", VK_TAB},
 +        {"ENTER", VK_RETURN}, {"BACK", VK_BACK}, {"UP", VK_UP}, {"DOWN", VK_DOWN},
@@ -5187,7 +5210,16 @@ index afdd93d..ec32db7 100644
 +    }
 +    return (GetAsyncKeyState(vk) & 0x8000) != 0;
 +}
-+
+ 
+-    PadHostState* hs = &s_host_state[0];
+-    if (!pad_host_window_focused()) {
+-        /* Release everything on focus loss, or a key held while alt-tabbing
+-         * would stay down forever. */
+-        hs->buttons = 0;
+-        hs->analog_lx = hs->analog_ly = 128;
+-        hs->analog_rx = hs->analog_ry = 128;
+-        hs->connected = 1;
+-        return;
 +/* Letter keys by POSITION (Demon's Souls NOTES fix 69): the layouts below name keys by their US
 + * QWERTY letter, which put WASD in the wrong place on AZERTY / QWERTZ keyboards. A letter is turned
 + * into the US key's scan code and back into whatever virtual key that physical key is on the game
@@ -5216,7 +5248,22 @@ index afdd93d..ec32db7 100644
 +    }
 +    return vk_of[us_letter - 'A'];
 +}
-+static int pad_pos_down(int us_letter) { return pad_key_down(pad_pos_key(us_letter)); }
++/* Keys for the game layouts (fix 73 review): a key or mouse button that is already down when the
++ * window gets focus (the click that focuses it, Alt+Tab's Tab) or that is down while Alt or a
++ * Windows key is held (Alt+Enter = fullscreen, Alt+Tab) counts only after it was released --
++ * before, those reached the game as attacks / START. s_key_gate is set per poll by
++ * pad_poll_keyboard; scripted keys (PAD_KEY_SCRIPT) are never gated. */
++static unsigned char s_key_stale[256];
++static int s_key_gate;
++static int pad_game_down(int us_letter)
++{
++    const int vk = pad_pos_key(us_letter);
++    const int down = pad_key_down(vk);
++    if (vk <= 0 || vk > 255) return down;
++    if (!down) { s_key_stale[vk] = 0; return 0; }
++    if (s_key_gate) s_key_stale[vk] = 1;
++    return !s_key_stale[vk];
++}
 +
 +/* Port hotkeys (Demon's Souls god mode, NOTES fix 44): ps3_host_hotkey(vk) is 1 once per press of
 + * vk while the game window is in front (or from PAD_KEY_SCRIPT). Call it from one thread only.
@@ -5273,7 +5320,7 @@ index afdd93d..ec32db7 100644
 + *   F1 = capture / release the mouse (captured while the window has focus; PAD_MOUSE=0 = never).
 + * PAD_MOUSE_SENS=<f> (default 6): stick deflection per pixel of mouse movement per poll. */
 +static int s_dbg_mdx, s_dbg_mdy, s_dbg_kb, s_dbg_polls;   /* ps3_host_pad_debug */
-+static void pad_poll_keyboard_souls(PadHostState* hs)
++static void pad_poll_keyboard_souls(PadHostState* hs, int mouse_ok)
 +{
 +    static const struct { int vk; u16 btn; } map[] = {
 +        { VK_LBUTTON, CELL_PAD_CTRL_R1 },  { VK_LSHIFT, CELL_PAD_CTRL_R2 },
@@ -5287,23 +5334,21 @@ index afdd93d..ec32db7 100644
 +        { VK_RETURN, CELL_PAD_CTRL_START }, { VK_BACK, CELL_PAD_CTRL_SELECT },
 +    };
 +    u16 btns = 0;
-+    /* Alt+Enter toggles fullscreen (rsx_null_backend.c, fix 69): that Enter is not START. */
-+    const int alt = !pad_key_script_active() && (GetAsyncKeyState(VK_MENU) & 0x8000);
 +    for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
-+        if (!(alt && map[i].vk == VK_RETURN) && pad_pos_down(map[i].vk)) btns |= map[i].btn;
++        if (pad_game_down(map[i].vk)) btns |= map[i].btn;
 +    hs->buttons = btns;
 +    hs->connected = 1;
 +
 +    /* Left stick from WASD; a diagonal is scaled so it is not faster than a straight line. */
-+    int lx = (pad_pos_down('D') ? 1 : 0) - (pad_pos_down('A') ? 1 : 0);
-+    int ly = (pad_pos_down('S') ? 1 : 0) - (pad_pos_down('W') ? 1 : 0);
++    int lx = (pad_game_down('D') ? 1 : 0) - (pad_game_down('A') ? 1 : 0);
++    int ly = (pad_game_down('S') ? 1 : 0) - (pad_game_down('W') ? 1 : 0);
 +    const int lmag = (lx && ly) ? 90 : 127;
 +    hs->analog_lx = (u8)(128 + lx * lmag);
 +    hs->analog_ly = (u8)(128 + ly * lmag);
 +
 +    /* Right stick from IJKL, plus the mouse while it is captured. */
-+    double rx = (pad_pos_down('L') ? 127 : 0) - (pad_pos_down('J') ? 127 : 0);
-+    double ry = (pad_pos_down('K') ? 127 : 0) - (pad_pos_down('I') ? 127 : 0);
++    double rx = (pad_game_down('L') ? 127 : 0) - (pad_game_down('J') ? 127 : 0);
++    double ry = (pad_game_down('K') ? 127 : 0) - (pad_game_down('I') ? 127 : 0);
 +    static int mouse_on = -1, f1_was = 0;
 +    static double sens = 0;
 +    if (mouse_on < 0) { const char* e = getenv("PAD_MOUSE"); mouse_on = (e && e[0] == '0') ? 0 : 1;
@@ -5315,7 +5360,7 @@ index afdd93d..ec32db7 100644
 +    if (f1 && !f1_was) { mouse_on = !mouse_on; printf("[cellPad] mouse %s\n", mouse_on ? "captured" : "released");
 +                         fflush(stdout); }
 +    f1_was = f1;
-+    if (mouse_on && !pad_key_script_active()) {
++    if (mouse_on && mouse_ok && !pad_key_script_active()) {
 +        HWND fg = GetForegroundWindow();
 +        RECT rc; POINT c, p;
 +        if (fg && GetClientRect(fg, &rc) && rc.right > 0 && rc.bottom > 0 && GetCursorPos(&p)) {
@@ -5326,54 +5371,122 @@ index afdd93d..ec32db7 100644
 +            s_dbg_mdx += p.x - c.x; s_dbg_mdy += p.y - c.y;
 +            SetCursorPos(c.x, c.y);   /* recentre: the next poll sees only new movement */
 +        }
-+    }
+     }
 +    if (rx > 127) rx = 127; if (rx < -127) rx = -127;
 +    if (ry > 127) ry = 127; if (ry < -127) ry = -127;
 +    hs->analog_rx = (u8)(128 + (int)rx);
 +    hs->analog_ry = (u8)(128 + (int)ry);
 +    hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
 +    hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
-+    { static int said = 0;
-+      if (!said && btns) { said = 1;
-+          printf("[cellPad] keyboard input active on port 0 (no XInput device)\n"); fflush(stdout); } }
 +}
-+
- static void pad_poll_keyboard(void)
- {
-     static int off = -1;
-@@ -284,7 +488,7 @@ static void pad_poll_keyboard(void)
-     if (off) return;
  
-     PadHostState* hs = &s_host_state[0];
--    if (!pad_host_window_focused()) {
-+    if (!pad_key_script_active() && !pad_host_window_focused()) {
-         /* Release everything on focus loss, or a key held while alt-tabbing
-          * would stay down forever. */
-         hs->buttons = 0;
-@@ -294,6 +498,10 @@ static void pad_poll_keyboard(void)
-         return;
-     }
- 
-+    static int souls = -1;
-+    if (souls < 0) { const char* e = getenv("PAD_KEYMAP"); souls = (e && !strcmp(e, "souls")) ? 1 : 0; }
-+    if (souls) { pad_poll_keyboard_souls(hs); return; }
-+
++static void pad_poll_keyboard_basic(PadHostState* hs)
++{
      static const struct { int vk; u16 btn; } map[] = {
          { VK_UP,     CELL_PAD_CTRL_UP },      { VK_DOWN,  CELL_PAD_CTRL_DOWN },
          { VK_LEFT,   CELL_PAD_CTRL_LEFT },    { VK_RIGHT, CELL_PAD_CTRL_RIGHT },
-@@ -305,8 +513,10 @@ static void pad_poll_keyboard(void)
-     };
+@@ -306,7 +506,7 @@ static void pad_poll_keyboard(void)
  
      u16 btns = 0;
-+    /* Alt+Enter toggles fullscreen (rsx_null_backend.c, fix 69): that Enter is not START. */
-+    const int alt = !pad_key_script_active() && (GetAsyncKeyState(VK_MENU) & 0x8000);
      for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
 -        if (GetAsyncKeyState(map[i].vk) & 0x8000) btns |= map[i].btn;
-+        if (!(alt && map[i].vk == VK_RETURN) && pad_pos_down(map[i].vk)) btns |= map[i].btn;
++        if (pad_game_down(map[i].vk)) btns |= map[i].btn;
  
      hs->buttons   = btns;
      hs->connected = 1;
-@@ -684,7 +894,13 @@ static void pad_shutdown_backend(void)
+@@ -317,10 +517,89 @@ static void pad_poll_keyboard(void)
+     hs->analog_rx = hs->analog_ry = 128;
+     hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
+     hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
++}
++
++/* The keyboard (and in the souls layout the mouse) drives port 0 whether or not an XInput pad is
++ * there (Demon's Souls NOTES fix 73). Before, it was only read with no pad on port 0, so a pad that
++ * was merely switched on -- or a virtual one (Steam, DS4Windows, ViGEm) -- made Enter / START and
++ * every key do nothing, e.g. stuck at PRESS START BUTTON. With a pad present the keys are ORed into
++ * its buttons and a stick that the keys / mouse move replaces the pad's; the mouse is only captured
++ * after a key or mouse button was used last (the pad's own input hands it back), so a pad player's
++ * cursor stays free. Called right after the XInput poll. */
++static int pad_stick_moved(u8 v) { return v < 128 - 40 || v > 128 + 40; }
++static void pad_poll_keyboard(void)
++{
++    static int off = -1;
++    if (off < 0) off = getenv("PAD_NO_KEYBOARD") ? 1 : 0;
++    s_dbg_kb = 0;
++    if (off) return;
+ 
++    PadHostState* hs = &s_host_state[0];
++    const int pad = hs->connected;
++    static int kb_last = 0;   /* the keyboard / mouse was used more recently than the pad */
++    static int was_focused = 0;
++    if (pad && (hs->buttons || pad_stick_moved(hs->analog_lx) || pad_stick_moved(hs->analog_ly) ||
++                pad_stick_moved(hs->analog_rx) || pad_stick_moved(hs->analog_ry) ||
++                hs->trigger_l2 > 30 || hs->trigger_r2 > 30))
++        kb_last = 0;
++    const int script = pad_key_script_active();
++    if (!script && !pad_host_window_focused()) {
++        /* Release everything on focus loss, or a key held while alt-tabbing
++         * would stay down forever. A pad keeps its own state. */
++        if (!pad) {
++            pad_host_release(hs);
++            hs->connected = 1;
++            s_dbg_kb = 1;
++        }
++        was_focused = 0;
++        return;
++    }
++    s_key_gate = !script && (!was_focused || (GetAsyncKeyState(VK_MENU) & 0x8000) ||
++                             (GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000));
++    was_focused = 1;
++
++    PadHostState kb;
++    pad_host_release(&kb);
++    static int souls = -1;
++    if (souls < 0) { const char* e = getenv("PAD_KEYMAP"); souls = (e && !strcmp(e, "souls")) ? 1 : 0; }
++    if (souls) pad_poll_keyboard_souls(&kb, !pad || kb_last);
++    else       pad_poll_keyboard_basic(&kb);
++    const int kb_input = kb.buttons || kb.analog_lx != 128 || kb.analog_ly != 128 ||
++                         kb.analog_rx != 128 || kb.analog_ry != 128;
++    if (kb_input) kb_last = 1;   /* a key or mouse button (mouse movement alone cannot set kb input
++                                   * here: without capture the right stick is IJKL only) */
++
++    if (!pad) {
++        hs->buttons = kb.buttons;
++        hs->analog_lx = kb.analog_lx; hs->analog_ly = kb.analog_ly;
++        hs->analog_rx = kb.analog_rx; hs->analog_ry = kb.analog_ry;
++        hs->trigger_l2 = kb.trigger_l2; hs->trigger_r2 = kb.trigger_r2;
++        hs->connected = 1;
++    } else {
++        hs->buttons |= kb.buttons;
++        if (kb.analog_lx != 128 || kb.analog_ly != 128) { hs->analog_lx = kb.analog_lx; hs->analog_ly = kb.analog_ly; }
++        if (kb.analog_rx != 128 || kb.analog_ry != 128) { hs->analog_rx = kb.analog_rx; hs->analog_ry = kb.analog_ry; }
++        if (kb.trigger_l2 > hs->trigger_l2) hs->trigger_l2 = kb.trigger_l2;
++        if (kb.trigger_r2 > hs->trigger_r2) hs->trigger_r2 = kb.trigger_r2;
++        /* XInput gives digital buttons pressure 255; keyboard buttons the same */
++        static const struct { u16 b; size_t off; } pr[] = {
++            { CELL_PAD_CTRL_UP, offsetof(PadHostState, press_up) },
++            { CELL_PAD_CTRL_DOWN, offsetof(PadHostState, press_down) },
++            { CELL_PAD_CTRL_LEFT, offsetof(PadHostState, press_left) },
++            { CELL_PAD_CTRL_RIGHT, offsetof(PadHostState, press_right) },
++            { CELL_PAD_CTRL_TRIANGLE, offsetof(PadHostState, press_triangle) },
++            { CELL_PAD_CTRL_CIRCLE, offsetof(PadHostState, press_circle) },
++            { CELL_PAD_CTRL_CROSS, offsetof(PadHostState, press_cross) },
++            { CELL_PAD_CTRL_SQUARE, offsetof(PadHostState, press_square) },
++            { CELL_PAD_CTRL_L1, offsetof(PadHostState, press_l1) },
++            { CELL_PAD_CTRL_R1, offsetof(PadHostState, press_r1) } };
++        for (unsigned i = 0; i < sizeof pr / sizeof pr[0]; i++)
++            if (kb.buttons & pr[i].b) ((u8*)hs)[pr[i].off] = 255;
++    }
++    s_dbg_kb = !pad || kb_last;
+     { static int said = 0;
+-      if (!said && btns) { said = 1;
+-          printf("[cellPad] keyboard fallback active on port 0 (no XInput device)\n");
++      if (!said && kb_input) { said = 1;
++          printf("[cellPad] keyboard input on port 0 (%s)\n", pad ? "merged with the XInput pad" : "no XInput pad");
+           fflush(stdout); } }
+ }
+ #endif
+@@ -684,7 +963,13 @@ static void pad_shutdown_backend(void)
  static unsigned long long pad_now_ms(void)
  {
  #ifdef _WIN32
@@ -5388,7 +5501,7 @@ index afdd93d..ec32db7 100644
  #else
      struct timespec ts;
      clock_gettime(CLOCK_MONOTONIC, &ts);
-@@ -706,17 +922,34 @@ static void pad_poll_backend(void)
+@@ -706,17 +991,37 @@ static void pad_poll_backend(void)
      for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) s_data_fresh[_i] = 1;
  
  #if PAD_BACKEND_XINPUT
@@ -5403,8 +5516,11 @@ index afdd93d..ec32db7 100644
  #endif
  #ifdef _WIN32
 -    if (!s_host_state[0].connected) pad_poll_keyboard();
-+    s_dbg_kb = !s_host_state[0].connected;
-+    if (s_dbg_kb) pad_poll_keyboard();
++    /* PAD_TEST_FAKE_PAD=1 (TEST): port 0 acts as a connected, idle XInput pad, to check the
++     * keyboard still works beside one (pad_poll_keyboard). */
++    { static int fake = -1; if (fake < 0) fake = getenv("PAD_TEST_FAKE_PAD") ? 1 : 0;
++      if (fake && !s_host_state[0].connected) { pad_host_release(&s_host_state[0]); s_host_state[0].connected = 1; } }
++    pad_poll_keyboard();
  #endif
 +    s_dbg_polls++;
      pad_track_assign();
@@ -5425,7 +5541,7 @@ index afdd93d..ec32db7 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -949,7 +1182,13 @@ skip_inject: ;
+@@ -949,7 +1254,13 @@ skip_inject: ;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
                    static int said[256];
                    if (!said[i]) { said[i] = 1;
@@ -5440,7 +5556,7 @@ index afdd93d..ec32db7 100644
                }
            }
        } }
-@@ -1015,6 +1254,24 @@ skip_inject: ;
+@@ -1015,6 +1326,24 @@ skip_inject: ;
        if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
