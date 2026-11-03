@@ -5137,7 +5137,7 @@ index 0000000..d9edd4d
 +
 +#endif /* PS3RECOMP_VDEC_MF_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..17ed3b1 100644
+index afdd93d..e043f5f 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -16,6 +16,7 @@
@@ -5172,7 +5172,7 @@ index afdd93d..17ed3b1 100644
      HWND fg = GetForegroundWindow();
      if (!fg) return 0;
      DWORD pid = 0;
-@@ -277,23 +282,218 @@ static int pad_host_window_focused(void)
+@@ -277,23 +282,332 @@ static int pad_host_window_focused(void)
      return pid == GetCurrentProcessId();
  }
  
@@ -5339,6 +5339,90 @@ index afdd93d..17ed3b1 100644
 + *   F1 = capture / release the mouse (captured while the window has focus; PAD_MOUSE=0 = never).
 + * PAD_MOUSE_SENS=<f> (default 6): stick deflection per pixel of mouse movement per poll. */
 +static int s_dbg_mdx, s_dbg_mdy, s_dbg_kb, s_dbg_polls;   /* ps3_host_pad_debug */
++
++/* Mouse camera (Demon's Souls NOTES fix 78). The mouse used to be read every 4 ms poll (cursor delta from the
++ * window centre, recentred) and turned into right-stick deflection for that poll alone -- the game takes one
++ * report a frame, so it saw only the last poll's slice of movement (jittery, most movement lost), fast moves
++ * pinned the stick and Windows pointer acceleration came along. Now raw mouse counts (WM_INPUT, from the
++ * window thread: rsx_null_backend.c) add up in s_mouse_acc_* and are turned into deflection when the game takes
++ * a fresh report (cellPadGetData), deflection beyond full turning carried into the next reports. And the cursor
++ * is only captured after a click into the game window (that click is not an attack), released by F1, by leaving
++ * the window and when the pad is used last; captured = hidden and kept inside the window (ClipCursor). */
++static volatile LONG s_mouse_acc_x, s_mouse_acc_y;   /* raw counts not yet reported */
++static volatile LONG s_mouse_cap;                    /* captured: counts accumulate, cursor hidden */
++static volatile LONG s_mouse_raw;                    /* WM_INPUT seen (else the old cursor-delta fallback) */
++static int s_mouse_claim;                            /* a capturing click: the keyboard + mouse were used last */
++void ps3_host_mouse_raw(long dx, long dy)
++{
++    if (dx || dy) s_mouse_raw = 1;   /* button-only packets (absolute pointers) keep the fallback */
++    if (!s_mouse_cap) return;
++    InterlockedAdd(&s_mouse_acc_x, dx);
++    InterlockedAdd(&s_mouse_acc_y, dy);
++}
++int ps3_host_mouse_captured(void) { return s_mouse_cap != 0; }
++static void pad_mouse_capture(int on);
++void ps3_host_mouse_release(void) { pad_mouse_capture(0); }   /* Esc in the game window */
++/* Real mouse look (ppu_recomp_016.cpp, the game's free camera): the camera update calls look_frame() each
++ * frame and, in the free camera, look_take() -- which hands it the counts and keeps them out of the stick for
++ * 100 ms. In lock-on, aiming, menus and cutscenes take() is not called and the stick path below gets them
++ * (lock-on target switching by flicking still works). PAD_MOUSE_LOOK=0 = stick only. */
++static volatile LONG s_mlook_free;
++static volatile LONG s_mlook_reports;   /* fresh pad reports since the camera last took the counts */
++void ps3_host_mouse_look_frame(void) { s_mlook_free = 0; }
++int ps3_host_mouse_look_take(int* dx, int* dy)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("PAD_MOUSE_LOOK"); on = !(e && e[0] == '0'); }
++    *dx = *dy = 0;
++    if (!on || !s_mouse_cap) return 0;
++    s_mlook_free = 1; s_mlook_reports = 0;
++    *dx = (int)InterlockedExchange(&s_mouse_acc_x, 0);
++    *dy = (int)InterlockedExchange(&s_mouse_acc_y, 0);
++    return 1;
++}
++/* The camera took the counts this frame: one fresh report per frame, so a slow frame keeps them in the camera and
++ * a camera that stops calling hands them to the stick on the next report. */
++static int pad_mouse_look_owns(void) { return s_mlook_free && s_mlook_reports == 0; }
++static void pad_mouse_capture(int on)
++{
++    if ((s_mouse_cap != 0) == (on != 0)) return;
++    InterlockedExchange(&s_mouse_cap, on ? 1 : 0);
++    InterlockedExchange(&s_mouse_acc_x, 0);
++    InterlockedExchange(&s_mouse_acc_y, 0);
++    if (!on) ClipCursor(NULL);
++    printf("[cellPad] mouse %s\n", on ? "captured (Esc, F1 or leaving the window releases it)" : "released");
++    fflush(stdout);
++}
++/* Accumulated counts -> right-stick deflection for one report (when the camera does not take them itself: lock-on,
++ * aiming). The game reads the stick through a 0.37 RADIAL deadzone, (m - 0.37) / 0.58 (func_001C3000): the wanted
++ * output v = counts * PAD_MOUSE_SENS (default 0.04 per count) is emitted as magnitude 0.37 + 0.58 |v| in its
++ * direction, |v| capped at 0.97 (byte rounding stays below the camera's 0.998 hi-speed threshold), the rest carried (at most two reports'
++ * worth, so a flick does not keep turning). PAD_MOUSE_DEADZONE=<0..0.9> for other titles (default 0.37). */
++static void pad_mouse_take(int* rx, int* ry)
++{
++    static double sens = -1, dz = 0.37, span = 0.58;
++    if (sens < 0) {
++        const char* s = getenv("PAD_MOUSE_SENS"); sens = s ? atof(s) : 0.04; if (sens <= 0) sens = 0.04;
++        const char* d = getenv("PAD_MOUSE_DEADZONE"); if (d) { dz = atof(d); if (dz < 0 || dz > 0.9) dz = 0.37; }
++    }
++    const LONG cx = InterlockedExchange(&s_mouse_acc_x, 0), cy = InterlockedExchange(&s_mouse_acc_y, 0);
++    *rx = *ry = 0;
++    if (!cx && !cy) return;
++    const double vx = cx * sens, vy = cy * sens, len = sqrt(vx * vx + vy * vy), cap = 0.97;   /* byte rounding margin */
++    const double use = len > cap ? cap / len : 1.0;   /* fraction of the counts reported now */
++    if (use < 1.0) {
++        const double keep = 1.0 - use, lim = 2.0 * cap / sens;
++        double kx = cx * keep, ky = cy * keep;
++        if (kx > lim) kx = lim; if (kx < -lim) kx = -lim;
++        if (ky > lim) ky = lim; if (ky < -lim) ky = -lim;
++        InterlockedAdd(&s_mouse_acc_x, (LONG)kx);
++        InterlockedAdd(&s_mouse_acc_y, (LONG)ky);
+     }
++    const double m = dz + span * (len * use), dirx = vx / len, diry = vy / len;   /* (m - 0.37) / 0.58 = |v| */
++    *rx = (int)(dirx * m * 127.0 + (dirx < 0 ? -0.5 : 0.5));
++    *ry = (int)(diry * m * 127.0 + (diry < 0 ? -0.5 : 0.5));
++}
++
 +static void pad_poll_keyboard_souls(PadHostState* hs, int mouse_ok)
 +{
 +    static const struct { int vk; u16 btn; } map[] = {
@@ -5368,29 +5452,59 @@ index afdd93d..17ed3b1 100644
 +    /* Right stick from IJKL, plus the mouse while it is captured. */
 +    double rx = (pad_game_down('L') ? 127 : 0) - (pad_game_down('J') ? 127 : 0);
 +    double ry = (pad_game_down('K') ? 127 : 0) - (pad_game_down('I') ? 127 : 0);
-+    static int mouse_on = -1, f1_was = 0;
-+    static double sens = 0;
++    static int mouse_on = -1, f1_was = 0, lmb_was = 1;
 +    if (mouse_on < 0) { const char* e = getenv("PAD_MOUSE"); mouse_on = (e && e[0] == '0') ? 0 : 1;
-+                        const char* s = getenv("PAD_MOUSE_SENS"); sens = s ? atof(s) : 6.0;
-+                        if (sens <= 0) sens = 6.0;
-+                        printf("[cellPad] keyboard layout: souls (WASD move, mouse camera, F1 releases mouse)\n");
++                        printf("[cellPad] keyboard layout: souls (WASD move, click to capture the mouse, F1 releases it)\n");
 +                        fflush(stdout); }
++    const int script = pad_key_script_active();
 +    const int f1 = pad_key_down(VK_F1);
-+    if (f1 && !f1_was) { mouse_on = !mouse_on; printf("[cellPad] mouse %s\n", mouse_on ? "captured" : "released");
-+                         fflush(stdout); }
++    if (f1 && !f1_was) {   /* F1: capture / release */
++        if (s_mouse_cap) pad_mouse_capture(0); else if (mouse_on && mouse_ok && !script) pad_mouse_capture(1);
++    }
 +    f1_was = f1;
-+    if (mouse_on && mouse_ok && !pad_key_script_active()) {
-+        HWND fg = GetForegroundWindow();
-+        RECT rc; POINT c, p;
-+        if (fg && GetClientRect(fg, &rc) && rc.right > 0 && rc.bottom > 0 && GetCursorPos(&p)) {
-+            c.x = rc.right / 2; c.y = rc.bottom / 2;
-+            ClientToScreen(fg, &c);
-+            rx += (double)(p.x - c.x) * sens;
-+            ry += (double)(p.y - c.y) * sens;
-+            s_dbg_mdx += p.x - c.x; s_dbg_mdy += p.y - c.y;
-+            SetCursorPos(c.x, c.y);   /* recentre: the next poll sees only new movement */
++    HWND fg = GetForegroundWindow();
++    RECT rc; POINT p;
++    const int have_rc = fg && GetClientRect(fg, &rc) && rc.right > 0 && rc.bottom > 0;
++    /* A click into the client area captures; the click itself is swallowed (stale until released). */
++    const int lmb = !script && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
++    if (lmb && !lmb_was && !s_mouse_cap && mouse_on && have_rc && GetCursorPos(&p) &&
++        ScreenToClient(fg, &p) && p.x >= 0 && p.y >= 0 && p.x < rc.right && p.y < rc.bottom) {
++        pad_mouse_capture(1);
++        s_key_stale[VK_LBUTTON] = 1;
++        btns &= ~CELL_PAD_CTRL_R1; hs->buttons = btns;   /* the map loop above already saw it this poll */
++        s_mouse_claim = 1;
++    }
++    lmb_was = lmb;
++    /* PAD_TEST_MOUSE="<sec>:<dx>,<dy>:<dur>[;...]" (TEST): raw counts added every poll for <dur> s from <sec>
++     * (PAD_CLOCK), the mouse captured meanwhile -- the mouse camera without a real mouse. */
++    static struct { double t, dur; int dx, dy; } tm[16]; static int ntm = -1;
++    if (ntm < 0) { ntm = 0; const char* e = getenv("PAD_TEST_MOUSE");
++        while (e && *e && ntm < 16) { double t, d; int x, y;
++            if (sscanf(e, "%lf:%d,%d:%lf", &t, &x, &y, &d) == 4) { tm[ntm].t = t; tm[ntm].dx = x; tm[ntm].dy = y; tm[ntm].dur = d; ntm++; }
++            e = strchr(e, ';'); if (e) e++; } }
++    int test_mouse = 0;
++    if (ntm) { const double t = pad_clock(s_key_t0);
++        for (int i = 0; i < ntm; i++) if (t >= tm[i].t && t < tm[i].t + tm[i].dur) {
++            if (!s_mouse_cap) pad_mouse_capture(1);
++            InterlockedAdd(&s_mouse_acc_x, tm[i].dx); InterlockedAdd(&s_mouse_acc_y, tm[i].dy); test_mouse = 1; } }
++    if (s_mouse_cap && !test_mouse && ((!mouse_ok && !s_mouse_claim) || script)) pad_mouse_capture(0);   /* the pad took over */
++    static int cap_prev = 0;
++    if (s_mouse_cap && have_rc && !script && !test_mouse) {   /* the real cursor only for a real capture */
++        POINT tl = { 0, 0 }, br = { rc.right, rc.bottom };
++        ClientToScreen(fg, &tl); ClientToScreen(fg, &br);
++        const RECT clip = { tl.x, tl.y, br.x, br.y };
++        ClipCursor(&clip);   /* the window can move: every poll, cheap */
++        if (!s_mouse_cap) ClipCursor(NULL);   /* Esc released it (window thread) since the check above */
++        if (!s_mouse_raw && GetCursorPos(&p)) {   /* no WM_INPUT (old systems, absolute pointers): cursor delta */
++            POINT c = { (tl.x + br.x) / 2, (tl.y + br.y) / 2 };
++            if (cap_prev) {   /* not the capturing poll: the cursor was recentred last poll */
++                InterlockedAdd(&s_mouse_acc_x, p.x - c.x);
++                InterlockedAdd(&s_mouse_acc_y, p.y - c.y);
++            }
++            SetCursorPos(c.x, c.y);
 +        }
-     }
++    }
++    cap_prev = s_mouse_cap != 0;
 +    if (rx > 127) rx = 127; if (rx < -127) rx = -127;
 +    if (ry > 127) ry = 127; if (ry < -127) ry = -127;
 +    hs->analog_rx = (u8)(128 + (int)rx);
@@ -5404,7 +5518,7 @@ index afdd93d..17ed3b1 100644
      static const struct { int vk; u16 btn; } map[] = {
          { VK_UP,     CELL_PAD_CTRL_UP },      { VK_DOWN,  CELL_PAD_CTRL_DOWN },
          { VK_LEFT,   CELL_PAD_CTRL_LEFT },    { VK_RIGHT, CELL_PAD_CTRL_RIGHT },
-@@ -306,7 +506,7 @@ static void pad_poll_keyboard(void)
+@@ -306,7 +620,7 @@ static void pad_poll_keyboard(void)
  
      u16 btns = 0;
      for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
@@ -5413,7 +5527,7 @@ index afdd93d..17ed3b1 100644
  
      hs->buttons   = btns;
      hs->connected = 1;
-@@ -317,10 +517,89 @@ static void pad_poll_keyboard(void)
+@@ -317,10 +631,91 @@ static void pad_poll_keyboard(void)
      hs->analog_rx = hs->analog_ry = 128;
      hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
      hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
@@ -5452,6 +5566,7 @@ index afdd93d..17ed3b1 100644
 +            s_dbg_kb = 1;
 +        }
 +        was_focused = 0;
++        pad_mouse_capture(0);
 +        return;
 +    }
 +    s_key_gate = !script && (!was_focused || (GetAsyncKeyState(VK_MENU) & 0x8000) ||
@@ -5466,6 +5581,7 @@ index afdd93d..17ed3b1 100644
 +    else       pad_poll_keyboard_basic(&kb);
 +    const int kb_input = kb.buttons || kb.analog_lx != 128 || kb.analog_ly != 128 ||
 +                         kb.analog_rx != 128 || kb.analog_ry != 128;
++    if (s_mouse_claim) { kb_last = 1; s_mouse_claim = 0; }   /* clicked into the window to capture (fix 78) */
 +    if (kb_input) kb_last = 1;   /* a key or mouse button (mouse movement alone cannot set kb input
 +                                   * here: without capture the right stick is IJKL only) */
 +
@@ -5505,7 +5621,7 @@ index afdd93d..17ed3b1 100644
            fflush(stdout); } }
  }
  #endif
-@@ -684,7 +963,13 @@ static void pad_shutdown_backend(void)
+@@ -684,7 +1079,13 @@ static void pad_shutdown_backend(void)
  static unsigned long long pad_now_ms(void)
  {
  #ifdef _WIN32
@@ -5520,7 +5636,7 @@ index afdd93d..17ed3b1 100644
  #else
      struct timespec ts;
      clock_gettime(CLOCK_MONOTONIC, &ts);
-@@ -706,17 +991,37 @@ static void pad_poll_backend(void)
+@@ -706,17 +1107,37 @@ static void pad_poll_backend(void)
      for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) s_data_fresh[_i] = 1;
  
  #if PAD_BACKEND_XINPUT
@@ -5560,7 +5676,32 @@ index afdd93d..17ed3b1 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -949,7 +1254,13 @@ skip_inject: ;
+@@ -865,6 +1286,7 @@ skip_inject: ;
+         len = CELL_PAD_LEN_CHANGE_PRESS_ON;
+ 
+     data->len = len;
++    int mouse_rx = 0, mouse_ry = 0;   /* fix 78: the mouse's right-stick share of this packet */
+     /* Finalize this call's packet freshness before any injected hold budget
+      * advances. len=0 drain reads still build the ordinary payload, but do
+      * not consume a PAD_FILE report. See the emission contract below. */
+@@ -875,6 +1297,16 @@ skip_inject: ;
+             if (!s_data_fresh[port_no]) data->len = 0;   /* nothing new: end the drain */
+             else                        s_data_fresh[port_no] = 0;
+         }
++#ifdef _WIN32
++        if (data->len && port_no == 0 && s_mouse_cap) {   /* fix 78: the mouse since the last report */
++            const int owned = pad_mouse_look_owns();
++            InterlockedIncrement(&s_mlook_reports);
++            if (!owned) {
++                pad_mouse_take(&mouse_rx, &mouse_ry);
++                s_dbg_mdx += mouse_rx; s_dbg_mdy += mouse_ry;
++            }
++        }
++#endif
+     }
+     /* button[0] is reserved and 0 on hardware; button[1] carries the pad mode
+      * in its high nibble (0x7) and len/2 in its low one. GH3 drops any packet
+@@ -949,7 +1381,13 @@ skip_inject: ;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
                    static int said[256];
                    if (!said[i]) { said[i] = 1;
@@ -5575,7 +5716,7 @@ index afdd93d..17ed3b1 100644
                }
            }
        } }
-@@ -1015,6 +1326,24 @@ skip_inject: ;
+@@ -1015,6 +1453,24 @@ skip_inject: ;
        if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
@@ -5600,6 +5741,25 @@ index afdd93d..17ed3b1 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
+@@ -1042,8 +1498,16 @@ skip_inject: ;
+                 fprintf(stderr, "[PADSWEEP] step %d: l=(%u,%u) r=(%u,%u)%c", k,
+                         steps[k][0], steps[k][1], steps[k][2], steps[k][3], 10); } }
+         } } }
+-    data->button[CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_X] = hs->analog_rx;
+-    data->button[CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_Y] = hs->analog_ry;
++    if (mouse_rx || mouse_ry) {
++        int x = (int)hs->analog_rx - 128 + mouse_rx, y = (int)hs->analog_ry - 128 + mouse_ry;
++        x = x < -127 ? -127 : x > 127 ? 127 : x;
++        y = y < -127 ? -127 : y > 127 ? 127 : y;
++        data->button[CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_X] = (u16)(128 + x);
++        data->button[CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_Y] = (u16)(128 + y);
++    } else {
++        data->button[CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_X] = hs->analog_rx;
++        data->button[CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_Y] = hs->analog_ry;
++    }
+     data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_X]  = hs->analog_lx;
+     data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_Y]  = hs->analog_ly;
+ 
 diff --git a/libs/misc/cellOskDialog.c b/libs/misc/cellOskDialog.c
 index 17e7c67..ecda035 100644
 --- a/libs/misc/cellOskDialog.c
@@ -7040,10 +7200,10 @@ index 298ee7d..63f6552 100644
      if (index >= CELL_GCM_MAX_REPORT_COUNT) return 0;
      return s_report_data[index].value;
 diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
-index bc05a30..958fbe7 100644
+index bc05a30..10aba23 100644
 --- a/libs/video/rsx_d3d12_backend.c
 +++ b/libs/video/rsx_d3d12_backend.c
-@@ -653,11 +653,19 @@ static u32    s_lock_n  = 0;
+@@ -653,20 +653,31 @@ static u32    s_lock_n  = 0;
   * Win32 window
   * -----------------------------------------------------------------------*/
  
@@ -7062,15 +7222,22 @@ index bc05a30..958fbe7 100644
 +        d3d12_window_closing();
          DestroyWindow(hwnd);
          return 0;
-     case WM_DESTROY:
-@@ -666,6 +674,7 @@ static LRESULT CALLBACK d3d12_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+-    case WM_DESTROY:
++    case WM_DESTROY:   /* however the window goes, the console goes off with it */
++        s_d3d.window_closed = 1;
++        d3d12_window_closing();
+         PostQuitMessage(0);
+         return 0;
      case WM_KEYDOWN:
++        /* Esc frees the mouse, as in rsx_null_backend.c; the X / Alt+F4 quit */
          if (wp == VK_ESCAPE) {
-             s_d3d.window_closed = 1;
-+            d3d12_window_closing();
-             DestroyWindow(hwnd);
+-            s_d3d.window_closed = 1;
+-            DestroyWindow(hwnd);
++            extern void ps3_host_mouse_release(void);
++            ps3_host_mouse_release();
          }
          return 0;
+     }
 diff --git a/libs/video/rsx_dispatch.c b/libs/video/rsx_dispatch.c
 index eca370f..306216e 100644
 --- a/libs/video/rsx_dispatch.c
@@ -32157,7 +32324,7 @@ index 2579117..ceddc58 100644
 +
 +#endif /* _WIN32 */
 diff --git a/libs/video/rsx_null_backend.c b/libs/video/rsx_null_backend.c
-index 32e8a95..253f2e1 100644
+index 32e8a95..ec297df 100644
 --- a/libs/video/rsx_null_backend.c
 +++ b/libs/video/rsx_null_backend.c
 @@ -9,6 +9,7 @@
@@ -32193,16 +32360,16 @@ index 32e8a95..253f2e1 100644
 +{
 +    static LONG armed = 0;
 +    if (InterlockedExchange(&armed, 1) == 0) {
++        HANDLE t = CreateThread(NULL, 0, rsx_exit_guard, NULL, 0, NULL);   /* first: nothing can hold it back */
++        if (t) { SetThreadPriority(t, THREAD_PRIORITY_HIGHEST); CloseHandle(t); }
 +        fprintf(stderr, "[exit] window closed: the process ends in 3 s\n");
-+        HANDLE t = CreateThread(NULL, 0, rsx_exit_guard, NULL, 0, NULL);
-+        if (t) CloseHandle(t);
 +    }
 +}
 +
  /* ---------------------------------------------------------------------------
   * Internal state
   * -----------------------------------------------------------------------*/
-@@ -52,11 +80,13 @@ static NullBackendState s_state;
+@@ -52,15 +80,19 @@ static NullBackendState s_state;
  
  static int s_present_suppressed = 0;
  
@@ -32216,10 +32383,31 @@ index 32e8a95..253f2e1 100644
          DestroyWindow(hwnd);
          return 0;
  
-@@ -92,7 +122,17 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+-    case WM_DESTROY:
++    case WM_DESTROY:   /* however the window goes, the console goes off with it */
++        s_state.window_closed = 1;
++        rsx_window_closing();
+         PostQuitMessage(0);
+         return 0;
+ 
+@@ -92,10 +124,37 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
          return 0;
      }
  
++    case WM_INPUT: {   /* raw mouse counts for the mouse camera (cellPad.c, Demon's Souls NOTES fix 78) */
++        RAWINPUT ri; UINT sz = sizeof ri;
++        if (GetRawInputData((HRAWINPUT)lp, RID_INPUT, &ri, &sz, sizeof(RAWINPUTHEADER)) != (UINT)-1 &&
++            ri.header.dwType == RIM_TYPEMOUSE && !(ri.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
++            extern void ps3_host_mouse_raw(long dx, long dy);
++            ps3_host_mouse_raw(ri.data.mouse.lLastX, ri.data.mouse.lLastY);
++        }
++        break;   /* DefWindowProc does the cleanup */
++    }
++    case WM_SETCURSOR: {   /* captured: no cursor over the game */
++        extern int ps3_host_mouse_captured(void);
++        if (LOWORD(lp) == HTCLIENT && ps3_host_mouse_captured()) { SetCursor(NULL); return TRUE; }
++        break;
++    }
 +    case WM_SYSKEYDOWN:   /* Alt+Enter: borderless fullscreen on/off (Demon's Souls NOTES fix 69) */
 +        if (wp == VK_RETURN && (lp & (1 << 29))) {   /* bit 30: auto-repeat of a held key */
 +            if (!(lp & (1 << 30))) null_toggle_fullscreen(hwnd);
@@ -32231,10 +32419,18 @@ index 32e8a95..253f2e1 100644
 +        break;
      case WM_KEYDOWN:
 +        if (wp == VK_F11) { if (!(lp & (1 << 30))) null_toggle_fullscreen(hwnd); return 0; }
++        /* Esc used to destroy the window -- without the exit above, so the game ran on with no window (sound
++         * still playing) when Esc was pressed to free the mouse (Demon's Souls NOTES fix 78). It frees the
++         * mouse now; the X / Alt+F4 quit. */
          if (wp == VK_ESCAPE) {
-             s_state.window_closed = 1;
-             DestroyWindow(hwnd);
-@@ -103,6 +143,38 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+-            s_state.window_closed = 1;
+-            DestroyWindow(hwnd);
++            extern void ps3_host_mouse_release(void);
++            ps3_host_mouse_release();
+         }
+         return 0;
+     }
+@@ -103,6 +162,38 @@ static LRESULT CALLBACK null_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
      return DefWindowProcA(hwnd, msg, wp, lp);
  }
  
@@ -32273,16 +32469,19 @@ index 32e8a95..253f2e1 100644
  /* ---------------------------------------------------------------------------
   * Backend callbacks
   * -----------------------------------------------------------------------*/
-@@ -264,6 +336,8 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
+@@ -264,6 +355,11 @@ int rsx_null_backend_init(u32 width, u32 height, const char* title)
          return -1;
      }
  
 +    { const char* e = getenv("DES_FULLSCREEN");   /* fix 69 */
 +      if (e && *e == '1') null_toggle_fullscreen(s_state.hwnd); }
++    { RAWINPUTDEVICE rid = { 0x01, 0x02, 0, s_state.hwnd };   /* mouse, while the window has focus (fix 78) */
++      if (!RegisterRawInputDevices(&rid, 1, sizeof rid))
++          printf("[RSX null] raw mouse input unavailable (%lu): cursor-delta fallback\n", GetLastError()); }
      s_state.hdc = GetDC(s_state.hwnd);
      s_state.last_fps_time = GetTickCount64();
      snprintf(s_state.title, sizeof(s_state.title), "%s", title ? title : "ps3recomp");
-@@ -297,12 +371,21 @@ void rsx_null_backend_shutdown(void)
+@@ -297,12 +393,21 @@ void rsx_null_backend_shutdown(void)
  int rsx_null_backend_pump_messages(void)
  {
      MSG msg;

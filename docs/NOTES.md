@@ -1684,6 +1684,47 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
     - Next: the reserve_addr / reserve_value fields on their own cache line in ppu_context (ppu_resv_break_line, 6.6%
       of the dispatcher, reads every PPU context's line -- needs the lifter template + both struct copies + a relift);
       a fast path for plain small PUT / GET in mfc_submit.
+78. **Real mouse look; the cursor no longer locked to the window (2026-11-03, GitHub #6 / #13 / #18):**
+    - Before: the mouse was read every 4 ms poll (cursor offset from the window centre, recentred) and became that
+      poll's right-stick deflection. The game takes one report a frame, so it saw only the last poll's slice (jitter,
+      most movement lost); the stick then goes through the game's 0.37 RADIAL deadzone (func_001C3000:
+      clamp((m - 0.37) * 1.7241, 0, 1)) and tops out at RotSpeed -- small moves vanished, big ones capped. And the
+      cursor was captured whenever the window had focus.
+    - Camera (agent trace + pin): the player camera is ChrExFollowCam, update func_00119670 (ppu_recomp_016.cpp):
+      pitch at cam+0x130, yaw at +0x134, += stick * RotSpeed (+0x1E8/+0x1EC) * dt at loc_0011C7D8, 2 pi wrap,
+      pitch clamp [cam+0x1D4, cam+0x1D0] (-0.698 .. 1.222 rad). Stick comes from PadManipulator +0x40 (func_0030F7A0:
+      pitch = func_001B6B40, yaw = func_001B6A80, signs from the invert options opt+0x2B / +0x2A).
+    - PORT PATCH (016): des_mouse_look_apply at loc_0011C7D8 adds the mouse counts since the last frame straight to
+      the stored angles (PAD_MOUSE_LOOK_SENS rad per count, default 0.0012; signs = the game's invert options, so the
+      mouse turns like the stick for that player; pitch clamped to the game's limits first -- a big step could wrap
+      through +-pi). A mouse frame counts as hand control (loc_0011C8DC) so pitch does not drift back. Lock-on, aim,
+      menus and cutscenes never reach that label.
+    - cellPad.c: raw counts from WM_INPUT (rsx_null_backend.c RegisterRawInputDevices; no pointer acceleration)
+      accumulate; the camera takes them each frame (ps3_host_mouse_look_take); otherwise, at the next fresh report,
+      they become right-stick deflection in THAT packet (not the shared state): magnitude 0.37 + 0.58 |v| (cancels
+      the radial deadzone), |v| = counts * PAD_MOUSE_SENS (default 0.04) capped 0.97, rest carried -- lock-on target
+      switching by flick and bow aim keep working. Ownership counted in reports (the camera took them since the
+      last report), not time. Capture: a click into the game window (that click is swallowed, also when the window
+      already had focus), F1 toggles, leaving the window or using the pad releases; captured = hidden cursor
+      (WM_SETCURSOR) and ClipCursor to the client area. Cursor-delta fallback without WM_INPUT (no jump on the
+      capturing poll). PAD_MOUSE_LOOK=0 = stick only; PAD_MOUSE=0 = no mouse.
+    - Sandbox (PAD_TEST_MOUSE="<s>:<dx>,<dy>:<dur>;..." TEST counts per poll; DES_MLOOK_LOG=1 angles per 15 mouse
+      frames, =2 every free-camera frame): 3 counts/frame -> 0.054 rad per 15 frames exactly; dy -30 for 1 s ->
+      pitch stops at 1.2217; directions = the stick's (this save has both invert options set).
+    - Agent review (2 areas + verify): 8 real, all fixed (capturing click leaked one R1 frame; stick span 0.63 vs
+      the game's 0.58 + cap margin; test hook touched the real cursor; first-capture jump in the fallback; packet vs
+      shared state race; PAD_ALWAYS_CHANGE path; pitch flip on big steps; time-based ownership); 4 refuted.
+    - Follow-up (same day, first real-mouse test): the mouse turned opposite to the stick on both axes -- the
+      sign was the wrong way round for the invert option bytes (sandbox, both options set: stick right raised yaw,
+      mouse +dx lowered it; stick down raised pitch, mouse +dy lowered it). Now +1 with the option byte set, -1
+      unset, measured equal to the stick on both axes (mouse down raises pitch, up lowers it, right = stick right).
+    - Esc destroyed the game window WITHOUT the 3 s exit guard (only WM_CLOSE armed it), so the game ran on with
+      no window and its sound playing -- what pressing Esc to free the mouse did. Esc now releases the mouse (null
+      and D3D12 windows; the X / Alt+F4 quit), WM_DESTROY arms the guard however the window goes, and the guard
+      thread starts before its log line (stderr is block-buffered: a killed process loses the tail of the log).
+      Sandbox: Esc -> still presenting 30 s later; X -> gone in 3 s. Agent review (3 areas + verify): 2 real,
+      fixed (the pad thread could clip the cursor again right after an Esc release from the window thread -- it
+      re-checks after ClipCursor; the D3D12 fallback window's Esc still quit), signs confirmed.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

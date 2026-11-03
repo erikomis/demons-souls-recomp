@@ -128,7 +128,7 @@ camera once you press a key or mouse button, and the controller takes it back wh
 | | |
 |---|---|
 | WASD | move |
-| mouse (or IJKL) | camera |
+| mouse (or IJKL) | camera (click into the game to capture the mouse) |
 | left mouse | attack (R1) |
 | Shift | strong attack (R2) |
 | right mouse | block (L1) |
@@ -140,9 +140,13 @@ camera once you press a key or mouse button, and the controller takes it back wh
 | Tab / middle mouse | lock on (R3) |
 | arrows | d-pad (switch items) |
 | Enter / Backspace | Start / Select |
-| F1 | capture / release the mouse |
+| Esc or F1 | release the mouse (F1 also captures it again; leaving the window or using a controller also releases it). Esc no longer closes the game: use the X or Alt+F4 |
 | Alt+Enter / F11 | borderless fullscreen on/off (`set DES_FULLSCREEN=1` starts in it) |
 | F9 | god mode on/off (no death, HP/MP/stamina stay full) |
+
+The mouse turns the camera directly (no stick dead zone or speed limit) and follows the game's invert-camera
+options. `set PAD_MOUSE_LOOK_SENS=0.0012` sets the sensitivity (radians per mouse count), `set PAD_MOUSE_LOOK=0`
+goes back to the old stick-style mouse.
 
 Keys go by position, not by letter: on an AZERTY or QWERTZ keyboard you move with the keys where
 WASD would be (ZQSD on AZERTY), and the others follow the same way. `set PAD_KEYS_BY_LETTER=1` = by letter.
