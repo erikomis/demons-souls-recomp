@@ -15,6 +15,13 @@ if not defined PY (
 if not defined PY goto :need_python
 where git >nul 2>nul || goto :need_git
 
+rem The Python that made .venv may have been removed or upgraded since ("No Python at ..."): make it again.
+if exist ".venv\Scripts\python.exe" (
+  ".venv\Scripts\python.exe" -c "" >nul 2>nul || (
+    echo The Python that made .venv is no longer installed: making it again ...
+    rmdir /s /q ".venv"
+  )
+)
 if not exist ".venv\Scripts\python.exe" (
   echo Creating the Python environment in .venv ...
   %PY% -m venv .venv || goto :failed

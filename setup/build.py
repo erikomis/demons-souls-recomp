@@ -21,7 +21,7 @@ takes that path on Windows too, without Visual Studio.
 usage: BUILD.bat [--jobs N] [ninja targets...]
        build.py --runtime-only [--jobs N]   (cross toolchain: ps3recomp's runtime alone, no game needed)
 """
-import glob, hashlib, os, re, shutil, subprocess, sys, tarfile, tempfile, urllib.request
+import glob, hashlib, os, re, shutil, subprocess, sys, tarfile, tempfile, time, urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, 'port', 'build_opt')
@@ -373,7 +373,33 @@ def build_xwin(jobs=None, targets=(), runtime_only=False):
     return finish(rc, avx2)
 
 
+def fix_future_times():
+    """Files dated in the future (a ZIP made in another time zone: ZIP times have no zone, so GitHub's
+    UTC-made archives unpack hours ahead west of UTC) make CMake re-run itself until ninja gives up
+    ("manifest 'build.ninja' still dirty after 100 tries"). Date them now. Only this repo's own files;
+    game/, port/, deps/ and the rest are made on this PC."""
+    now = time.time()
+    skip = {'game', 'game_remaster', 'game_mod', 'port', 'deps', '.venv', '.git', 'logs', 'perf', 'hdd0', 'hdd1',
+            'gamedata', 'captures', 'dev_flash', 'no_flash'}
+    n = 0
+    for d, dirs, files in os.walk(ROOT):
+        if d == ROOT:
+            dirs[:] = [x for x in dirs if x not in skip]
+        for f in files:
+            p = os.path.join(d, f)
+            try:
+                if os.stat(p).st_mtime > now + 120:
+                    os.utime(p, (now, now))
+                    n += 1
+            except OSError:
+                pass
+    if n:
+        say(f'  {n} file(s) from the download were dated in the future (another time zone): dated now')
+    return n
+
+
 def build(jobs=None, targets=()):
+    fix_future_times()
     if use_xwin():
         return build_xwin(jobs, targets)
     t = tools()

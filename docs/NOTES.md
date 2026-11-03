@@ -1802,6 +1802,17 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       -> no game, tries again next time; launcher + stale -> build window, then the game;
       launcher + failing build -> no game, exit 1. (PLAY.bat as a whole does not survive a "&" in the folder's
       path -- it was already so; the README asks for a plain path.)
+    - End-to-end test (a separate install: v6cd6887 set up from the disc, the v2026.11.03.4 release ZIP copied
+      over it, its launcher started, Play pressed): the rebuild window came up but BUILD.bat failed with
+      "ninja: error: manifest 'build.ninja' still dirty after 100 tries". ZIP times carry no time zone; the
+      release job (and GitHub's own "Download ZIP") store UTC, so west of UTC every unpacked file is dated hours
+      in the FUTURE (here 22:46 at 15:56, UTC-7) and CMake re-runs itself forever. Fixed twice: the release
+      job writes every entry a day back (unix modes kept: linux/*.sh stay executable), and setup/build.py
+      fix_future_times() dates any repo file more than 2 minutes in the future "now" before configuring (also
+      covers Code-button ZIPs and the releases already out).
+    - GitHub report: "No Python at ...\Python312\python.exe" from BUILD.bat -- the Python that made .venv was
+      removed or upgraded. SETUP.bat now tests .venv and makes it again when broken; BUILD.bat does the same
+      itself (py -3 / python >= 3.10, then pip install -r setup/requirements.txt) and only then builds.
     - Review (2 lenses + adversarial verify): 5 confirmed, all fixed -- the release job's out/ folder never
       created (no launcher would have been attached), the copies written before the compile, a second Play
       during the launcher's rebuild, AVX2 decided before the rebuild, CALL and a "^" / "%" in the path (CALL

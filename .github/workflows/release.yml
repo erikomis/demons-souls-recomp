@@ -54,14 +54,29 @@ jobs:
           git archive --format=zip "--prefix=DemonsSoulsRecomp-$env:TAG/" -o $zip HEAD   # HEAD = the tag checked out above
           if ($LASTEXITCODE) { exit 1 }
           @'
-          import os, zipfile
+          # The launcher goes in, and every file is dated a day back: ZIP times have no time zone, and
+          # this runner's UTC times unpacked hours in the FUTURE west of UTC, which sent CMake into a
+          # re-run loop (ninja: "manifest 'build.ninja' still dirty after 100 tries").
+          import datetime, os, zipfile
           tag = os.environ['TAG']
-          with zipfile.ZipFile('DemonsSoulsRecomp-%s.zip' % tag, 'a', zipfile.ZIP_DEFLATED) as z:
-              z.write('out/DemonsSoulsLauncher.exe', 'DemonsSoulsRecomp-%s/DemonsSoulsLauncher.exe' % tag)
+          name = 'DemonsSoulsRecomp-%s.zip' % tag
+          when = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).timetuple()[:6]
+          src = zipfile.ZipFile(name)
+          entries = [(i, src.read(i)) for i in src.infolist()]
+          src.close()
+          entries.append((zipfile.ZipInfo('DemonsSoulsRecomp-%s/DemonsSoulsLauncher.exe' % tag),
+                          open('out/DemonsSoulsLauncher.exe', 'rb').read()))
+          with zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED) as z:
+              for old, data in entries:
+                  i = zipfile.ZipInfo(old.filename, date_time=when)
+                  i.external_attr = old.external_attr      # keeps the Linux scripts executable
+                  i.compress_type = zipfile.ZIP_STORED if old.filename.endswith('/') else zipfile.ZIP_DEFLATED
+                  z.writestr(i, data)
               names = z.namelist()
           bad = [n for n in names if n.lower().endswith(('.elf', '.self', '.sprx', '.sdat', '.pam', '.dcx', '.iso', '.dkey'))]
           assert not bad, bad
-          print(len(names), 'files')
+          assert any(n.endswith('/DemonsSoulsLauncher.exe') for n in names)
+          print(len(names), 'files, dated', when)
           '@ | Set-Content add_launcher.py
           python add_launcher.py
           if ($LASTEXITCODE) { exit 1 }
