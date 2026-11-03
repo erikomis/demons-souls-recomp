@@ -1750,6 +1750,36 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       lock): 0 in the log and "not measured" in the report, which also treats all-zero older Linux logs so;
       the first slp line counted all of start-up (cleared when the perf thread starts); a failed / 0 thread
       read wrapped into an absurd %; threads that never used a tick were never dropped from the table.
+80. **In-engine cutscenes moved in pairs at 60 fps: the camera picked the nearest of its 30 Hz keys (2026-11-03,
+    report: the tutorial's opening, the knight walking through the black void, "frame drops / low framerate"):**
+    - Not dropped frames: in the sandbox (60 fps mode) the cutscene presents held 60/s with no long frames. But the
+      picture moved in pairs. Measured from an LD_VIDEO capture: per second, the median frame-to-frame change on even
+      vs odd frames; ratio > 2 in 19 of 59 s of the tutorial opening (remo scn080000) and in 56 of 64 s of the Nexus
+      intro; gameplay sits at 1.0-1.5.
+    - Cause (lifted code; the same finding as JonathanDC64/DemonsSoulsRecomp, MIT, its docs/40 and docs/62): the remo
+      clock is the step dt (func_00612300: dt * PlayRate; func_005FD730: cut+0x1C += it), and characters (Havok, linear
+      between frames) and the FOV (Hermite) are sampled at that fractional time. The camera track sampler
+      func_005F71D0 (func_005FD730 -> func_00615208 -> func_00614DE8 -> here) finds the keys either side of t (keys are
+      baked one per 1/30 s: time = frame / 30), puts the fraction in f10 (s) and their gap in f11, copies both keys of
+      each channel to its stack and then loads the earlier when s < 0.5, else the later. At 30 fps t lands on keys; at
+      60 every other frame is half way, so the camera moved 30 times a second while the characters moved 60.
+    - PORT PATCH (ppu_recomp_040.cpp): des_cut_decide at 0x005F7254 (once a call, before the loads) and des_cut_blend
+      after the position (v4: earlier r1+0xA0, later +0xB0), rotation (v12: +0xD0 / +0xA0, before the code's own
+      2 pi wrap) and scale (v2: +0x70 / +0xA0) loads. Blended by s when t is strictly between keys one frame apart;
+      rotation the short way round. The nearest key stays (as lifted) for keys further apart (holds), a step that
+      moves over 2 m, turns over 0.5 rad or changes scale over 0.25 (a shot change inside one track), an unset index,
+      or a register holding neither key. A turn over 0.5 rad whose other Euler set is within 0.5 rad is a flip, not a
+      turn: the camera matrix is R = Rx(x) Rz(z) Ry(y) (row vectors, 0x00054D48), so (x + pi, y + pi, pi - z) is the
+      same rotation, and the blend goes to that set. DES_CUT_BLEND=0 = the lifted nearest key; DES_CUT_LOG=1 counts.
+    - Result: tutorial opening 19 of 59 paired seconds -> 0 of 49 (and 0 of 42 on the final build: 2579 presents in
+      43 s, none over 30 ms); Nexus intro 56 of 64 -> 0 of 64 (DES_CUT_BLEND=0 vs on, same build). DES_CUT_LOG:
+      tutorial 2000 calls between keys, 1998 blended (2 Euler flips), 2 jumps kept (6.9 m and 7.1 m: real shot
+      changes); Nexus 3000, 2994 blended (5 flips), 6 jumps kept. Game time 1.000; frame dumps show the same shots and
+      framing. 30 fps: steps 30.0, game time 1.000; the cut clock sits a little off the keys there too, so 999 of
+      1000 calls blend (sub-frame), 1 jump kept.
+    - Agent review (3 lenses + adversarial verify): no correctness defects; 3 low findings about hypothetical track
+      data (shot changes under the limits, scale steps) refuted; the scale-change guard was added anyway.
+    - Not changed: the pre-rendered movies (cellSail, fix 71) are 30 fps MPEG-2 by nature.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

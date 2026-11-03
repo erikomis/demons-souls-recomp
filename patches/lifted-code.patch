@@ -1181,8 +1181,8 @@ diff -ruN a/recompiled/ppu_recomp_039.cpp b/recompiled/ppu_recomp_039.cpp
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
 diff -ruN a/recompiled/ppu_recomp_040.cpp b/recompiled/ppu_recomp_040.cpp
---- a/recompiled/ppu_recomp_040.cpp	2026-10-31 08:09:11.554897300 -0700
-+++ b/recompiled/ppu_recomp_040.cpp	2026-10-31 08:09:17.410719700 -0700
+--- a/recompiled/ppu_recomp_040.cpp	2026-11-03 12:33:40.259873300 -0700
++++ b/recompiled/ppu_recomp_040.cpp	2026-11-03 12:33:40.274021800 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -1198,6 +1198,166 @@ diff -ruN a/recompiled/ppu_recomp_040.cpp b/recompiled/ppu_recomp_040.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -32551,8 +32553,127 @@
+         return;
+ }
+ 
++/* PORT PATCH (fix 80): the in-engine (remo) cutscene camera between its keys. A cut's camera track
++ * (sibcam) keys position, rotation (Euler angles, radians) and scale at whole frames, time = frame / 30.
++ * func_005F71D0 finds the keys either side of the cut time t (f1), puts how far t is between them in f10
++ * (s, 0..1) and their gap in f11 (s), copies both keys' vectors to its stack and then loads ONE per channel:
++ * the earlier when s < 0.5, else the later. On PS3 (30 fps) t always lands on a key; at 60 fps every other
++ * frame is half way, so the camera moved 30 times a second while the characters (Havok poses, sampled at
++ * the same t) moved 60: the picture moved in pairs and the knight crept against a still background.
++ * Now, once a call (des_cut_decide, at 0x005F7254), keys one frame apart with t strictly between them are
++ * blended by s (des_cut_blend, after the three loads); rotation the short way round, before the wrap the
++ * code does next. Kept at the nearest key, as lifted: keys further apart (holds), a step that moves the
++ * camera over 2 m, turns it over 0.5 rad or changes its scale over 0.25 (a shot change inside one track),
++ * an unset key index. A turn
++ * over 0.5 rad where the later key's other Euler angles for the same rotation are within 0.5 rad is not a
++ * turn (the track wrote the rotation the other way): it blends to those angles. The camera matrix is
++ * R = Rx(x) Rz(z) Ry(y) (row vectors, 0x00054D48), so (x+pi, y+pi, pi-z) is the same rotation.
++ * Analysis credit: JonathanDC64/DemonsSoulsRecomp (MIT), docs/40 + docs/62. DES_CUT_BLEND=0 = nearest key
++ * (the lifted behaviour); DES_CUT_LOG=1 counts what it did. See DemonsSouls/NOTES.md fix 80. */
++#include <stdlib.h>
++#define DES_CUT_PI 3.14159265f
++static int des_cut_log;
++static int des_cut_on(void)
++{
++    static int on = -1;
++    if (on < 0) {
++        const char* e = getenv("DES_CUT_BLEND");
++        on = !(e && e[0] == '0');
++        const char* l = getenv("DES_CUT_LOG");
++        des_cut_log = l && l[0] == '1';
++        fprintf(stderr, "[des] cutscene camera: %s\n", on ? "keys blended (DES_CUT_BLEND=0: nearest key)" :
++                "nearest key (DES_CUT_BLEND=0)");
++    }
++    return on;
++}
++static float des_cut_delta(float a, float b)   /* b - a, the short way round */
++{
++    const float d = b - a;
++    return d - 2.0f * DES_CUT_PI * nearbyintf(d / (2.0f * DES_CUT_PI));
++}
++static float des_cut_other(const float e[3], int c)   /* angle c of the same rotation's other Euler set */
++{
++    return c == 2 ? DES_CUT_PI - e[2] : e[c] + DES_CUT_PI;
++}
++/* One channel's keys as the function reads them: indices i0/i1 into the 12-byte x,y,z table at [h+0x14];
++ * the byte at h+zero makes the channel read as zeros. 1 = keys, 0 = channel skipped / zeros, -1 = i1 unset. */
++static int des_cut_keys(uint32_t h, uint32_t zero, int32_t i0, int32_t i1, float k0[3], float k1[3])
++{
++    PPU_MM_SNAP
++    if (i0 < 0 || vm_read8(h + zero)) return 0;
++    if (i1 < 0) return -1;
++    const uint32_t tab = vm_read32(h + 0x14);
++    for (uint32_t c = 0; c < 3; c++) {
++        uint32_t a = vm_read32(tab + 12u * (uint32_t)i0 + 4 * c), b = vm_read32(tab + 12u * (uint32_t)i1 + 4 * c);
++        memcpy(&k0[c], &a, 4); memcpy(&k1[c], &b, 4);
++    }
++    return 1;
++}
++/* At 0x005F7254: 0 = leave the loads alone, 1 = blend, 2 = blend, rotation to the later key's other set. */
++static int des_cut_decide(ppu_context* ctx)
++{
++    static unsigned n_calls, n_blend, n_flip, n_apart, n_jump, n_odd;
++    if (!des_cut_on()) return 0;
++    const double s = ctx->fpr[10], gap = ctx->fpr[11];
++    if (!(s > 0.0 && s < 1.0)) return 0;                 /* t on a key: the loads are exact */
++    const uint32_t h = (uint32_t)ctx->gpr[7];
++    float p0[3], p1[3], r0[3] = {0, 0, 0}, r1[3] = {0, 0, 0}, k0[3], k1[3];
++    const int pos = des_cut_keys(h, 0x2C, (int32_t)ctx->gpr[6], (int32_t)ctx->gpr[4], p0, p1);
++    const int rot = des_cut_keys(h, 0x2F, (int32_t)ctx->gpr[29], (int32_t)ctx->gpr[31], r0, r1);
++    const int scl = des_cut_keys(h, 0x32, (int32_t)ctx->gpr[12], (int32_t)ctx->gpr[28], k0, k1);
++    float move = 0.0f, turn = 0.0f, turn_e = 0.0f, grow = 0.0f;
++    for (int c = 0; c < 3; c++) {
++        if (pos > 0) move += (p1[c] - p0[c]) * (p1[c] - p0[c]);
++        if (scl > 0) grow = fmaxf(grow, fabsf(k1[c] - k0[c]));
++        if (rot > 0) {
++            turn = fmaxf(turn, fabsf(des_cut_delta(r0[c], r1[c])));
++            turn_e = fmaxf(turn_e, fabsf(des_cut_delta(r0[c], des_cut_other(r1, c))));
++        }
++    }
++    move = sqrtf(move);
++    const int flip = turn > 0.5f && turn_e <= 0.5f;
++    const int apart = fabs(gap * 30.0 - 1.0) > 0.01;
++    const int jump = !apart && (move > 2.0f || (flip ? turn_e : turn) > 0.5f || grow > 0.25f);
++    const int odd = pos < 0 || rot < 0 || scl < 0;
++    const int mode = (apart || jump || odd) ? 0 : flip ? 2 : 1;
++    if (des_cut_log) {
++        n_calls++; n_blend += mode != 0; n_flip += mode == 2; n_apart += apart; n_jump += jump; n_odd += odd;
++        if (jump) fprintf(stderr, "[cutlog] t=%.3f: jump (move %.2f m, turn %.2f rad), nearest key kept\n", ctx->fpr[1], move, turn);
++        if (n_calls % 1000 == 0)
++            fprintf(stderr, "[cutlog] between keys %u: blended %u (Euler flips %u), keys apart %u, jumps %u, unset %u\n",
++                    n_calls, n_blend, n_flip, n_apart, n_jump, n_odd);
++    }
++    return mode;
++}
++/* After a channel's load into vr[v]: earlier key's vector at a, later at b (stack); ch 1 = rotation. */
++static void des_cut_blend(ppu_context* ctx, int mode, int ch, uint32_t a, uint32_t b, int v)
++{
++    if (!mode) return;
++    PPU_MM_SNAP
++    const float s = (float)ctx->fpr[10];
++    a &= ~0xFu; b &= ~0xFu;                              /* as lvx / stvx address them */
++    float x[4], y[4];
++    int is_x = 1, is_y = 1;
++    for (int i = 0; i < 4; i++) {
++        const uint32_t xb = vm_read32(a + 4 * i), yb = vm_read32(b + 4 * i);
++        const uint32_t rb = (uint32_t)ctx->vr[v].b[4 * i] << 24 | (uint32_t)ctx->vr[v].b[4 * i + 1] << 16 |
++                            (uint32_t)ctx->vr[v].b[4 * i + 2] << 8 | ctx->vr[v].b[4 * i + 3];   /* guest order */
++        is_x = is_x && rb == xb; is_y = is_y && rb == yb;
++        memcpy(&x[i], &xb, 4); memcpy(&y[i], &yb, 4);
++    }
++    if (!is_x && !is_y) return;                          /* holds neither key: not ours to change */
++    for (int i = 0; i < 3; i++) {                         /* element 3 (w) is the same constant in both */
++        const float yi = (ch == 1 && mode == 2) ? des_cut_other(y, i) : y[i];
++        const float f = x[i] + (ch == 1 ? des_cut_delta(x[i], yi) : yi - x[i]) * s;
++        uint32_t fb; memcpy(&fb, &f, 4);
++        ctx->vr[v].b[4 * i] = (uint8_t)(fb >> 24); ctx->vr[v].b[4 * i + 1] = (uint8_t)(fb >> 16);
++        ctx->vr[v].b[4 * i + 2] = (uint8_t)(fb >> 8); ctx->vr[v].b[4 * i + 3] = (uint8_t)fb;
++    }
++}
++
+ void func_005F71D0(ppu_context* ctx) {
+     PPU_MM_SNAP
++        int des_cut = 0;   /* PORT PATCH (fix 80) */
+         uint64_t _cs_28 = ctx->gpr[28];
+         uint64_t _cs_29 = ctx->gpr[29];
+         uint64_t _cs_30 = ctx->gpr[30];
+@@ -32594,6 +32715,7 @@
+         ctx->fpr[0] = ppu_fp_single(ppu_fsub(ctx->fpr[0], ctx->fpr[12]));
+         ctx->fpr[10] = ppu_fp_single(ppu_fdiv(ctx->fpr[0], ctx->fpr[11]));
+ loc_005F7254:
++        des_cut = des_cut_decide(ctx);   /* PORT PATCH (fix 80) */
+         ctx->gpr[9] = vm_read32(ctx->gpr[30] + -0x7F6C);
+         { int64_t a = (int32_t)ctx->gpr[6]; int64_t b = (int64_t)0; uint32_t cr_val = ((a < b) ? 8 : (a > b) ? 4 : 2) | ((ctx->xer >> 31) & 1u); ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }
+         { uint64_t ea = (ctx->gpr[9]) & ~0xFULL; vm_raw_ld16(&ctx->vr[2], ea); }
+@@ -32635,6 +32757,7 @@
+ loc_005F72E8:
+         ctx->gpr[9] = ppc_rldicl(ctx->gpr[9], 0, 32);
+         { uint64_t ea = (ctx->gpr[9]) & ~0xFULL; vm_raw_ld16(&ctx->vr[4], ea); }
++        des_cut_blend(ctx, des_cut, 0, (uint32_t)ctx->gpr[1] + 0xA0, (uint32_t)ctx->gpr[1] + 0xB0, 4);   /* fix 80: position */
+ loc_005F72F0:
+         { int64_t a = (int32_t)ctx->gpr[29]; int64_t b = (int64_t)0; uint32_t cr_val = ((a < b) ? 8 : (a > b) ? 4 : 2) | ((ctx->xer >> 31) & 1u); ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }
+         { uint64_t* d = (uint64_t*)&ctx->vr[3]; uint64_t* a = (uint64_t*)&ctx->vr[2]; uint64_t* b = (uint64_t*)&ctx->vr[2]; d[0] = a[0] | b[0]; d[1] = a[1] | b[1]; }
+@@ -32680,6 +32803,7 @@
+         ctx->gpr[10] = vm_read32(ctx->gpr[30] + -0x7EC8);
+         vmx_vslw(&ctx->vr[1], &ctx->vr[1], &ctx->vr[1]);
+         { uint64_t ea = (ctx->gpr[9]) & ~0xFULL; vm_raw_ld16(&ctx->vr[12], ea); }
++        des_cut_blend(ctx, des_cut, 1, (uint32_t)ctx->gpr[1] + 0xD0, (uint32_t)ctx->gpr[1] + 0xA0, 12);   /* fix 80: rotation */
+         { uint64_t ea = (ctx->gpr[11]) & ~0xFULL; vm_raw_ld16(&ctx->vr[0], ea); }
+         { uint64_t ea = (ctx->gpr[10]) & ~0xFULL; vm_raw_ld16(&ctx->vr[13], ea); }
+         vmx_vmaddfp(&ctx->vr[0], &ctx->vr[12], &ctx->vr[1], &ctx->vr[0], ctx->vscr);
+@@ -32725,6 +32849,7 @@
+ loc_005F7438:
+         ctx->gpr[9] = ppc_rldicl(ctx->gpr[9], 0, 32);
+         { uint64_t ea = (ctx->gpr[9]) & ~0xFULL; vm_raw_ld16(&ctx->vr[2], ea); }
++        des_cut_blend(ctx, des_cut, 2, (uint32_t)ctx->gpr[1] + 0x70, (uint32_t)ctx->gpr[1] + 0xA0, 2);   /* fix 80: scale */
+ loc_005F7440:
+         ctx->gpr[29] = ppc_rldicl(ctx->gpr[3], 0, 32);
+         ctx->gpr[3] = ctx->gpr[29] | ctx->gpr[29];
 diff -ruN a/recompiled/ppu_recomp_041.cpp b/recompiled/ppu_recomp_041.cpp
 --- a/recompiled/ppu_recomp_041.cpp	2026-10-31 08:09:11.593253200 -0700
 +++ b/recompiled/ppu_recomp_041.cpp	2026-10-31 08:09:17.454176300 -0700
