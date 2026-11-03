@@ -1640,6 +1640,50 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       -> the 009 box. Old test PAD_SCRIPTs that pressed Cross for these boxes now press it in the world (harmless in
       the runs so far; retime if one matters).
     - Found with an agent workflow (message IDs from the FMGs + the login state machine).
+77. **Heavy Palace spot 49 -> 59.4 fps on a 5800X: the SPU dispatcher's per-command runtime cost (2026-11-03,
+    measured on the 5800X + RTX 3070, 60 Hz):**
+    - Repro (sandbox on that PC: a copy of a Palace save, menus by PAD_KEY_SCRIPT, DES_TELEPORT_AT=175:-88.37,59.50,-62.08,
+      then ONE J (camera left) press -- 764 draws, render 10.3 ms): 47-50 fps with fix 75, HighGraphics 78-80%.
+    - Profile: HighGraphics' own work is only ~40% of the frame. 37.5% of its stack samples are sys_timer_usleep from
+      one site, func_00ACAFA8's loop at 0x00ACB098: it writes command 0x9023 into the SpursTaskCommandDispatcher's
+      ring (func_00011720) and polls usleep(30) until the SPU sets the done word (r26) -- i.e. HighGraphics waits for
+      the dispatcher (SPU image 1, one "spu job" host thread at 100%). The in-game sampler skips "spu job" threads, so
+      the dispatcher was sampled from outside (scratchpad ripsample.cs: suspend / GetThreadContext RIP at ~1 kHz,
+      QPC-stamped and joined to HighGraphics' samples): while HighGraphics waits, the dispatcher is 35% lifted code and
+      ~60% runtime -- spu_wrch 11.6, mfc_do_transfer 8.4, mfc_submit 8.2, ppu_resv_break_line 6.6, coh notify 3.9,
+      taskset_is_down 2.2, mfc_for 1.7, overlay / gcm / lockguard / atom-trace / lockstep hooks ~1 each.
+      SPU_MFC_STATS: that one thread issues ~6.8 M MFC commands/s (PUT 1.43 M ~41 B, GET 1.6 M ~132 B, GETLLAR 2.43 M,
+      PUTLLC 1.36 M) -- ~150 ns each, so per-command overhead is the frame rate. (synth2, the HighGraphics store path
+      and the renderer are not on this path; the renderer idles 40% at this spot.)
+    - Fix (runtime only, exact with every switch unset AND set; workflow: 4 readers + synthesis, 3 implementers on
+      disjoint files, 2 review lenses + verify: 0 findings):
+      - spu_dma.h: the ~40 env-gated diagnostics in mfc_submit / mfc_do_transfer / mfc_run_list moved verbatim into
+        noinline helpers called at their original points under one lazily read flag (mfc_diag_init: any of the
+        switches set); functional code (LAX, DSP_IMAGE_EA, LBP skip, s_desc_ea, CRI, repeat detector, barrier return,
+        wws batch) stays inline. mfc_ea_range_committed: page test inline, VirtualQuery miss out of line.
+        Reserved-line tests inline (spu_coh_line_reserved_now, compiler fence + relaxed loads, re-read each time);
+        a single-line reserved PUT calls notify_write_except directly. Overlay / lockguard calls gated by header
+        globals g_spu_ovl_gate / g_spu_lockguard_gate (selectany, 1 = call). POISON scan only while it can still print.
+      - spu_channels.c: spu_wrch / spu_mfc_atomic diagnostics into cold helpers behind s_wrch_diag (frame 0x588 ->
+        0x138); mfc_for inline cache check + noinline slow path; yz_lockstep_tick / spu_taskset_line_committed /
+        spu_atom_trace called only when their switch or state needs them; spu_lockguard_check closes its gate once
+        SPU_LOCKGUARD is known unset; the overlay gate closes while no overlay source exists and SPU_DUMP_OVL is off,
+        and registration reopens it before (and re-checks after) the count grows; g_spu_putllc_count++ dropped (never
+        read). spu_workload.c: spu_taskset_is_down memoised per thread with a generation bumped on shutdown / revive.
+      - spu_coherency.c: SPU_COH_STATS block cold; walk counters only under it; s_coh_from_ppu global -> parameter;
+        lock-line lock fast path = one xchg, the spin + QPC wait accounting (SPU_JOB_STATS only) out of line.
+      - CMakeLists.txt: spu_channels.c / spu_coherency.c built /GS- (as the lifted SPU code).
+    - A/B at the spot, back to back (B C B C): 49.0 / 50.2 -> 59.4 / 59.4 fps (the 60 cap), frame median 19.9 / 19.5 ->
+      16.7 / 16.6 ms, p99 30.4 / 27.9 -> 23.7 / 23.4, frames over 25 ms per minute 121 / 88 -> 14 / 16; HighGraphics
+      79 / 78 -> 57 / 55%; game time 1.002; 99.1% of frames held one refresh. Safety: Palace -> DES_WARP_AT 4,0
+      (Latria load, SPU zlib) -> walk / attacks / roll / block / pans: 59.4 fps, game time 0.997, no new errors
+      (same watchdog boot dumps as before). test_spu_coherency: 195 passed, 0 failed; test_mfc_resume_elements OK.
+      Most other SPU/SPURS fixture tests are POSIX-only and skip on Windows; test_spu_drain_launch fails to link on
+      Windows before and after (lv2_spu_receive_event).
+    - Also tried: one logical CPU per core (DES_AFFINITY=5555) -- 49.9 / 48.7 vs 50.0 / 51.3 fps, within noise; left off.
+    - Next: the reserve_addr / reserve_value fields on their own cache line in ppu_context (ppu_resv_break_line, 6.6%
+      of the dispatcher, reads every PPU context's line -- needs the lifter template + both struct copies + a relift);
+      a fast path for plain small PUT / GET in mfc_submit.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
