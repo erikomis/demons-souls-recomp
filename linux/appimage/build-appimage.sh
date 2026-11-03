@@ -77,9 +77,11 @@ say "LLVM $LLVM_VERSION (clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt + clang'
 LLVM_TAR=LLVM-$LLVM_VERSION-Linux-X64.tar.zst
 fetch "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/$LLVM_TAR" "$LLVM_TAR"
 rm -rf "$WORK/llvm" && mkdir -p "$WORK/llvm"
-tar --zstd -xf "$CACHE/$LLVM_TAR" -C "$WORK/llvm" --strip-components=1 --wildcards \
+# LLVM packs it with zstd's long mode (a 2 GB window), which zstd only decodes when told so; plain
+# "tar --zstd" cannot read it
+zstd -dc --long=31 "$CACHE/$LLVM_TAR" | tar -xf - -C "$WORK/llvm" --strip-components=1 --wildcards \
   '*/bin/clang' '*/bin/clang-[0-9]*' '*/bin/clang-cl' '*/bin/lld' '*/bin/lld-link' '*/bin/llvm-ar' \
-  '*/bin/llvm-lib' '*/bin/llvm-rc' '*/bin/llvm-mt' '*/lib/clang/*/include/*' '*/LICENSE.TXT' 2>/dev/null || true
+  '*/bin/llvm-lib' '*/bin/llvm-rc' '*/bin/llvm-mt' '*/lib/clang/*/include/*'
 L=$APPDIR/usr/lib/llvm
 mkdir -p "$L"
 cp -a "$WORK/llvm/bin" "$WORK/llvm/lib" "$L/"
@@ -90,9 +92,8 @@ bundle_libs "$L/lib" $(find "$L/bin" -type f)
 set_rpath '$ORIGIN/../lib' $(find "$L/bin" -type f)
 set_rpath '$ORIGIN' $(find "$L/lib" -maxdepth 1 -name '*.so*' -type f)
 mkdir -p "$APPDIR/usr/share/licenses/llvm"
-cp "$WORK/llvm/LICENSE.TXT" "$APPDIR/usr/share/licenses/llvm/" 2>/dev/null ||
-  curl -fsSL -o "$APPDIR/usr/share/licenses/llvm/LICENSE.TXT" \
-    "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-$LLVM_VERSION/llvm/LICENSE.TXT"
+curl -fsSL -o "$APPDIR/usr/share/licenses/llvm/LICENSE.TXT" \
+  "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-$LLVM_VERSION/llvm/LICENSE.TXT"
 
 say "xwin $XWIN_VERSION"
 XT=xwin-$XWIN_VERSION-x86_64-unknown-linux-musl.tar.gz
