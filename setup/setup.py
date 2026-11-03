@@ -192,7 +192,7 @@ def disc_key(args, image, needs_key, check):
             return k
     say('  This image is encrypted (as Redump images are) and needs its disc key: the 32 hex digits')
     say('  that came with your dump (a .dkey file next to the .iso), or the "Disc Key" on the Redump')
-    say('  page for your disc (redump.org, Demon\'s Souls USA, BLUS-30443).')
+    say('  page for your disc: http://redump.org/disc/16199/ (Demon\'s Souls USA, BLUS-30443, version 01.00).')
     while True:
         t = ask('  Disc key (or drag the .dkey file here): ')
         try:

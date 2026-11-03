@@ -1791,8 +1791,9 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       leaves copies of the patches it was made from in port/build_opt/built/; PLAY.bat's :stale compares them with
       patches/. Different or missing (a build from before this, or a rebuild that failed or was stopped) = not
       rebuilt: run directly it runs BUILD.bat first (no question; an up-to-date folder starts at once); from the
-      launcher (no window) it runs BUILD.bat in a window of its own and WAITS (start /wait: the launcher keeps Play greyed out meanwhile), then starts the
-      game if the build is now current, else exits 1. PS3_REQUIRE_AVX2 is decided again after it (a rebuild may
+      launcher (no window) it runs BUILD.bat in a window of its own and WAITS (start /wait: the launcher keeps Play greyed out meanwhile; the
+      window closes by itself after a good build and stays open on an error), then starts the game if the
+      build is now current, else exits 1. PS3_REQUIRE_AVX2 is decided again after it (a rebuild may
       switch to the plain build). gotos, not ( ) blocks: a ")" in the folder's path would end a block. Not the
       copies patch_sync keeps (deps/ps3recomp/.ds_patched.patch, port/.lifted.patch): those are written when a
       patch is applied, before the compile, so a failed rebuild would have looked current (review finding).

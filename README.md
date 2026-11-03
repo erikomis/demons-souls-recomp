@@ -38,7 +38,9 @@ takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
 - About **12 GB** free disk space (8 GB game files + build).
 - **Your disc image** of Demon's Souls USA (BLUS-30443): a `.iso` (a Redump `.zip` works as is), or a
   dumped disc folder with `PS3_GAME` in it. A Redump-style encrypted image also needs its
-  **disc key** (the `.dkey` file that comes with the dump, or the "Disc Key" on its Redump page).
+  **disc key** (the `.dkey` file that comes with the dump). No `.dkey`? The key is public: it is the
+  "Disc Key" line on [Redump's page for this disc](http://redump.org/disc/16199/) (Demon's Souls, USA, BLUS-30443, version
+  01.00). Copy it from there when SETUP asks.
 - **[RPCS3](https://rpcs3.net/download)**, used once to decrypt the game's `EBOOT.BIN`. Unzip it anywhere.
 - **Python 3.10+** and **Git**. If they are missing, SETUP.bat offers to install them with winget.
 - **Visual Studio 2022** (Community or the free **Build Tools**) with *Desktop development with C++*,
