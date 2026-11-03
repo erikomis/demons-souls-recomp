@@ -1555,6 +1555,39 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       7 refuted (descriptor ring, VRAM growth -- the table fills with 16x16 targets first --, 1x behaviour).
     - Not done: DLSS/FSR (no motion vectors in a PS3 game; the GPU is idle anyway, supersampling is better here);
       a launcher option (next: the launcher replacing the .bat files).
+75. **DemonsSoulsLauncher.exe: one window instead of ten .bat files (2026-11-03, GitHub #3/#17):**
+    - project/launcher/launcher.cpp: plain Win32 + GDI+ (the banner is the user's own game\PS3_GAME\ICON0.PNG,
+      none ships), no runtime. Its own CMake target (project/launcher/CMakeLists.txt, added by the main project
+      on Windows hosts only, not the Linux cross build); a ninja target copies it next to PLAY.bat on every
+      build (copy_to_root.cmake: an open launcher locks the exe -> warning, the build goes on).
+    - It does not reimplement PLAY.bat: it sets DES_FPS / DES_RES_SCALE / LD_RES_SCALE_SHADOW / DES_GAME /
+      DES_FULLSCREEN / DES_MOVIES / DES_GOD / DES_RECORD / LD_TEX_DUMP / PAD_KEYS_BY_LETTER / DES_AFFINITY
+      (every one set or cleared, LD_RES_SCALE cleared since it wins over DES_RES_SCALE), then the "Extra
+      settings" NAME=value pairs, then runs PLAY.bat hidden (cmd /d /c, CREATE_NO_WINDOW). DES_LAUNCHER=1 makes
+      PLAY.bat skip its three `pause`s; a non-zero exit comes back through cmd and the launcher offers
+      REPORT.bat. launcher.ini in the port folder; `--play` = start with the saved settings, no window.
+    - The fps hint repeats PLAY.bat's vsync rule (refresh or refresh+1 a multiple of N) using
+      EnumDisplaySettings (100 Hz where PLAY.bat's CIM query says 99; both pass the 95-105 test).
+    - Check for updates: git fetch + rev-list --count HEAD..@{u} (hidden, GIT_TERMINAL_PROMPT=0), the new
+      commits' subjects in the question; on yes git pull --ff-only + BUILD.bat from a script in %TEMP% (the build replaces the running exe), which
+      reopens the launcher; a ZIP copy (no .git) only rebuilds. Full paths in that script: with
+      NoDefaultCurrentDirectoryInExePath set, `call BUILD.bat` was "not recognized" in a test.
+    - Tested on a scratch copy with a fake DemonsSoulsRecomp.exe that writes its path, args and environment:
+      defaults (auto -> 50 on the 100 Hz screen, same variables PLAY.bat sets), every option flipped (custom 72
+      -> 144 Hz vblank, clock 200, DES_MAX_FPS 72; stale LD_RES_SCALE=3 / DES_GOD=0 in the parent environment
+      overridden), fake crash (exit 3) -> report prompt, Update against a local bare remote + fake BUILD.bat,
+      locked-copy build. The .bat files are unchanged apart from the pauses.
+    - Agent review (4 lenses + one refuter per finding): 7 real, all fixed, 1 refuted (the fps hint's refresh
+      source). Fixed: Update while the game ran (rebuild fails on the locked exe; the button is now off while
+      playing); git fetch on the UI thread with a timeout that could never fire (blocking pipe read before the
+      wait) -> check on its own thread, git in a kill-on-close job, GCM_INTERACTIVE=never,
+      GIT_HTTP_LOW_SPEED_LIMIT/TIME 1000/20 (stalled server test: answer after 20 s, window responsive);
+      extra settings stayed in the launcher's own environment for later runs -> PLAY.bat now gets its own
+      block (CREATE_UNICODE_ENVIRONMENT), the launcher's is never changed; an empty Custom box ran the old
+      rate; the build-tree copy (port\build_opt\launcher) could not find PLAY.bat (3 levels up, needs 4); a
+      failed BUILD.bat after git pull left "you have the newest version" -> update_pending.txt, removed by the
+      script after a good build (or ignored once the exe is newer), makes the button offer the build again;
+      DS_XWIN=1 Windows builds skipped the launcher (CMAKE_CROSSCOMPILING) -> gate on CMAKE_HOST_WIN32.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

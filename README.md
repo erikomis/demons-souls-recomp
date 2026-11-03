@@ -59,15 +59,17 @@ That's it. SETUP.bat then:
 | 3 | downloads ps3recomp at the tested commit and applies this port's runtime patch | < 1 min |
 | 4 | recompiles the game: ~94,000 PPU functions + 12 SPU programs → C/C++ in `port/` | 2–4 min |
 | 5 | applies this port's edits to the recompiled code (`patches/lifted-code.patch`) | seconds |
-| 6 | compiles everything with clang-cl into `port/build_opt/DemonsSoulsRecomp.exe` | 10–30 min |
+| 6 | compiles everything with clang-cl into `port/build_opt/DemonsSoulsRecomp.exe` (plus `DemonsSoulsLauncher.exe`, next to `PLAY.bat`) | 10–30 min |
 
 \* on a fast 16-core PC; the first compile is the long part. If anything fails, fix what it says
 and run SETUP.bat again: finished steps are skipped.
 
 ## Updating
 
-Get the new version (`git pull` in the repo folder, or download the ZIP again and unpack it over
-the old folder, keeping `game/`, `port/` and `deps/`), then run **`BUILD.bat`**. It re-applies
+Press **Check for updates** in the launcher: it asks GitHub, lists what is new and installs it if you
+say yes. Or by hand: get the new version (`git pull` in the repo folder, or
+download the ZIP again and unpack it over the old folder, keeping `game/`, `port/` and `deps/`), then
+run **`BUILD.bat`** (with a ZIP copy, *Check for updates* in the launcher just rebuilds). It re-applies
 the patches that changed since your last setup and recompiles only the files they touch. If it
 says so, run `SETUP.bat` instead: that also works, keeps the game files and skips what is done.
 Setups made before 2026-11-03 could not take updates (the patches were applied once and never
@@ -75,7 +77,21 @@ again); the first `BUILD.bat` or `SETUP.bat` with this version brings them up to
 
 ## Play
 
-Double-click **`PLAY.bat`**. The logos and first load take about a minute.
+Double-click **`DemonsSoulsLauncher.exe`** (SETUP.bat / BUILD.bat build it next to `PLAY.bat`) and
+press **PLAY**. The logos and first load take about a minute.
+
+The launcher is one window for every option below: frame rate (Auto, 30, 50, 60, unlimited or any
+number, with a line saying how it will look on your screen), internal resolution, Normal / PC Remaster
+mod / your imported models, fullscreen, movies, god mode, frame-timing recording, texture dumping,
+keys by letter and CPU core pinning. It remembers them in `launcher.ini`. Its buttons: **Check for
+updates** (shows what is new on GitHub; on yes `git pull` + `BUILD.bat`, then it opens again), **Report a problem** (`REPORT.bat`), **Controls** and
+**Folders** (saves, logs, recordings, texture and model folders). If the game crashes it offers to
+make the report. *Extra settings* takes any `NAME=value` switch from this README or from an issue
+(e.g. `LD_PSO_ASYNC=0`). `DemonsSoulsLauncher.exe --play` starts the game straight away with the
+saved settings, for a desktop shortcut.
+
+The launcher runs `PLAY.bat` with your choices, so the .bat files below still work and start the game
+exactly the same way:
 
 | launcher | what it does |
 |---|---|
@@ -88,18 +104,21 @@ Double-click **`PLAY.bat`**. The logos and first load take about a minute.
 | `PLAY_DUMP_TEXTURES.bat` | saves every texture the game draws, for texture packs (see below) |
 | `PLAY_MODDED.bat` | runs your imported models (see *model import/export* below) |
 
-**Custom frame rate.** `PLAY_CHOOSE_FPS.bat` → *6* → type a number, e.g. 45, 72, 120 or 144. The game
+**Custom frame rate.** In the launcher pick *Custom...* (or `PLAY_CHOOSE_FPS.bat` → *6*) and type a
+number, e.g. 45, 72, 120 or 144. The game
 runs at real speed at any of them. If your monitor's refresh rate is a whole multiple of the number
 (72 or 144 on a 144 Hz screen, 40 or 120 on 120 Hz), every frame is shown for the same number of
 refreshes and motion is perfectly even. Otherwise vsync is turned off, which looks fine on a
-G-Sync / FreeSync screen but can tear on others. The launcher says which one you got. You can also
+G-Sync / FreeSync screen but can tear on others. Both launchers say which one you got. You can also
 `set DES_FPS=<number>` before running `PLAY.bat`.
 
-**Higher resolution.** `set DES_RES_SCALE=2` (up to 4) before running a launcher renders the game at
+**Higher resolution.** *Resolution* in the launcher, or `set DES_RES_SCALE=2` (up to 4) before running
+a .bat, renders the game at
 2x its 1280x720 (2560x1440), much sharper, at no cost on the CPU side; a mid-range GPU handles 2x easily.
 The window and borderless fullscreen show the picture at the window's own size, at the game's 16:9
 with black bars on other screens (`set LD_SWAP_RESIZE=0` = the old stretched picture).
-`set LD_RES_SCALE_SHADOW=1` also renders the 2048x2048 shadow map at the higher resolution.
+*Sharper shadows too* (`set LD_RES_SCALE_SHADOW=1`) also renders the 2048x2048 shadow map at the
+higher resolution.
 
 **Controls.** An Xbox (XInput) controller works when plugged in (A = Cross, B = Circle, X = Square,
 Y = Triangle, LB/RB = L1/R1, LT/RT = L2/R2, Back = Select). A DualShock/DualSense needs Steam Input or
@@ -139,7 +158,8 @@ Every launcher records frame timing while you play (about 25 MB an hour, no visi
 1. **Press F8** in the game right after you see a stutter, hitch or slowdown. Each press puts a mark
    in the recording at that moment, so the exact frames can be found later. Press it as often as you
    like.
-2. **After you quit** (or right after a crash), double-click **`REPORT.bat`**. It packs the last
+2. **After you quit** (or right after a crash), press **Report a problem** in the launcher (or
+   double-click **`REPORT.bat`**). It packs the last
    session into one zip, shows it in Explorer and opens the GitHub *New issue* page.
 3. **Open an issue** with the *Stutter / slowdown* or *Crash / bug* template, **drag the zip into
    it**, and say where you were in the game and what you saw at each F8 press.
@@ -207,6 +227,7 @@ Exported models are the game's art -- share them only where that is allowed.
 
 ```
 SETUP.bat / BUILD.bat        one-time setup / rebuild after code changes
+DemonsSoulsLauncher.exe      the settings window (built by SETUP/BUILD from project/launcher/)
 PLAY*.bat                    launchers (environment switches documented inside PLAY.bat)
 REPORT.bat                   packs the last session into a zip for a GitHub issue
 setup/setup.py, build.py     the setup pipeline and the toolchain finder + build

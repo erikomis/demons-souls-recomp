@@ -344,6 +344,15 @@ foreach(u IN LISTS DS_PPU_O2_UNITS)
 endforeach()
 
 # ---------------------------------------------------------------------------
+# DemonsSoulsLauncher.exe (launcher/): the settings window, copied next to
+# PLAY.bat. Windows hosts only (also with DS_XWIN=1): Linux plays through
+# linux/play.sh.
+# ---------------------------------------------------------------------------
+if(WIN32 AND CMAKE_HOST_WIN32)
+    add_subdirectory(launcher)
+endif()
+
+# ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)

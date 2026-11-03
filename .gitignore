@@ -17,6 +17,9 @@
 !/models/README.txt
 /.venv/
 /setup/local_config.json
+/DemonsSoulsLauncher.exe
+/launcher.ini
+/update_pending.txt
 *.iso
 *.zip
 *.7z

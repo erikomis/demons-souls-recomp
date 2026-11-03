@@ -25,6 +25,8 @@ rem Where the PC cannot hold 60 (Boletarian Palace: ~58 since fix 36) the game s
 rem so the game still runs at real speed instead of in slow motion (fix 33; DES_ADAPTIVE_STEP=0 = fixed 1/60).
 rem Sound and music work (fix 29). Known gaps: intro movies are skipped.
 rem Uses the build SETUP.bat / BUILD.bat make (port\build_opt).
+rem DemonsSoulsLauncher.exe runs this file with the choices from its window as these variables;
+rem DES_LAUNCHER=1 (set by it) skips the pauses: the launcher reports errors itself.
 setlocal
 set "D=%~dp0"
 if "%D:~-1%"=="\" set "D=%D:~0,-1%"
@@ -128,7 +130,7 @@ echo Recording frame timing: press F8 in the game right after any stutter you se
 set "EXE=%D%\port\build_opt\DemonsSoulsRecomp.exe"
 if not exist "%EXE%" (
   echo DemonsSoulsRecomp.exe is not built yet. Run SETUP.bat first.
-  pause
+  if not defined DES_LAUNCHER pause
   exit /b 1
 )
 rem A killed run can leave truncated files in the HDD1 cache that the next run trusts.
@@ -144,7 +146,7 @@ if not "%CODE%"=="0" (
   echo.
   echo Demon's Souls exited with code %CODE%. The logs are in logs\last_run_*.txt.
   echo To report the crash, run REPORT.bat and attach the zip it makes to a GitHub issue.
-  pause
+  if not defined DES_LAUNCHER pause
 )
 exit /b %CODE%
 
@@ -176,5 +178,5 @@ exit /b 0
 :bad_fps
 echo DES_FPS=%DES_FPS% is not a frame rate this port can run: use 30, 50, 60, unlimited, or a whole
 echo number from 31 to 240.
-pause
+if not defined DES_LAUNCHER pause
 exit /b 1
