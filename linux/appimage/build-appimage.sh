@@ -7,13 +7,20 @@
 # keys, firmware, saves, shader caches, RPCS3, Proton or Microsoft's CRT/SDK: the player's PC gets those
 # itself (docs/LINUX.md). check_payload below refuses to package anything that looks like them.
 #
+# The git copy and the libraries it needs are GPL/LGPL: their Debian/Ubuntu source packages are
+# collected into DemonsSoulsRecomp-Setup-sources.tar, which must be published in the same place as the
+# AppImage (the workflow uploads both). Everything else in it is under permissive licenses.
+#
 # Run on Linux x86_64 (the GitHub Actions job: Ubuntu 22.04, .github/workflows/linux-appimage.yml).
-# Needs curl, tar with zstd, patchelf, git, python3. Downloads are cached in $CACHE.
-#   linux/appimage/build-appimage.sh [output.AppImage]
+# Needs curl, tar, zstd, patchelf, git, python3, and deb-src entries for apt-get source (the workflow
+# adds them). SKIP_SOURCES=1 skips the sources: for a local test build only, never to hand out.
+# Downloads are cached in $CACHE.
+#   linux/appimage/build-appimage.sh [output.AppImage [sources.tar]]
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${1:-$REPO/DemonsSoulsRecomp-Setup-x86_64.AppImage}
+SRC_OUT=${2:-$(dirname "$OUT")/DemonsSoulsRecomp-Setup-sources.tar}
 WORK=${WORK:-$REPO/build-appimage}
 CACHE=${CACHE:-$WORK/cache}
 APPDIR=$WORK/AppDir
@@ -22,6 +29,7 @@ PY_SERIES=python3.12
 APPIMAGETOOL_VERSION=1.9.1
 XWIN_VERSION=$(sed -n "s/^XWIN_VERSION = '\(.*\)'/\1/p" "$REPO/setup/build.py")
 SHARE=$APPDIR/usr/share/demons-souls-recomp
+ORIGINS=$WORK/origins.txt   # every system file copied into the AppImage, for collect_sources
 
 say() { printf '\n== %s\n' "$*"; }
 fetch() {   # fetch <url> <file in $CACHE>
@@ -44,7 +52,7 @@ bundle_libs() {   # bundle_libs <libdir> <elf>...
   for elf in "$@"; do
     ldd "$elf" 2>/dev/null | awk '/=> \// {print $1, $3}' | while read -r name path; do
       echo "$name" | grep -Eq "$SYSTEM_LIBS" && continue
-      [ -e "$dir/$name" ] || { cp -L "$path" "$dir/$name"; bundle_libs "$dir" "$dir/$name"; }
+      [ -e "$dir/$name" ] || { cp -L "$path" "$dir/$name"; echo "$path" >> "$ORIGINS"; bundle_libs "$dir" "$dir/$name"; }
     done
   done
 }
@@ -58,6 +66,7 @@ set_rpath() {   # set_rpath <rpath> <elf>...
 
 rm -rf "$APPDIR"
 mkdir -p "$CACHE" "$WORK"
+: > "$ORIGINS"
 
 say "Python ($PY_SERIES, python-appimage)"
 url=$(gh_asset niess/python-appimage "$PY_SERIES" 'cp312-manylinux2014_x86_64\.AppImage$')
@@ -72,6 +81,11 @@ rm -rf "$APPDIR/usr/share/applications" "$APPDIR/usr/share/metainfo" "$APPDIR/us
 PYHOME=$(ls -d "$APPDIR"/opt/python3.*)
 PY="$PYHOME/bin/$(basename "$PYHOME")"
 "$PY" -m pip install --no-cache-dir --disable-pip-version-check -q -r "$REPO/setup/requirements.txt" certifi
+# Python modules the kit never uses whose libraries are GPL/LGPL (readline and gdbm GPL-3, libcrypt
+# and libnsl LGPL): out, so the only copyleft parts left are git and its libraries, whose sources ship
+# next to the AppImage (collect_sources below). check_links makes sure nothing still needs them.
+rm -f "$PYHOME"/lib/python3.*/lib-dynload/{readline,_gdbm,_dbm,_crypt,nis}.cpython-*.so
+rm -f "$APPDIR"/usr/lib/{libreadline,libgdbm,libgdbm_compat,libcrypt,libnsl}.so*
 
 say "LLVM $LLVM_VERSION (clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt + clang's headers)"
 LLVM_TAR=LLVM-$LLVM_VERSION-Linux-X64.tar.zst
@@ -109,15 +123,64 @@ say "git (used only where the system has none)"
 G=$APPDIR/usr/lib/git
 mkdir -p "$G/bin" "$G/libexec/git-core" "$G/share" "$APPDIR/usr/share/licenses/git"
 cp -L "$(command -v git)" "$G/bin/git"
+command -v git >> "$ORIGINS"
 for h in git-remote-http git-remote-https; do
-  [ -e "/usr/lib/git-core/$h" ] && cp -L "/usr/lib/git-core/$h" "$G/libexec/git-core/$h"
+  if [ -e "/usr/lib/git-core/$h" ]; then
+    cp -L "/usr/lib/git-core/$h" "$G/libexec/git-core/$h"
+    echo "/usr/lib/git-core/$h" >> "$ORIGINS"
+  fi
 done
 cp -r /usr/share/git-core/templates "$G/share/templates" 2>/dev/null || mkdir -p "$G/share/templates"
 bundle_libs "$G/lib" "$G/bin/git" "$G"/libexec/git-core/*
 set_rpath '$ORIGIN/../lib' "$G/bin/git"
 set_rpath '$ORIGIN/../../lib' "$G"/libexec/git-core/*
 set_rpath '$ORIGIN' $(find "$G/lib" -name '*.so*' -type f)
-cp /usr/share/doc/git/copyright "$APPDIR/usr/share/licenses/git/" 2>/dev/null || true
+
+# The Debian package that installed a file. dpkg knows some files only by their /lib or /usr/lib path.
+owner() {
+  local f=$1 r o p
+  r=$(readlink -f "$f")
+  for p in "$f" "$r" "${r#/usr}" "/usr$r"; do
+    o=$(dpkg -S "$p" 2>/dev/null | head -n 1) || true
+    [ -n "$o" ] && { echo "${o%%:*}" | sed 's/,.*//'; return 0; }
+  done
+  echo "no Debian package owns $f" >&2
+  return 1
+}
+say "sources of the bundled GPL/LGPL parts (git and its libraries) -> $(basename "$SRC_OUT")"
+SRC=$WORK/sources
+rm -rf "$SRC" && mkdir -p "$SRC/packages"
+LIC=$APPDIR/usr/share/licenses
+sort -u "$ORIGINS" | while read -r f; do pkg=$(owner "$f") || exit 1; echo "$pkg $f"; done > "$WORK/owners.txt"
+{
+  echo "Source code of the programs and libraries DemonsSoulsRecomp-Setup-x86_64.AppImage copies from"
+  echo "Ubuntu 22.04 / the git-core PPA: git (GPL-2.0) and the libraries it needs (several LGPL; all are"
+  echo "included here, whatever their license)."
+  echo "The source packages are in DemonsSoulsRecomp-Setup-sources.tar, published next to the AppImage."
+  echo "The only change made to these binaries: their RPATH (patchelf, linux/appimage/build-appimage.sh)."
+  echo
+  printf '%-34s %-40s %s\n' "binary package" "source package=version" "bundled file"
+} > "$SRC/SOURCES.txt"
+while read -r pkg f; do
+  spec=$(dpkg-query -W -f='${source:Package}=${source:Version}' "$pkg")
+  printf '%-34s %-40s %s\n' "$pkg" "$spec" "$f" >> "$SRC/SOURCES.txt"
+  echo "$spec" >> "$WORK/specs.txt"
+  mkdir -p "$LIC/$pkg"
+  cp -L "/usr/share/doc/$pkg/copyright" "$LIC/$pkg/copyright" 2>/dev/null ||
+    { echo "no copyright file for $pkg"; exit 1; }
+done < "$WORK/owners.txt"
+if [ "${SKIP_SOURCES:-}" = 1 ]; then
+  echo "  SKIP_SOURCES=1: no source packages collected -- do not hand this AppImage out"
+else
+  sort -u "$WORK/specs.txt" | while read -r spec; do
+    (cd "$SRC/packages" && apt-get source --download-only -q "$spec" >/dev/null) ||
+      { echo "apt-get source $spec failed (deb-src entries missing?)"; exit 1; }
+  done
+  tar -cf "$SRC_OUT" -C "$SRC" .
+  echo "  $(sort -u "$WORK/specs.txt" | wc -l) source packages, $(du -h "$SRC_OUT" | cut -f1)"
+fi
+rm -f "$WORK/specs.txt"
+cp "$SRC/SOURCES.txt" "$LIC/SOURCES.txt"
 
 say "this repo's scripts and patches"
 mkdir -p "$SHARE"
@@ -140,7 +203,13 @@ Contents and their licenses:
                                  with cryptography, cmake, ninja, certifi (licenses in site-packages/*.dist-info)
   usr/lib/llvm                   LLVM $LLVM_VERSION release binaries (llvm/LICENSE.TXT, Apache-2.0 WITH LLVM-exception)
   usr/lib/xwin                   xwin $XWIN_VERSION (xwin/LICENSE-MIT, xwin/LICENSE-APACHE)
-  usr/lib/git                    git from Ubuntu (git/copyright, GPL-2.0) and the libraries it needs
+  usr/lib/git                    git (GPL-2.0) and the libraries it needs (several LGPL), from Ubuntu;
+                                 copyright files in <package>/copyright, SOURCES.txt lists each one, and
+                                 their source packages are in DemonsSoulsRecomp-Setup-sources.tar,
+                                 published next to this AppImage
+  usr/lib/*.so*                  libraries of that Python build (OpenSSL, libffi, ncurses, Tcl/Tk, Xft,
+                                 bzip2, xz, SQLite: permissive licenses). Its GPL/LGPL modules (readline,
+                                 gdbm, crypt, nis) are removed.
 Downloaded on the player's PC, never part of this file: RPCS3 (GPL-2.0), ps3recomp (its repository's
 license), the Microsoft CRT + Windows SDK via xwin (Microsoft's license, accepted by the player),
 umu-launcher / Proton (their licenses).
@@ -177,6 +246,15 @@ png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', W, W, 8, 6, 
 open(sys.argv[1], 'wb').write(png)
 EOF
 ln -sf demons-souls-recomp.png "$APPDIR/.DirIcon"
+
+say "checking nothing needs a removed library"
+find "$APPDIR" -type f \( -name '*.so*' -o -perm -u+x \) | while read -r f; do
+  file -b "$f" | grep -q ELF || continue
+  if patchelf --print-needed "$f" 2>/dev/null | grep -Eq '^(libreadline|libgdbm|libgdbm_compat|libcrypt|libnsl)\.'; then
+    echo "$f still needs a removed GPL/LGPL library"; exit 1
+  fi
+done
+echo "  ok"
 
 say "checking the payload holds no game data"
 check_payload() {

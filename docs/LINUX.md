@@ -111,6 +111,12 @@ Open a GitHub issue with that. Known unknowns, roughly in the order they may bit
   CMake and Ninja; LLVM's release clang-cl/lld-link/llvm-lib/llvm-rc; xwin; a fallback git; this repo's
   `setup/`, `tools/`, `patches/`, `project/`, `linux/`, `docs/`. It refuses to package anything that
   looks like game data. `.github/workflows/linux-appimage.yml` builds and tests it.
+- Licenses: everything in the AppImage is under permissive licenses except the fallback git and the
+  libraries it needs (GPL-2.0 / LGPL), copied from Ubuntu. Their Ubuntu source packages are published
+  with every build as `DemonsSoulsRecomp-Setup-sources.tar` (the workflow's second artifact);
+  `usr/share/licenses/SOURCES.txt` inside the AppImage lists them. Python's GPL/LGPL modules (readline,
+  gdbm, crypt, nis), which the kit never uses, are removed. Whoever re-hosts the AppImage has to offer
+  that sources file alongside it.
 - `linux/appimage/AppRun` copies the kit's scripts into the data folder and runs `setup/setup.py` there,
   then `linux/play.sh`. `selftest` checks the bundled tools (`linux/selftest.py`).
 - `setup/build.py` cross-compiles when not on Windows (or with `DS_XWIN=1` on Windows): toolchain file

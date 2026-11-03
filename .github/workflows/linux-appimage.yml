@@ -25,8 +25,27 @@ jobs:
     runs-on: ubuntu-22.04   # oldest glibc still supported here = widest range of distros it runs on
     steps:
       - uses: actions/checkout@v4
+      # The AppImage's git and the libraries it needs are GPL/LGPL: build-appimage.sh fetches their
+      # source packages (apt-get source), published below next to the AppImage
+      - name: Enable Ubuntu and PPA source packages
+        run: |
+          sudo python3 - <<'EOF'
+          import glob, re
+          ours = re.compile(r'ubuntu\.com|launchpadcontent\.net|launchpad\.net')
+          lines = set()
+          for f in ['/etc/apt/sources.list'] + glob.glob('/etc/apt/sources.list.d/*.list'):
+              for l in open(f):
+                  if l.startswith('deb ') and ours.search(l):
+                      lines.add('deb-src ' + l[4:].strip())
+          for f in glob.glob('/etc/apt/sources.list.d/*.sources'):
+              s = open(f).read()
+              if ours.search(s) and not f.endswith('-ds-src.sources'):
+                  open(f[:-len('.sources')] + '-ds-src.sources', 'w').write(
+                      re.sub(r'(?m)^Types:.*$', 'Types: deb-src', s))
+          open('/etc/apt/sources.list.d/ds-deb-src.list', 'w').write(''.join(l + '\n' for l in sorted(lines)))
+          EOF
       - name: Tools for packaging
-        run: sudo apt-get update -q && sudo apt-get install -yq patchelf zstd file git
+        run: sudo apt-get update -q && sudo apt-get install -yq patchelf zstd file git dpkg-dev
       - uses: actions/cache@v4
         with:
           path: build-appimage/cache
@@ -35,7 +54,9 @@ jobs:
       - name: Build the AppImage
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: bash linux/appimage/build-appimage.sh "$PWD/DemonsSoulsRecomp-Setup-x86_64.AppImage"
+        run: >-
+          bash linux/appimage/build-appimage.sh "$PWD/DemonsSoulsRecomp-Setup-x86_64.AppImage"
+          "$PWD/DemonsSoulsRecomp-Setup-sources.tar"
       - name: Self-test on the runner
         run: APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest
       # No Python, no git, no compiler: what a fresh Steam Deck or a minimal distro looks like
@@ -52,6 +73,13 @@ jobs:
           name: DemonsSoulsRecomp-Setup-x86_64.AppImage
           path: DemonsSoulsRecomp-Setup-x86_64.AppImage
           if-no-files-found: error
+      # Same place, same lifetime as the AppImage: the source code of its GPL/LGPL parts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DemonsSoulsRecomp-Setup-sources
+          path: DemonsSoulsRecomp-Setup-sources.tar
+          if-no-files-found: error
+          compression-level: 0
 
   cross-build-test:
     if: github.event_name == 'workflow_dispatch' && inputs.cross_build_test
