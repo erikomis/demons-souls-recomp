@@ -139,16 +139,16 @@ rem BUILD.bat re-applies the patches that changed and recompiles. Until then thi
 rem exe with the NEW settings -- e.g. movies on with an exe that cannot play them stays on a black
 rem screen (GitHub #4). A successful full build leaves a copy of the patches it was made from in
 rem port\build_opt\built (setup/build.py); when the folder's patches differ from those (or a build from
-rem before 2026-11-03 left none, or a rebuild failed or was stopped) the game was not rebuilt.
+rem before 2026-11-03 left none, or a rebuild failed or was stopped) the game was not rebuilt: build it
+rem now, then play. Only then -- an up-to-date folder starts straight away.
 rem (gotos, not ( ) blocks: a ")" in the folder's path would end a block.)
 call :stale
 if not defined STALE goto play
 if defined DES_LAUNCHER goto stale_launcher
 echo.
-echo This folder was updated, but the game was not rebuilt yet. The old build may not work with
-echo the new files, for example a black screen at the title.
-choice /c YN /m "Rebuild now with BUILD.bat (a few minutes)"
-if errorlevel 2 goto play
+echo This folder was updated: rebuilding the game first with BUILD.bat (a few minutes; only what
+echo changed is recompiled). The old build may not work with the new files.
+echo.
 call "%D%\BUILD.bat"
 if errorlevel 1 goto build_failed
 goto play

@@ -1790,15 +1790,15 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
     - PLAY.bat now checks for that. A successful full build (setup/build.py finish, not "BUILD.bat <target>")
       leaves copies of the patches it was made from in port/build_opt/built/; PLAY.bat's :stale compares them with
       patches/. Different or missing (a build from before this, or a rebuild that failed or was stopped) = not
-      rebuilt: run directly it asks and runs BUILD.bat; from the launcher (no window) it runs BUILD.bat in a
-      window of its own and WAITS (start /wait: the launcher keeps Play greyed out meanwhile), then starts the
+      rebuilt: run directly it runs BUILD.bat first (no question; an up-to-date folder starts at once); from the
+      launcher (no window) it runs BUILD.bat in a window of its own and WAITS (start /wait: the launcher keeps Play greyed out meanwhile), then starts the
       game if the build is now current, else exits 1. PS3_REQUIRE_AVX2 is decided again after it (a rebuild may
       switch to the plain build). gotos, not ( ) blocks: a ")" in the folder's path would end a block. Not the
       copies patch_sync keeps (deps/ps3recomp/.ds_patched.patch, port/.lifted.patch): those are written when a
       patch is applied, before the compile, so a failed rebuild would have looked current (review finding).
     - Tested in a stand-in folder "t (x86) dir" (fake exe, a fake BUILD.bat doing what build.py does): current ->
-      plays; built from old patches, N -> plays; Y -> builds, plays, the next run is current; no record, Y ->
-      builds; build fails -> no game, still stale next time; launcher + stale -> build window, then the game;
+      plays; built from old patches -> builds, plays, the next run is current; no record -> builds; build fails
+      -> no game, tries again next time; launcher + stale -> build window, then the game;
       launcher + failing build -> no game, exit 1. (PLAY.bat as a whole does not survive a "&" in the folder's
       path -- it was already so; the README asks for a plain path.)
     - Review (2 lenses + adversarial verify): 5 confirmed, all fixed -- the release job's out/ folder never
@@ -1815,8 +1815,8 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       (ppu_recomp_011.cpp), so a report shows the setting.
     - Releases: GitHub Releases (first v2026.11.03). .github/workflows/release.yml, on a published release or by
       hand for a tag: builds DemonsSoulsLauncher.exe on windows-2022 with the static C runtime (dumpbin: only
-      system DLLs, or the job fails) and attaches it plus DemonsSoulsRecomp-<tag>.zip (git archive of the tag +
-      the launcher; game-file extensions refused). The same build here imports COMCTL32 / gdiplus / SHELL32 /
+      system DLLs, or the job fails) and attaches DemonsSoulsRecomp-<tag>.zip (git archive of the tag + the
+      launcher at its top level; game-file extensions refused). The same build here imports COMCTL32 / gdiplus / SHELL32 /
       USER32 / GDI32 / KERNEL32 only and holds no paths from the building PC.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own

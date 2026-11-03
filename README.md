@@ -83,8 +83,8 @@ replacing files; `game/`, `port/`, `deps/` and your saves are not in the ZIP, so
 run **`BUILD.bat`** (with a ZIP copy, *Check for updates* in the launcher just rebuilds). It re-applies
 the patches that changed since your last setup and recompiles only the files they touch. If it
 says so, run `SETUP.bat` instead: that also works, keeps the game files and skips what is done.
-If you forget, Play notices that the folder was updated but not rebuilt and runs BUILD.bat (PLAY.bat
-asks first); an old build with new files can stay on a black screen.
+If you forget, Play notices that the folder was updated but not rebuilt and runs BUILD.bat first
+(an old build with new files can stay on a black screen).
 Setups made before 2026-11-03 could not take updates (the patches were applied once and never
 again); the first `BUILD.bat` or `SETUP.bat` with this version brings them up to date.
 

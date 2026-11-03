@@ -1,5 +1,5 @@
-# Release downloads: the tools ZIP with DemonsSoulsLauncher.exe already in it, plus the launcher on its own.
-# Neither holds game code: the game is still built on each player's PC from their own disc (SETUP.bat).
+# Release download: the tools ZIP with DemonsSoulsLauncher.exe already in it.
+# It holds no game code: the game is still built on each player's PC from their own disc (SETUP.bat).
 # The launcher is this repo's own program (project/launcher), built here so the exe carries no paths or
 # names from anyone's PC. Runs when a release is published, or by hand for an existing tag.
 name: Release downloads
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build the downloads for (they replace the release's current ones)
+        description: Release tag to build the download for (it replaces the release's current ZIP)
         required: true
 
 permissions:
@@ -71,5 +71,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload $env:TAG "DemonsSoulsRecomp-$env:TAG.zip" out/DemonsSoulsLauncher.exe --clobber
+          gh release upload $env:TAG "DemonsSoulsRecomp-$env:TAG.zip" --clobber
           if ($LASTEXITCODE) { exit 1 }
