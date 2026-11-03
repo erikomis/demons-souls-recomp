@@ -1427,6 +1427,50 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       behaviour). An inherited PS3_NO_SAIL is cleared.
     - Repro: PS3_SAIL_LOG=1, no PS3_NO_SAIL; past the auto-save notice the attract movie starts ~44 s in;
       ENTER skips it to the title. Audio check: AUDIO_WAV capture vs the movie's own LPCM track.
+72. **Boletaria choppy on a Ryzen 7 5800X: the game's frame skip locked in (2026-11-02, recordings from a
+    5800X + RTX 3070, 60 Hz):**
+    - Symptom: tutorial and Nexus smooth, Boletarian Palace "super choppy" at 60 fps; unlimited better but uneven.
+      In the Palace about 30 real pictures a second: a full frame, then 1-5 ms later a frame without its 3D
+      scene (0-250 draws), over and over; one stretch in the unlimited log lasted 31 s. GPU waits tiny, so
+      not a renderer API question (Vulkan would not help); the 5800X is ~1.4-1.6x slower per thread on the
+      serial game -> HighGraphics -> SPU command dispatcher chain, which put Palace frames just over 18 ms.
+    - The skip (found with a timer-caller count, then a log of HighGraphics' frame controller): func_000CBB70
+      takes the time since the previous flip in guest timebase ticks as a percentage of 1/30 s (tb freq / 30 by
+      a mulhdu with 0x8888888888888889). Over 109% it sets byte +0x24 of the frame controller (vtable 0x01855328,
+      object at [[HighGraphics+4]+0x34]); while set it keeps skipping as long as two frames take over 210%.
+      HighGraphics (func_00D1F188) asks vtable +0x2C (func_000CB7E8: returns 0 when +0x24 and +0x35 are set)
+      at 0x00D1F59C and on 0 jumps past the scene draw (func_00D21528 at 0x00D1F694).
+    - Why it locked in: PS3_CLOCK_SCALE=200 (fix 28) makes guest time run 2x, so 109% tripped at 18.3 ms of
+      REAL time. On PS3 a scene-less frame saved GPU/SPU time; in the port it costs a whole step slot, so the
+      next full frame's interval spans two slots (26-34 ms) and is late again: P(late | previous late) = 0.95.
+      The adaptive step (fix 33) already keeps game speed right down to 30 fps, so the skip only made pairs.
+    - Fix (PORT PATCH in ppu_recomp_015.cpp, des_skip_limit): both limits are scaled by ps3_clock_scale(), so
+      the skip fires at the original 36 ms of real time in every mode (30 fps unchanged: clock 100).
+      DES_FRAME_SKIP=0 never skips, =1 the lifted limits; "[des] frame skip: ..." says which.
+    - DES_STALL_MS=<n> (default 100, 0 = off; adaptive step in ppu_recomp_011.cpp): step intervals longer than
+      that (shader compile, OS hiccup) stay out of the 24-step average, which now keeps intervals, not stamps.
+      Before, a 770 ms stall in a recorded tutorial run was paid back at 3.1x speed for 0.3 s (step stuck at
+      1/30); now the game freezes and resumes, as on PS3.
+    - cellPad.c pad_now_ms: QPC instead of GetTickCount64 (~15.6 ms ticks), so the 4 ms poll gate really is
+      250 Hz. Above 60 fps ~40% of steps got no new pad report (a recorded unlimited log: 62.6 polls/s at 102
+      steps/s). Sandbox at 100 steps/s: 99.7 polls/s, 0 steps without one.
+    - perf_report.py catch-up count: light frame (< 40% of the previous frame's draws, previous >= 400) whose
+      ready time (present minus pacing hold) is < 20 ms after the previous frame; stretch = a catch-up every
+      2nd frame, timed from the log. The old count (whole-log median draws, 17 ms gap) also took menus and
+      loading frames: three recorded runs 8625 -> 966, 2670 -> 919, 2233 (agrees with hand counts).
+    - A/B (a save in the Palace torch hall, 60 fps mode, window 115-150 s of the present log;
+      "full" = frames with >= 300 draws), pinned to 4 cores (DES_AFFINITY=FF0000) to
+      stand in for the 5800X:  lifted skip 38.0 full frames/s, 58.7 presents/s, full-frame gap median 29.6 ms,
+      sd 7.3, 55% over 25 ms  ->  new 51.0 full/s, 51.0 presents/s, median 19.3, sd 2.1, 2% over 25 ms; game
+      time 0.99 both. Unpinned (7950X3D): 48.5 -> 53.1 full/s, gaps over 25 ms 20% -> 3%. LD_PRESENT_PACE 0.85
+      vs 0 with the new limits: no difference (51.0 / 50.6 full/s), so the launchers keep it. Unlimited
+      (480 Hz) + DES_HITCH_AT=118:600,130:400: 49 full/s, 0 catch-ups, step max 20.3 ms after the stalls
+      (no 1/30 fast-forward), game time 0.96 for that window = the 1 s of stalls not paid back. Frames normal.
+    - Not done: making DES_MAX_FPS a real frame cap (a refresh-rate cap would turn unlimited back into the
+      60 fps mode); the dispatcher's per-command cost and a core plan for 8-core CPUs (next, if a 5800X still
+      drops below 60 in the Palace).
+    - Debug used (removed again): DES_TB_CALLERS (callers of the timer vtable 0x018796D0 +4/+8 per thread:
+      HighGraphics reads it ~20 times a frame, profiling scopes) and DES_SKIP_LOG at 0x00D1F564.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

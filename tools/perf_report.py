@@ -164,21 +164,24 @@ def main():
     # its 3D scene (HUD / post only, ~150 draws instead of ~800) and flips it at once. Then two
     # presents land a few ms apart -- a full picture and a near-copy -- and nothing for ~38 ms, and
     # it can keep alternating like that for seconds: judder at ~25 real pictures a second. Counted
-    # by draws when the log has them, else by render CPU (light frame right after a heavy one).
-    dr = sorted(r[10] for r in pres if r[10] > 0)
-    dr_med = dr[len(dr) // 2] if dr else 0
+    # by draws when the log has them, else by render CPU (light frame right after a heavy one). Both
+    # are relative to the frame just before (fix 72: the old whole-log median and 17 ms gap also
+    # counted every menu and loading frame at 60 fps and above, ~3x too many).
     def catchup(prev, r):
-        if r[0] - prev[0] >= 17000: return False
-        if r[10] >= 0 and dr_med > 100: return r[10] < 0.4 * dr_med
+        if r[0] - max(r[2], 0) - prev[0] >= 20000: return False   # ready time: before any pacing hold
+        if r[10] >= 0 and prev[10] >= 0: return prev[10] >= 400 and r[10] < 0.4 * prev[10]
         return 0 <= r[9] < 3000 and prev[9] > 6000
-    cu_t = [r[0] for x, r in zip(pres, pres[1:]) if catchup(x, r)]
-    if cu_t:
-        runs, best, last = 0, 0, None
-        for t in cu_t:   # alternating stretches: catch-up frames ~40 ms apart
-            runs = runs + 1 if last is not None and t - last < 60000 else 1
-            best = max(best, runs); last = t
+    cu_i = [i + 1 for i, (x, r) in enumerate(zip(pres, pres[1:])) if catchup(x, r)]
+    cu_t = [pres[i][0] for i in cu_i]
+    if cu_i:
+        runs, best, best_s, start, last = 0, 0, 0.0, 0, None
+        for i in cu_i:   # alternating stretches: a catch-up every 2nd frame
+            if last is not None and i - last <= 2: runs += 1
+            else: runs, start = 1, pres[i][0]
+            if runs > best: best, best_s = runs, (pres[i][0] - start) / 1e6
+            last = i
         print('game catch-up frames (3D scene skipped, shown right after a late frame): %d (%.1f per minute); '
-              'longest alternating stretch %d in a row (%.1f s)' % (len(cu_t), len(cu_t) / (span / 60), best, best * 0.04))
+              'longest alternating stretch %d in a row (%.1f s)' % (len(cu_t), len(cu_t) / (span / 60), best, best_s))
 
     # Index notes by time for the per-hitch breakdown.
     ev = sorted((n for n in notes if n[1] in ('pso', 'read', 'psof', 'psow')), key=lambda n: n[0])

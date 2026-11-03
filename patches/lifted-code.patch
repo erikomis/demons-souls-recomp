@@ -196,8 +196,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
---- a/recompiled/ppu_recomp_011.cpp	2026-11-01 01:09:34.563847300 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-11-01 10:25:12.201502200 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-11-02 18:26:54.092515200 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-02 18:26:54.108621100 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -213,7 +213,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,273 @@
+@@ -38897,8 +38899,280 @@
          return;
  }
  
@@ -462,17 +462,24 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +     * in slow motion (Boletarian Palace: ~40 steps/s = 0.66 game seconds per second). Set the step
 +     * to the real time a step takes, averaged over the last 24 steps (the game's own catch-up
 +     * steps are in that average) and kept between 1/60 and 1/30 s -- the two steps the game was
-+     * made for. Game time then runs at real speed anywhere from 30 to 60 fps. NOTES fix 33. */
-+    { static int on = -1; static unsigned long long ring[24]; static unsigned n_ring, at; static float cur;
++     * made for. Game time then runs at real speed anywhere from 30 to 60 fps. NOTES fix 33.
++     * DES_STALL_MS=<n> (default 100, 0 = off): a step interval longer than that (shader compile,
++     * loading, OS hiccup) stays out of the average, so the game freezes and resumes as on PS3 instead
++     * of paying the lost time back at up to 3x speed over the next 24 steps. NOTES fix 72. */
++    { static int on = -1; static unsigned ring[24]; static unsigned n_ring, at; static float cur;
++      static unsigned long long last, sum; static unsigned long long stall_us;
 +      if (on < 0) { const char* e = getenv("DES_60FPS"); const char* a = getenv("DES_ADAPTIVE_STEP");
-+                    on = (e && *e == '1' && !(a && *a == '0')) ? 1 : 0; }
++                    on = (e && *e == '1' && !(a && *a == '0')) ? 1 : 0;
++                    const char* st = getenv("DES_STALL_MS"); stall_us = (unsigned long long)(st ? atoi(st) : 100) * 1000ull; }
 +      if (on) {
 +          const unsigned long long t = ps3_qpc_us();
-+          const unsigned long long oldest = n_ring == 24 ? ring[at] : (n_ring ? ring[0] : t);
-+          const unsigned m = n_ring;   /* stored steps = intervals between the oldest and now */
-+          ring[at] = t; at = (at + 1) % 24; if (n_ring < 24) n_ring++;
++          const unsigned long long iv = last ? t - last : 0; last = t;
++          if (iv && (!stall_us || iv <= stall_us)) {
++              if (n_ring == 24) sum -= ring[at]; else n_ring++;
++              ring[at] = (unsigned)iv; sum += iv; at = (at + 1) % 24; }
++          const unsigned m = n_ring;   /* intervals in the average */
 +          if (m >= 8) {
-+              float target = (float)((double)(t - oldest) / 1e6 / (double)m);
++              float target = (float)((double)sum / 1e6 / (double)m);
 +              /* DES_MAX_FPS=<n> (default 60): the shortest step is 1/n s, so an uncapped run
 +               * (PLAY_DEMONS_SOULS_UNLIMITED.bat) keeps real speed above 60 fps. NOTES fix 43. */
 +              static float floor_s = 0.0f;
@@ -542,8 +549,8 @@ diff -ruN a/recompiled/ppu_recomp_014.cpp b/recompiled/ppu_recomp_014.cpp
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
 diff -ruN a/recompiled/ppu_recomp_015.cpp b/recompiled/ppu_recomp_015.cpp
---- a/recompiled/ppu_recomp_015.cpp	2026-10-31 08:09:10.605819100 -0700
-+++ b/recompiled/ppu_recomp_015.cpp	2026-10-31 08:09:16.230130800 -0700
+--- a/recompiled/ppu_recomp_015.cpp	2026-11-02 18:26:54.271469700 -0700
++++ b/recompiled/ppu_recomp_015.cpp	2026-11-02 18:26:54.286437900 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -559,6 +566,54 @@ diff -ruN a/recompiled/ppu_recomp_015.cpp b/recompiled/ppu_recomp_015.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -2977,6 +2979,29 @@
+         { g_trampoline_fn = (void(*)(void*))func_000CBB70; return; }
+ }
+ 
++/* DES_FRAME_SKIP (PORT PATCH, not lifted code): func_000CBB70 is the game's frame skip. Each frame
++ * it takes the time since the previous flip in guest timebase ticks as a percentage of 1/30 s; over
++ * 109% it flags the next frame to be drawn without its 3D scene (HighGraphics asks vtable +0x2C at
++ * 0x00D1F59C and jumps past the scene draw), and it keeps skipping while two frames take over 210%.
++ * With PS3_CLOCK_SCALE=200 (60 fps modes) guest time runs 2x, so 109% tripped at 18 ms of real time
++ * and a skipped frame cost a whole step slot, so the next one was late too: on slower CPUs the
++ * Boletarian Palace locked into full + scene-less pairs (~30 real pictures a second). The adaptive
++ * step (fix 33) already keeps game speed right down to 30 fps, so the limits are scaled by the clock
++ * scale here: the skip fires at the original 36 ms of REAL time. DES_FRAME_SKIP=0 never skips,
++ * =1 is the lifted behaviour. See DemonsSouls/NOTES.md fix 72. */
++#include <stdlib.h>
++extern "C" uint32_t ps3_clock_scale(void);   /* PS3_CLOCK_SCALE, sys_timer.c */
++static uint64_t des_skip_limit(uint64_t pct)
++{
++    static int mode = -2;
++    if (mode == -2) { const char* e = getenv("DES_FRAME_SKIP"); mode = e ? atoi(e) : -1;
++                      fprintf(stderr, "[des] frame skip: %s\n", mode == 0 ? "off (DES_FRAME_SKIP=0)" :
++                              mode == 1 ? "lifted (DES_FRAME_SKIP=1)" : "real-time limits"); }
++    if (mode == 0) return ~0ull;
++    if (mode == 1) return pct;
++    return pct * ps3_clock_scale() / 100;
++}
++
+ void func_000CBB70(ppu_context* ctx) {
+     PPU_MM_SNAP
+         uint64_t _cs_26 = ctx->gpr[26];
+@@ -3047,7 +3072,7 @@
+         ctx->gpr[0] = ctx->gpr[0] - ctx->gpr[9];
+         ctx->gpr[0] = ctx->gpr[0] * (uint64_t)(int64_t)(0x64);
+         ctx->gpr[0] = (ctx->gpr[3] != 0) ? ctx->gpr[0] / ctx->gpr[3] : 0;
+-        { uint64_t a = (uint64_t)ctx->gpr[0]; uint64_t b = (uint64_t)0x6D; uint32_t cr_val = ((a < b) ? 8 : (a > b) ? 4 : 2) | ((ctx->xer >> 31) & 1u); ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }
++        { uint64_t a = (uint64_t)ctx->gpr[0]; uint64_t b = des_skip_limit(0x6D); uint32_t cr_val = ((a < b) ? 8 : (a > b) ? 4 : 2) | ((ctx->xer >> 31) & 1u); ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }
+         if (((ctx->cr >> 2) & 1)) goto loc_000CBD58;
+ loc_000CBC6C:
+         ctx->gpr[4] = vm_read32(ctx->gpr[29] + 0x18);
+@@ -3105,7 +3130,7 @@
+         ctx->gpr[0] = ctx->gpr[0] - ctx->gpr[9];
+         ctx->gpr[0] = ctx->gpr[0] * (uint64_t)(int64_t)(0x64);
+         ctx->gpr[0] = (ctx->gpr[3] != 0) ? ctx->gpr[0] / ctx->gpr[3] : 0;
+-        { uint64_t a = (uint64_t)ctx->gpr[0]; uint64_t b = (uint64_t)0xD2; uint32_t cr_val = ((a < b) ? 8 : (a > b) ? 4 : 2) | ((ctx->xer >> 31) & 1u); ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }
++        { uint64_t a = (uint64_t)ctx->gpr[0]; uint64_t b = des_skip_limit(0xD2); uint32_t cr_val = ((a < b) ? 8 : (a > b) ? 4 : 2) | ((ctx->xer >> 31) & 1u); ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }
+         if (((ctx->cr >> 2) & 1)) goto loc_000CBC6C;
+         ctx->gpr[0] = vm_read32(ctx->gpr[31] + 0x10);
+         ctx->gpr[26] = (int64_t)(int32_t)(0);
 diff -ruN a/recompiled/ppu_recomp_016.cpp b/recompiled/ppu_recomp_016.cpp
 --- a/recompiled/ppu_recomp_016.cpp	2026-10-31 08:09:10.647570800 -0700
 +++ b/recompiled/ppu_recomp_016.cpp	2026-10-31 08:09:16.278803100 -0700

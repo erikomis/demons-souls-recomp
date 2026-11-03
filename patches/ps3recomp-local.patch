@@ -5103,7 +5103,7 @@ index 0000000..d9edd4d
 +
 +#endif /* PS3RECOMP_VDEC_MF_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..7a9b219 100644
+index afdd93d..ec32db7 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -268,8 +268,12 @@ static u8 pad_xinput_stick_to_u8(short raw, short deadzone)
@@ -5358,7 +5358,22 @@ index afdd93d..7a9b219 100644
  
      hs->buttons   = btns;
      hs->connected = 1;
-@@ -706,17 +916,34 @@ static void pad_poll_backend(void)
+@@ -684,7 +894,13 @@ static void pad_shutdown_backend(void)
+ static unsigned long long pad_now_ms(void)
+ {
+ #ifdef _WIN32
+-    return (unsigned long long)GetTickCount64();
++    /* QPC, not GetTickCount64: that only moves every ~15.6 ms, so the 4 ms gate gave ~64 sweeps a
++     * second and above 60 fps every other game frame read no new report. */
++    static LARGE_INTEGER f;
++    LARGE_INTEGER c;
++    if (!f.QuadPart) QueryPerformanceFrequency(&f);
++    QueryPerformanceCounter(&c);
++    return (unsigned long long)(c.QuadPart / (f.QuadPart / 1000));
+ #else
+     struct timespec ts;
+     clock_gettime(CLOCK_MONOTONIC, &ts);
+@@ -706,17 +922,34 @@ static void pad_poll_backend(void)
      for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) s_data_fresh[_i] = 1;
  
  #if PAD_BACKEND_XINPUT
@@ -5395,7 +5410,7 @@ index afdd93d..7a9b219 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -949,7 +1176,13 @@ skip_inject: ;
+@@ -949,7 +1182,13 @@ skip_inject: ;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
                    static int said[256];
                    if (!said[i]) { said[i] = 1;
@@ -5410,7 +5425,7 @@ index afdd93d..7a9b219 100644
                }
            }
        } }
-@@ -1015,6 +1248,24 @@ skip_inject: ;
+@@ -1015,6 +1254,24 @@ skip_inject: ;
        if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
