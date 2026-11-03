@@ -161,10 +161,27 @@ rm -rf "$D/hdd1/cache"
 for f in out err; do
   [ -f "$D/logs/last_run_$f.txt" ] && mv -f "$D/logs/last_run_$f.txt" "$D/logs/last_run_${f}_prev.txt"
 done
-echo "Starting Demon's Souls through $RUNNER (the first start sets up the Wine prefix: a minute or two;"
-echo "then the logos and loading take about a minute)..."
-run_win "$EXE" "$(winpath "$D/$DES_GAME/PS3_GAME/USRDIR/EBOOT.elf")" \
-  > "$D/logs/last_run_out.txt" 2> "$D/logs/last_run_err.txt"
+echo "Starting Demon's Souls through $RUNNER (the logos and loading take about a minute)..."
+EBOOT="$D/$DES_GAME/PS3_GAME/USRDIR/EBOOT.elf"
+OUT="$D/logs/last_run_out.txt" ERR="$D/logs/last_run_err.txt"
+# Under Proton the game gets a console window of its own, and its log (hundreds of thousands of lines
+# a session) goes there instead of to the files: unreadable, and slow to draw. So a batch file starts
+# it and redirects its output on the Windows side, as PLAY.bat does; Proton's own output goes to
+# logs/last_run_proton.txt. DS_RUN_DIRECT=1 starts the exe directly instead (log in that window).
+# Batch files read paths in the OEM code page, so a non-ASCII folder also starts it directly.
+batq() { printf '"%s"' "$(winpath "$1" | sed 's/%/%%/g')"; }   # in a .bat, "..." is literal except %
+if [ "${DS_RUN_DIRECT:-}" != 1 ] && ! printf '%s' "$D" | LC_ALL=C grep -q '[^ -~]'; then
+  BAT="$D/logs/run_game.bat"
+  printf '@%s %s > %s 2> %s\r\n@exit /b %%ERRORLEVEL%%\r\n' \
+    "$(batq "$EXE")" "$(batq "$EBOOT")" "$(batq "$OUT")" "$(batq "$ERR")" > "$BAT"
+  CMD=cmd
+  [ -f "$PFX/drive_c/windows/system32/cmd.exe" ] && CMD="$PFX/drive_c/windows/system32/cmd.exe"
+  [ -f "$PFX/pfx/drive_c/windows/system32/cmd.exe" ] && CMD="$PFX/pfx/drive_c/windows/system32/cmd.exe"
+  echo "Game log: logs/last_run_err.txt (an empty console window opens with the game; leave it open)."
+  run_win "$CMD" /c "$(winpath "$BAT")" > "$D/logs/last_run_proton.txt" 2>&1
+else
+  run_win "$EXE" "$(winpath "$EBOOT")" > "$OUT" 2> "$ERR"
+fi
 CODE=$?
 if [ "$CODE" != 0 ]; then
   echo

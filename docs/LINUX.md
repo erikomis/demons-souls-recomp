@@ -61,8 +61,12 @@ on that shortcut: `play.sh` starts Proton itself.
 
 ## If something goes wrong
 
-- **Logs:** `~/DemonsSoulsRecomp/logs/last_run_out.txt` and `last_run_err.txt` (the game), and the
-  terminal output of the setup.
+- **Logs:** `~/DemonsSoulsRecomp/logs/last_run_out.txt` and `last_run_err.txt` (the game),
+  `last_run_proton.txt` (Proton's own messages), and the terminal output of the setup. The game's log
+  is written there through `logs/run_game.bat`; the console window that opens with the game stays
+  empty. `DS_RUN_DIRECT=1` starts the game without that batch file, with its log in the console window.
+- **Stuck on a blank window** for more than a few minutes: most likely the opening movies (see
+  Movies below). Close it and start with `DES_MOVIES=0`.
 - **Shaders fail** (black screen, missing geometry, `D3DCompile` errors in the log): Wine's built-in
   shader compiler may not handle the game's shaders. Install Microsoft's (winetricks downloads it from
   Microsoft): `./DemonsSoulsRecomp-Setup-x86_64.AppImage play --ms-d3dcompiler`, then start again.
