@@ -38,9 +38,10 @@ takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
 - **Visual Studio 2022** (Community or the free **Build Tools**) with *Desktop development with C++*,
   and **LLVM** (clang-cl) 17 or newer. If they are missing, setup offers to install them with winget.
 
-**Linux / Steam Deck (experimental, untested in play):** a setup + play kit (an AppImage) builds the
-same port from your own disc image on Linux and runs it through Proton. See
-[docs/LINUX.md](docs/LINUX.md).
+**Linux / Steam Deck (experimental):** a setup + play kit (an AppImage) builds the same port from your
+own disc image on Linux and runs it through Proton. See [docs/LINUX.md](docs/LINUX.md).
+**It has not been tested on a real Linux install or Steam Deck yet** (only its build steps, on Windows
+and on GitHub's servers), so expect problems, and please report how it goes.
 
 ## Build it (one time)
 

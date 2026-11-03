@@ -1,8 +1,9 @@
 # Linux and Steam Deck (experimental)
 
-> **Status: untested on a real Linux PC or Steam Deck so far.** The setup and build steps are tested
-> (see [What is tested](#what-is-tested)); whether the game then runs well through Proton is not known
-> yet. If you try it, please report what happens, good or bad: see [For testers](#for-testers).
+> **Untested on a Linux install.** Nobody has run this kit on a real Linux PC or Steam Deck yet: not
+> the setup, not the game. Its build steps were tested on Windows and its tools on GitHub's Linux
+> servers (see [What is tested](#what-is-tested)), but whether it sets up and plays on your machine is
+> not known. If you try it, please report what happens, good or bad: see [For testers](#for-testers).
 
 There is no ready-made Linux download of the game, and there cannot be one: it would contain code
 recompiled from the game. Instead there is a **setup + play kit** for Linux. Like `SETUP.bat` on
