@@ -13,7 +13,9 @@ It is not an emulator: the game's code runs as a normal x64 program.
 
 **The entire game seems playable.** It runs with sound and music at 60 fps (or 50 on a 100 Hz
 screen, 30, uncapped, or any frame rate you pick), with keyboard + mouse or an Xbox controller. The game's movies play (title screen, intro,
-story and endings; `set DES_MOVIES=0` skips them). There is no online play.
+story and endings; `set DES_MOVIES=0` skips them).
+
+**There is no online play yet.** Multiplayer will be added once the game is optimised.
 
 I'm currently playing through the whole game to find and fix any spots that still run slower
 than they should (stutters, frame drops in heavy scenes). Boletarian Palace, the heaviest area
@@ -256,7 +258,8 @@ Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs)
 
 ## Troubleshooting
 
-- **No online play.** Demon's Souls' servers closed in 2018; the game now goes straight into offline play
+- **No online play yet.** Demon's Souls' servers closed in 2018; multiplayer will be added once the game is
+  optimised. For now the game goes straight into offline play
   without the "Cannot connect (009)" and "Offline Mode" boxes (`set DES_AUTO_OFFLINE=0` shows them again).
 
 - **"RPCS3 did not write EBOOT.elf"**: close any open RPCS3 window and run SETUP.bat again, or decrypt
