@@ -1,0 +1,69 @@
+# The Linux / Steam Deck setup + play kit (docs/LINUX.md): a tools-only AppImage. It is built here from
+# this repo plus open-source tools, never from game data (linux/appimage/build-appimage.sh refuses any).
+name: Linux AppImage (tools only)
+
+on:
+  push:
+    paths: [linux/**, setup/**, tools/**, patches/**, project/**, .github/workflows/linux-appimage.yml]
+  pull_request:
+    paths: [linux/**, setup/**, tools/**, patches/**, project/**, .github/workflows/linux-appimage.yml]
+  workflow_dispatch:
+    inputs:
+      cross_build_test:
+        description: >-
+          Also download the Microsoft CRT + Windows SDK with xwin (accepting Microsoft's license,
+          https://go.microsoft.com/fwlink/?LinkId=2086102, for this CI run only; nothing of it is kept)
+          and cross-compile ps3recomp's runtime library with the AppImage's tools
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04   # oldest glibc still supported here = widest range of distros it runs on
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools for packaging
+        run: sudo apt-get update -q && sudo apt-get install -yq patchelf zstd file git
+      - uses: actions/cache@v4
+        with:
+          path: build-appimage/cache
+          key: appimage-downloads-${{ hashFiles('linux/appimage/build-appimage.sh', 'setup/build.py') }}
+          restore-keys: appimage-downloads-
+      - name: Build the AppImage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash linux/appimage/build-appimage.sh "$PWD/DemonsSoulsRecomp-Setup-x86_64.AppImage"
+      - name: Self-test on the runner
+        run: APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest
+      # No Python, no git, no compiler: what a fresh Steam Deck or a minimal distro looks like
+      - name: Self-test in bare Debian 12
+        run: >-
+          docker run --rm -v "$PWD:/w" -w /w debian:bookworm-slim
+          sh -c 'APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest'
+      - name: Self-test in bare Arch Linux (SteamOS is Arch-based)
+        run: >-
+          docker run --rm -v "$PWD:/w" -w /w archlinux:latest
+          sh -c 'APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DemonsSoulsRecomp-Setup-x86_64.AppImage
+          path: DemonsSoulsRecomp-Setup-x86_64.AppImage
+          if-no-files-found: error
+
+  cross-build-test:
+    if: github.event_name == 'workflow_dispatch' && inputs.cross_build_test
+    needs: appimage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DemonsSoulsRecomp-Setup-x86_64.AppImage
+      - name: Cross-compile ps3recomp's runtime with the AppImage (xwin CRT/SDK, clang-cl, lld-link)
+        env:
+          XWIN_ACCEPT_LICENSE: "true"
+        run: |
+          chmod +x DemonsSoulsRecomp-Setup-x86_64.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest --cross-runtime "$RUNNER_TEMP/ds"

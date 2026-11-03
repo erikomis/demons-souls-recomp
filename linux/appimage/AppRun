@@ -1,0 +1,83 @@
+#!/bin/sh
+# Demon's Souls PC port -- Linux / Steam Deck setup + play kit (AppImage entry point).
+# The AppImage holds tools only (Python, LLVM clang-cl/lld-link, xwin, git, this repo's scripts). Your
+# game files, the recompiled code and the build live in a data folder: ~/DemonsSoulsRecomp, or
+# DS_HOME=/some/folder. Each start copies this kit's scripts and patches there, so a newer AppImage
+# updates an existing setup (patches re-applied, only changed code rebuilt).
+#
+#   DemonsSoulsRecomp-Setup-x86_64.AppImage            set up what is missing, then play
+#   ... setup [image.iso | image.zip | folder] [--key HEX] [--rpcs3 path] [--jobs N]
+#   ... play [--ms-d3dcompiler]                          (linux/play.sh; DES_FPS etc. as in PLAY.bat)
+#   ... build [--jobs N]                                 rebuild after changing code
+#   ... selftest [--cross-runtime]                       check the bundled tools (docs/LINUX.md)
+#   ... shell                                            a shell with the kit's tools on PATH
+HERE=$(dirname "$(readlink -f "$0")")
+SELF=${APPIMAGE:-$(readlink -f "$0")}
+
+# Started from a file manager (Steam Deck desktop mode): no terminal for the questions. Open one.
+if [ ! -t 0 ] && [ -z "${DS_IN_TERMINAL:-}" ] && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }; then
+  export DS_IN_TERMINAL=1
+  for t in konsole gnome-terminal kgx xfce4-terminal mate-terminal lxterminal x-terminal-emulator xterm; do
+    command -v "$t" >/dev/null 2>&1 || continue
+    case "$t" in
+      gnome-terminal|kgx) exec "$t" -- "$SELF" "$@" ;;
+      *) exec "$t" -e "$SELF" "$@" ;;
+    esac
+  done
+fi
+pause() { if [ -n "${DS_IN_TERMINAL:-}" ]; then printf '\nPress Enter to close this window. '; read -r _; fi; }
+
+# The kit's tools by full path (PATH stays the system's, so RPCS3 and Proton see no kit Python)
+PYHOME=$(ls -d "$HERE"/opt/python3.* 2>/dev/null | head -n 1)
+export DS_PYTHON="$PYHOME/bin/$(basename "$PYHOME")"
+export DS_LLVM_DIR="$HERE/usr/lib/llvm/bin"
+export XWIN="${XWIN:-$HERE/usr/lib/xwin/xwin}"
+export PYTHONNOUSERSITE=1
+unset PYTHONHOME PYTHONPATH
+# git: the system's when there is one; else the bundled copy (Steam Deck: SteamOS may have none)
+if ! command -v git >/dev/null 2>&1; then
+  export PATH="$PATH:$HERE/usr/lib/git/bin" GIT_EXEC_PATH="$HERE/usr/lib/git/libexec/git-core"
+  export GIT_TEMPLATE_DIR="$HERE/usr/lib/git/share/templates"
+fi
+# TLS certificates for Python's downloads: the system's, else certifi's
+for c in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+  [ -f "$c" ] && { export SSL_CERT_FILE="${SSL_CERT_FILE:-$c}"; break; }
+done
+[ -n "${SSL_CERT_FILE:-}" ] || export SSL_CERT_FILE=$("$DS_PYTHON" -c 'import certifi; print(certifi.where())')
+
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  selftest) exec "$DS_PYTHON" -I "$HERE/usr/share/demons-souls-recomp/linux/selftest.py" "$@" ;;
+  shell)
+    export PATH="$PYHOME/bin:$DS_LLVM_DIR:$(dirname "$XWIN"):$PATH"
+    echo "Kit tools on PATH (python, clang-cl, lld-link, xwin). Type exit to leave."
+    exec "${SHELL:-/bin/sh}" ;;
+  ''|setup|play|build) ;;
+  -h|--help|help) sed -n '2,13p' "$HERE/AppRun"; exit 0 ;;
+  *) echo "Unknown command $cmd (setup, play, build, selftest, shell)"; exit 1 ;;
+esac
+
+DS_HOME=${DS_HOME:-$HOME/DemonsSoulsRecomp}
+mkdir -p "$DS_HOME" || { echo "Cannot create $DS_HOME (set DS_HOME to another folder)"; pause; exit 1; }
+# This kit's scripts and patches -> the data folder (your files there are left alone)
+cp -rf "$HERE/usr/share/demons-souls-recomp/." "$DS_HOME/" || { pause; exit 1; }
+chmod +x "$DS_HOME"/linux/*.sh 2>/dev/null
+cd "$DS_HOME" || exit 1
+export DS_SETUP_NAME="the AppImage" DS_PLAY_HINT="Start the AppImage again (or with: play) to play."
+echo "Demon's Souls PC port kit -- data folder: $DS_HOME"
+
+case "$cmd" in
+  build) "$DS_PYTHON" setup/build.py "$@"; rc=$?; pause; exit $rc ;;
+  play) exec sh linux/play.sh "$@" ;;
+esac
+"$DS_PYTHON" setup/setup.py "$@"
+rc=$?
+if [ $rc -ne 0 ] || [ "$cmd" = setup ]; then pause; exit $rc; fi
+printf '\nStart Demon\047s Souls now? [Y/n] '
+read -r a || a=n
+case "$a" in [nN]*) exit 0 ;; esac
+sh linux/play.sh
+rc=$?
+[ $rc -ne 0 ] && pause
+exit $rc

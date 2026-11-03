@@ -4,3 +4,8 @@
 *.bat   -text
 *.py    text eol=lf
 *.md    text eol=lf
+# Linux scripts (linux/): LF, or sh reads "\r" as part of every command
+*.sh    text eol=lf
+*.cmake text eol=lf
+*.yml   text eol=lf
+linux/appimage/AppRun text eol=lf
