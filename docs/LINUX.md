@@ -1,9 +1,10 @@
-# Linux and Steam Deck (experimental)
+# Linux and Steam Deck
 
-> **Untested on a Linux install.** Nobody has run this kit on a real Linux PC or Steam Deck yet: not
-> the setup, not the game. Its build steps were tested on Windows and its tools on GitHub's Linux
-> servers (see [What is tested](#what-is-tested)), but whether it sets up and plays on your machine is
-> not known. If you try it, please report what happens, good or bad: see [For testers](#for-testers).
+> **Works on Linux; Steam Deck not confirmed yet.** The kit has set up and played the game on Ubuntu
+> 24.04 (Intel i7-4770K, NVIDIA GTX 980, Proton): about 57-58 fps on average in 60 fps mode, but choppy,
+> with frequent one-frame hitches on that 4-core CPU. Linux performance work is under way. If you try
+> it, especially on a Steam Deck or an AMD / Intel GPU, please report what happens, good or bad: see
+> [For testers](#for-testers).
 
 There is no ready-made Linux download of the game, and there cannot be one: it would contain code
 recompiled from the game. Instead there is a **setup + play kit** for Linux. Like `SETUP.bat` on
@@ -110,7 +111,10 @@ Open a GitHub issue with that. Known unknowns, roughly in the order they may bit
   runtime library, renderer included, on Linux.
 - `linux/play.sh` sets the same variables as `PLAY.bat` for every frame-rate mode (checked with a stand-in
   for Wine).
-- Not tested: running the game on Linux, RPCS3's decryption on Linux, the file picker, umu-launcher.
+- On a real Linux PC: Ubuntu 24.04, Intel i7-4770K + NVIDIA GTX 980 under Proton. Setup and the game
+  run; the tutorial plays at about 57-58 fps on average in 60 fps mode, with frequent one-frame hitches
+  (CPU-bound). Its first setup found the line-ending bug fixed in 6c7dca3.
+- Not confirmed yet: a Steam Deck; AMD and Intel GPUs (Mesa drivers).
 
 ## How it works (for developers)
 
