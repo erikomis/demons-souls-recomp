@@ -154,7 +154,7 @@ LIC=$APPDIR/usr/share/licenses
 sort -u "$ORIGINS" | while read -r f; do pkg=$(owner "$f") || exit 1; echo "$pkg $f"; done > "$WORK/owners.txt"
 {
   echo "Source code of the programs and libraries DemonsSoulsRecomp-Setup-x86_64.AppImage copies from"
-  echo "Ubuntu 22.04 / the git-core PPA: git (GPL-2.0) and the libraries it needs (several LGPL; all are"
+  echo "Ubuntu 22.04: git (GPL-2.0) and the libraries it needs (several LGPL; all are"
   echo "included here, whatever their license)."
   echo "The source packages are in DemonsSoulsRecomp-Setup-sources.tar, published next to the AppImage."
   echo "The only change made to these binaries: their RPATH (patchelf, linux/appimage/build-appimage.sh)."
