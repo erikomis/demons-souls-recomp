@@ -1588,6 +1588,39 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       failed BUILD.bat after git pull left "you have the newest version" -> update_pending.txt, removed by the
       script after a good build (or ignored once the exe is newer), makes the button offer the build again;
       DS_XWIN=1 Windows builds skipped the launcher (CMAKE_CROSSCOMPILING) -> gate on CMAKE_HOST_WIN32.
+75. **Low-end CPUs: the heavy Palace spot profiled; usleep no longer spins; crash-proof stack sampler
+    (2026-11-03, a 5800X + RTX 3070 recording: Palace mostly 59.9 fps, two heavy spots ~52):**
+    - The recording: fix 72 works on the 5800X (catch-ups 10 in 4.4 min, 100-230 s 99.92% even); around marks 2/3
+      (area 2 block 0, -96,57,-61 / -88,59,-62) 743 draws/frame, render CPU 7-10 ms, HighGraphics 52-81% of a core,
+      frames ~19 ms. Repro: a Palace save, DES_TELEPORT_AT=135:-88.37,59.50,-62.08, two 0.35 s L presses: 773 draws, render 8.5 ms. HighGraphics at that view: 77% (5800X) vs 50% (7950X3D),
+      render thread 50% vs 45% -> HighGraphics (lifted game code) is what limits the 5800X there. Pinned to 2 cores
+      (DES_AFFINITY=0F0000) a 7950X3D runs the spot at ~43 fps with the CPU saturated (380% of 400) = low-end stand-in.
+    - Profile (DES_PERF_STACK_EVERY=2, symbolised self/inclusive counts): no single hot spot.
+      HighGraphics: half in sys_semaphore_wait; func_00D21528 (scene) -> func_000F88E0 (SPU job-queue writer: 16-byte
+      entries into a ring an SPU job reads, usleep(30) while full -- 2.5% here) ~18%; the VM_WRITE_COH lock + notify
+      + fence for stores to SPU-reserved lines ~7% of samples (~15% of its busy time); 80% of its lifted time is
+      already in the -O2 units. Render thread: busy ~50% at 773 draws, spread (fifo 42% incl., sink_end 31%, get_pso
+      5%, vertex fetch 5%, texture hashing 4%, the 8 KB constant memcpy per draw ~1%). synth2: 42% waiting, the
+      resampler loop spu_0010 func_00001090/1120 ~26%, x8 fa/fm slow lanes 8%.
+    - sys_timer_usleep (sys_timer.c): waits under 1 ms were busy-waited (QPC + SwitchToThread). MOStreamingThread
+      polls usleep(~800 us) 640x a second -> 52% of a core, all run long (PS3_POLLTOP: tid 18 lr 0x00D64EC4). Now
+      waits >= PS3_USLEEP_SPIN_US (default 200) sleep on a per-thread high-resolution waitable timer (Windows 10
+      1803+; one per thread, closed when the guest thread ends; the >= 1 ms path reuses it instead of creating one
+      per call); shorter waits still spin (HighGraphics' 30 us ring wait). PS3_USLEEP_SPIN_US=1000 = old timing
+      everywhere (plain timer). A/B at 2 cores (two rounds each): 44.8/42.0 old vs 42.5/44.8 new fps -- same; worst
+      frame 89/106 -> 54/55 ms, 99th pct 36-44 -> 30-37 ms. At 2 cores the spin had throttled itself (8%); on CPUs
+      with idle cores it frees ~half a core (and the hyperthread sibling it shared).
+    - Stack sampler (rsx_live_draw.c perf_sample): sampling an SPU group thread (synth2) crashed the game inside ntdll
+      (unwinding lifted SPU frames without unwind data through a garbage stack pointer), and unwinding while the
+      thread is suspended can block on an ntdll lock it holds. Now: suspend, read the stack range from the TEB,
+      copy up to 64 KB of the stack, resume, unwind the copy (Rsp/Rbp rebased, bounded to the copy, __try/__except).
+      Slot 0 is reserved for main (the old shuffle raced a thread registering at the same moment). SPU group threads
+      can be named in DES_PERF_STACK_THREADS (lv2_register.c; "spu__synth2_Group:0" -- spaces match '_'). Short-lived
+      "spu job" threads are not hooked (a slot per dispatch).
+    - Agent review (2 areas + verify): 6 real, all fixed (MinGW TLS, SPIN_US=1000 not fully old, handle leak per
+      thread, unwinder deadlock, TEB read race, slot-0 race); 2 refuted.
+    - Next (measuring on a 5800X): native synth2 resampler loop, cheaper VM_WRITE_COH,
+      per-draw renderer costs, -O2 for the remaining hot -O1 units.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

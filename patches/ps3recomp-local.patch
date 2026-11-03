@@ -7187,10 +7187,10 @@ index e55bcc1..5a0e68d 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 2579117..add2785 100644
+index 2579117..ceddc58 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
-@@ -1,10554 +1,14354 @@
+@@ -1,10554 +1,14397 @@
 -/*
 - * ps3recomp - Track B live NV4097 draw path (implementation)
 - *
@@ -20610,7 +20610,7 @@ index 2579117..add2785 100644
 + * is suspended (it may hold the CRT or log lock). */
 +static volatile LONG64 g_perf_step_t0;
 +static struct { HANDLE h; char tag[32]; } g_perf_thr[6];
-+static volatile LONG g_perf_n_thr;
++static volatile LONG g_perf_n_thr = 1;   /* slot 0 is the main thread's (ps3_perf_step_begin) */
 +static int g_perf_stacks = -1;
 +static volatile int g_perf_started;   /* main registered: later threads append */
 +static int perf_stacks_on(void)
@@ -20639,17 +20639,60 @@ index 2579117..add2785 100644
 +    for (const char* p = list; p && *p; ) {
 +        const char* c = strchr(p, ',');
 +        const size_t len = c ? (size_t)(c - p) : strlen(p);
-+        if (len == n && !strncmp(p, name, n)) { perf_add_thread(name); return; }
++        /* A space in the name matches '_' in the list, as the log writes it ("spu__synth2_Group:0"). */
++        size_t k = 0;
++        if (len == n)
++            for (; k < n; k++) if (!(p[k] == name[k] || (name[k] == ' ' && p[k] == '_'))) break;
++        if (len == n && k == n) { perf_add_thread(name); return; }
 +        p = c ? c + 1 : NULL;
 +    }
 +}
++/* The sampled thread's stack range, from its TEB (NT_TIB StackBase / StackLimit). */
++static int perf_stack_range(HANDLE h, ULONG64* lo, ULONG64* hi)
++{
++    typedef LONG (WINAPI *nqit_fn)(HANDLE, int, PVOID, ULONG, PULONG);
++    static nqit_fn nqit;
++    if (!nqit) nqit = (nqit_fn)(void*)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtQueryInformationThread");
++    struct { LONG exit_status; PVOID teb; ULONG_PTR pid, tid, affinity; LONG prio, base_prio; } tbi;
++    if (!nqit || nqit(h, 0 /* ThreadBasicInformation */, &tbi, sizeof tbi, NULL) < 0 || !tbi.teb) return 0;
++    const NT_TIB* tib = (const NT_TIB*)tbi.teb;
++    *hi = (ULONG64)tib->StackBase; *lo = (ULONG64)tib->StackLimit;
++    return *hi > *lo;
++}
++/* Walking a suspended thread's stack can meet frames without unwind data (lifted SPU code, a
++ * thread on its way out) and wander off: a read through a garbage stack pointer crashed the game
++ * inside ntdll (Demon's Souls NOTES fix 75). And the unwinder's own lookups take ntdll locks the
++ * suspended thread may hold. So: suspend, copy the top of its stack, resume, then unwind the copy
++ * -- the stack pointer has to stay inside the copy, and any fault just ends the sample. */
 +static int perf_sample(HANDLE h, ULONG64 base, ULONG64* pcs, int max, int* other)
 +{
++    enum { COPY = 64 * 1024 };
++    static ULONG64 buf[COPY / 8];   /* one sampler thread */
 +    int n = 0; *other = 0;
 +    CONTEXT c; memset(&c, 0, sizeof c); c.ContextFlags = CONTEXT_FULL;
++    ULONG64 lo = 0, hi = 0, rsp0 = 0, len = 0;
 +    if (SuspendThread(h) == (DWORD)-1) return 0;
++    int ok = 0;
 +    if (GetThreadContext(h, &c)) {
++        __try {
++            if (perf_stack_range(h, &lo, &hi) && c.Rsp >= lo && c.Rsp < hi) {
++                rsp0 = c.Rsp;
++                len = hi - rsp0 < COPY ? hi - rsp0 : COPY;
++                memcpy(buf, (const void*)rsp0, (size_t)len);
++                ok = 1;
++            }
++        } __except (EXCEPTION_EXECUTE_HANDLER) {
++            ok = 0;
++        }
++    }
++    ResumeThread(h);
++    if (!ok) return 0;
++    const ULONG64 b0 = (ULONG64)buf, b1 = b0 + len;
++    c.Rsp = b0;
++    if (c.Rbp >= rsp0 && c.Rbp < rsp0 + len) c.Rbp = b0 + (c.Rbp - rsp0);
++    __try {
 +        for (int depth = 0; depth < 64 && c.Rip && n < max; depth++) {
++            if (c.Rsp < b0 || c.Rsp + 8 > b1) break;
 +            ULONG64 img = 0;
 +            PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(c.Rip, &img, NULL);
 +            if (img == base) pcs[n++] = c.Rip - base;
@@ -20658,8 +20701,9 @@ index 2579117..add2785 100644
 +            PVOID hd; ULONG64 est;
 +            RtlVirtualUnwind(UNW_FLAG_NHANDLER, img, c.Rip, fn, &c, &hd, &est, NULL);
 +        }
++    } __except (EXCEPTION_EXECUTE_HANDLER) {
++        /* keep the frames found so far */
 +    }
-+    ResumeThread(h);
 +    return n;
 +}
 +static DWORD WINAPI perf_stack_sampler(LPVOID unused)
@@ -20798,14 +20842,13 @@ index 2579117..add2785 100644
 +    if (!perf_stacks_on()) return;
 +    if (!started) {
 +        started = 1;
-+        /* The main thread goes in slot 0: guest threads started earlier moved up one. */
-+        perf_add_thread("main");
-+        const LONG last = g_perf_n_thr - 1;
-+        if (last > 0) {
-+            HANDLE h = g_perf_thr[last].h; char tag[32]; memcpy(tag, g_perf_thr[last].tag, 32);
-+            for (LONG i = last; i > 0; i--) g_perf_thr[i] = g_perf_thr[i - 1];
-+            g_perf_thr[0].h = h; memcpy(g_perf_thr[0].tag, tag, 32);
-+        }
++        /* The main thread goes in slot 0, kept free for it (no shuffle racing a thread that
++         * registers at the same moment). */
++        { HANDLE h = NULL;
++          DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &h,
++                          THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0);
++          memcpy(g_perf_thr[0].tag, "main", 5);
++          g_perf_thr[0].h = h; }
 +        g_perf_started = 1;
 +        HANDLE t = CreateThread(NULL, 0, perf_stack_sampler, NULL, 0, NULL);
 +        if (t) { SetThreadPriority(t, THREAD_PRIORITY_TIME_CRITICAL); CloseHandle(t); }
@@ -35373,7 +35416,7 @@ index 3ce8d0d..f295043 100644
       * task's exit saw it ready-but-not-running and started it a second time
       * (Twisted Metal's level-load inflate tasks each ran twice, concurrently). */
 diff --git a/runtime/syscalls/lv2_register.c b/runtime/syscalls/lv2_register.c
-index 9626673..8a5f1d6 100644
+index 9626673..bb4c6d3 100644
 --- a/runtime/syscalls/lv2_register.c
 +++ b/runtime/syscalls/lv2_register.c
 @@ -339,6 +339,11 @@ typedef struct {
@@ -35388,7 +35431,19 @@ index 9626673..8a5f1d6 100644
  } spu_thread_t;
  
  typedef struct {
-@@ -1710,6 +1715,10 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
+@@ -717,7 +722,10 @@ static void* spu_exec_thread_proc(void* arg)
+ #endif
+     spu_thread_t* t = (spu_thread_t*)arg;
+     { const spu_group_t* g = spu_find_group(t->group_id);
+-      ps3_thread_name("spu %s:%u", g && g->name[0] ? g->name : "group", t->index); }
++      char nm[64];
++      snprintf(nm, sizeof nm, "spu %s:%u", g && g->name[0] ? g->name : "group", t->index);
++      ps3_thread_name("%s", nm);
++      { extern void ps3_perf_watch_thread(const char*); ps3_perf_watch_thread(nm); } }   /* DES_PERF_STACK_THREADS */
+     spu_lifted_thread_result r;
+     spu_lifted_thread_run(t->sctx, &r);
+     t->exit_status = r.exit_status;
+@@ -1710,6 +1718,10 @@ static int spu_deliver_user_event(spu_context* spu, uint32_t value)
              result = rc == 0 ? CELL_OK : CELL_EBUSY;
          }
      }
@@ -35399,7 +35454,7 @@ index 9626673..8a5f1d6 100644
      if (code < 64) spu_channel_write(&spu->ch_in_mbox, result);
      return 1;
  }
-@@ -2440,6 +2449,90 @@ static int64_t sys_spu_thread_stub(ppu_context* ctx)
+@@ -2440,6 +2452,90 @@ static int64_t sys_spu_thread_stub(ppu_context* ctx)
      return 0;
  }
  
@@ -35490,7 +35545,7 @@ index 9626673..8a5f1d6 100644
  
  
  /* sys_usbd_receive_event (540) -- a BLOCKING receive, not a poll.
-@@ -2587,8 +2680,8 @@ void lv2_register_all_syscalls(lv2_syscall_table* tbl)
+@@ -2587,8 +2683,8 @@ void lv2_register_all_syscalls(lv2_syscall_table* tbl)
      lv2_syscall_register(tbl, SYS_SPU_THREAD_SET_SPU_CFG,    sys_spu_thread_set_spu_cfg_handler);
      lv2_syscall_register(tbl, SYS_SPU_THREAD_GET_SPU_CFG,    sys_spu_thread_get_spu_cfg_handler);
      lv2_syscall_register(tbl, SYS_SPU_THREAD_WRITE_SPU_MB,  sys_spu_thread_write_spu_mb_handler);
@@ -35591,7 +35646,7 @@ index 14c6425..e557b7d 100644
                                 uint64_t source, uint64_t data1,
                                 uint64_t data2,  uint64_t data3);
 diff --git a/runtime/syscalls/sys_ppu_thread.c b/runtime/syscalls/sys_ppu_thread.c
-index 41d5721..efa4b3c 100644
+index 41d5721..0367e03 100644
 --- a/runtime/syscalls/sys_ppu_thread.c
 +++ b/runtime/syscalls/sys_ppu_thread.c
 @@ -180,6 +180,7 @@ static void* ppu_host_thread_proc(void* param)
@@ -35602,6 +35657,14 @@ index 41d5721..efa4b3c 100644
  
  #ifdef _WIN32
      /* Reserve stack for the STACK_OVERFLOW handler, same as main() does for the
+@@ -269,6 +270,7 @@ static void* ppu_host_thread_proc(void* param)
+ 
+     /* Signal anyone waiting for join */
+ #ifdef _WIN32
++    { extern void sys_timer_usleep_thread_exit(void); sys_timer_usleep_thread_exit(); }   /* its usleep timer */
+     SetEvent(info->finish_event);
+     return 0;
+ #else
 diff --git a/runtime/syscalls/sys_semaphore.c b/runtime/syscalls/sys_semaphore.c
 index 8b976c0..1a5e21f 100644
 --- a/runtime/syscalls/sys_semaphore.c
@@ -35665,7 +35728,7 @@ index 8b976c0..1a5e21f 100644
      { static int _n=0, st = -1; if (st < 0) st = getenv("SEMTID") ? 1 : 0;
        if (st && _n < 60000)
 diff --git a/runtime/syscalls/sys_timer.c b/runtime/syscalls/sys_timer.c
-index 3a02281..43ec42f 100644
+index 3a02281..2c00989 100644
 --- a/runtime/syscalls/sys_timer.c
 +++ b/runtime/syscalls/sys_timer.c
 @@ -64,6 +64,25 @@ int lv2_deadline_passed(int64_t deadline)
@@ -35702,7 +35765,78 @@ index 3a02281..43ec42f 100644
      uint64_t q = (uint64_t)s_qpc_freq.QuadPart;
      return (d / q) * PS3_TIMEBASE_FREQ + (d % q) * PS3_TIMEBASE_FREQ / q;
  #else
-@@ -363,6 +383,8 @@ int64_t sys_time_get_current_time(ppu_context* ctx)
+@@ -134,6 +154,50 @@ static void write_be64(uint32_t addr, uint64_t val)
+  *
+  * r3 = microseconds
+  * -----------------------------------------------------------------------*/
++#ifdef _WIN32
++/* Demon's Souls NOTES fix 75: sub-millisecond usleeps were busy-waited (below), and the streaming
++ * thread polls with ~0.8 ms sleeps 640 times a second -- half a core spent spinning, taken from the
++ * game's real threads on a 4-6 core CPU (and from a hyperthread sibling on any). A high-resolution
++ * waitable timer (Windows 10 1803+) sleeps that precisely, so waits of PS3_USLEEP_SPIN_US (default
++ * 200) and longer now sleep on one; shorter ones still spin. One timer per thread, created on first
++ * use (the >= 1 ms path created and closed one per call). PS3_USLEEP_SPIN_US=1000 = old behaviour. */
++#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
++#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
++#endif
++#if defined(_MSC_VER)
++#define USLEEP_TLS __declspec(thread)
++#else
++#define USLEEP_TLS __thread   /* MinGW GCC ignores __declspec(thread) */
++#endif
++static USLEEP_TLS HANDLE s_usleep_timer;
++static USLEEP_TLS int s_usleep_made, s_usleep_hr;
++static uint64_t usleep_spin_max(void)
++{
++    static long v = -1;
++    if (v < 0) { const char* e = getenv("PS3_USLEEP_SPIN_US"); v = e ? atol(e) : 200; if (v < 0) v = 0; }
++    return (uint64_t)v;
++}
++static HANDLE usleep_timer(int* high_res)
++{
++    if (!s_usleep_made) {
++        s_usleep_made = 1;
++        /* PS3_USLEEP_SPIN_US >= 1000: the old timing everywhere, a plain timer for >= 1 ms too. */
++        s_usleep_timer = usleep_spin_max() < 1000
++            ? CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS) : NULL;
++        s_usleep_hr = s_usleep_timer != NULL;
++        if (!s_usleep_timer) s_usleep_timer = CreateWaitableTimerW(NULL, TRUE, NULL);
++    }
++    *high_res = s_usleep_hr;
++    return s_usleep_timer;
++}
++/* A guest thread ending (sys_ppu_thread.c): close its timer. */
++void sys_timer_usleep_thread_exit(void)
++{
++    if (s_usleep_timer) { CloseHandle(s_usleep_timer); s_usleep_timer = NULL; }
++    s_usleep_made = 0;
++}
++#endif
++
+ int64_t sys_timer_usleep(ppu_context* ctx)
+ {
+     uint64_t usec = LV2_ARG_U64(ctx, 0);
+@@ -244,15 +308,15 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+         ppu_log_host_chain("usleep1ms"); } }
+ 
+ #ifdef _WIN32
+-    /* Use high-resolution sleep via waitable timer for better precision */
+-    if (usec >= 1000) {
+-        HANDLE timer = CreateWaitableTimerW(NULL, TRUE, NULL);
++    int high_res = 0;
++    HANDLE timer = usec ? usleep_timer(&high_res) : NULL;
++    /* A plain (not high-resolution) timer is only good from 1 ms: shorter waits keep spinning. */
++    if (usec >= 1000 || (high_res && usec >= usleep_spin_max() && usleep_spin_max() < 1000)) {
+         if (timer) {
+             LARGE_INTEGER due;
+             due.QuadPart = -((LONGLONG)usec * 10); /* 100ns units, negative = relative */
+             SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE);
+             WaitForSingleObject(timer, INFINITE);
+-            CloseHandle(timer);
+         } else {
+             Sleep((DWORD)(usec / 1000));
+         }
+@@ -363,6 +427,8 @@ int64_t sys_time_get_current_time(ppu_context* ctx)
      LARGE_INTEGER now;
      QueryPerformanceCounter(&now);
  
