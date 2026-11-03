@@ -154,8 +154,9 @@ if errorlevel 1 goto build_failed
 goto play
 :stale_launcher
 rem The launcher runs this file without a window: rebuild in a window of its own and wait for it (the
-rem launcher keeps Play greyed out meanwhile), then start the game if the build is now current.
-start "Demon's Souls - rebuilding after the update" /wait /d "%D%" cmd /c call "%D%\BUILD.bat" ^& pause
+rem launcher keeps Play greyed out meanwhile), then start the game if the build is now current. The
+rem window closes by itself when the build works and stays open (press a key) when it fails.
+start "Demon's Souls - rebuilding after the update" /wait /d "%D%" cmd /c call "%D%\BUILD.bat" ^|^| pause
 call :stale
 if not defined STALE goto play
 exit /b 1
