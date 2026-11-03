@@ -14,7 +14,7 @@ export   writes <folder>\\<name>\\<name>.gltf + .bin + textures\\*.png (default 
          the skeleton comes along (characters, armour), and every vertex keeps its bone weights.
 import   reads the .gltf/.glb you exported from Blender and writes a modded copy of the model file into
          <mod folder> (default game_mod, made as hard links to game\\ the first time -- no extra disk
-         space, game\\ is never changed). Play it with PLAY_MODDED.bat. Each Blender object goes into the
+         space, game\\ is never changed). Play it with "Game: My models" in the launcher. Each Blender object goes into the
          FLVER mesh its name starts with (m03... -> mesh 3; several objects may share one); a new object
          named after no mesh goes into a new mesh with the material its glTF material is named after.
          Meshes missing from the file are kept unless --delete-missing. Positions, normals, UVs (map 1
@@ -1492,14 +1492,12 @@ def main():
         if a.mod.lower() == 'game':
             raise SystemExit('import into a mod copy, not game\\ itself')
         import_model(a.gltf, a.model, a.mod, a.entry, a.delete_missing)
-        bat = next((b for b in ('PLAY_MODDED.bat', os.path.join('..', 'PLAY_DEMONS_SOULS_MODDED.bat'))
-                    if os.path.exists(os.path.join(BASE, b))), 'PLAY_MODDED.bat')
         if a.mod.lower() == 'game_mod':
-            print('done -- play it with %s' % os.path.basename(bat))
+            print('done -- play it with "Game: My models" in the launcher')
         elif a.mod.lower() == 'game_remaster':
-            print('done -- play it with the PC Remaster launcher')
+            print('done -- play it with "Game: PC Remaster mod" in the launcher')
         else:
-            print('done -- play it with DES_GAME=%s set before the launcher' % a.mod)
+            print('done -- play it with DES_GAME=%s in the launcher\'s Extra settings (or set before PLAY.bat)' % a.mod)
     elif a.cmd == 'list':
         list_model(a.model)
     elif a.cmd == 'selftest':

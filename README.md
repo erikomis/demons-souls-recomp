@@ -90,30 +90,32 @@ make the report. *Extra settings* takes any `NAME=value` switch from this README
 (e.g. `LD_PSO_ASYNC=0`). `DemonsSoulsLauncher.exe --play` starts the game straight away with the
 saved settings, for a desktop shortcut.
 
-The launcher runs `PLAY.bat` with your choices, so the .bat files below still work and start the game
-exactly the same way:
+The launcher runs `PLAY.bat` with your choices. `PLAY.bat` on its own starts the game at 60 fps (50 fps
+automatically on a ~100 Hz monitor, every frame shown exactly 2 refreshes), and the `set X=...` switches
+in this README work in front of it too. The separate `PLAY_30FPS.bat`, `PLAY_REMASTER.bat` etc. are gone:
+those are all launcher options now.
 
-| launcher | what it does |
+| launcher option | what it does |
 |---|---|
-| `PLAY.bat` | 60 fps (50 fps automatically on a ~100 Hz monitor, every frame shown exactly 2 refreshes) |
-| `PLAY_30FPS.bat` | the original 30 fps |
-| `PLAY_50FPS.bat` | 50 fps locked to a 100 Hz screen |
-| `PLAY_UNLIMITED.bat` | uncapped (up to 240 fps), no vsync, game speed stays correct |
-| `PLAY_CHOOSE_FPS.bat` | a menu of the above, plus **any frame rate you type in** (31–240) |
-| `PLAY_REMASTER.bat` | runs with the *PC Remaster* mod installed (see below) |
-| `PLAY_DUMP_TEXTURES.bat` | saves every texture the game draws, for texture packs (see below) |
-| `PLAY_MODDED.bat` | runs your imported models (see *model import/export* below) |
+| *Frame rate*: Auto / 30 / 50 / 60 / Unlimited / Custom... | Auto = 60, or 50 on a ~100 Hz screen; 30 = the original; Unlimited = up to 240 fps, no vsync, game speed stays correct; Custom = **any frame rate you type in** (31–240) |
+| *Game*: Normal / PC Remaster mod / My models | your game as on the disc, with the *PC Remaster* mod installed, or with your imported models (see below) |
+| *Dump textures* | saves every texture the game draws, for texture packs (see below) |
 
-**Custom frame rate.** In the launcher pick *Custom...* (or `PLAY_CHOOSE_FPS.bat` → *6*) and type a
+Without the launcher (Linux, or `PLAY.bat` by hand) the same choices are switches: `DES_FPS=30|50|60|unlimited|31-240`,
+`DES_GAME=game_remaster` (PC Remaster) or `DES_GAME=game_mod` (your models), `LD_TEX_DUMP=1` (dump textures).
+In the launcher, any other folder made by `tools\flver_tool.py import --mod <folder>` goes in *Extra settings*
+as `DES_GAME=<folder>`.
+
+**Custom frame rate.** In the launcher pick *Custom...* and type a
 number, e.g. 45, 72, 120 or 144. The game
 runs at real speed at any of them. If your monitor's refresh rate is a whole multiple of the number
 (72 or 144 on a 144 Hz screen, 40 or 120 on 120 Hz), every frame is shown for the same number of
 refreshes and motion is perfectly even. Otherwise vsync is turned off, which looks fine on a
-G-Sync / FreeSync screen but can tear on others. Both launchers say which one you got. You can also
+G-Sync / FreeSync screen but can tear on others. The launcher says which one you got. You can also
 `set DES_FPS=<number>` before running `PLAY.bat`.
 
 **Higher resolution.** *Resolution* in the launcher, or `set DES_RES_SCALE=2` (up to 4) before running
-a .bat, renders the game at
+`PLAY.bat`, renders the game at
 2x its 1280x720 (2560x1440), much sharper, at no cost on the CPU side; a mid-range GPU handles 2x easily.
 The window and borderless fullscreen show the picture at the window's own size, at the game's 16:9
 with black bars on other screens (`set LD_SWAP_RESIZE=0` = the old stretched picture).
@@ -156,7 +158,7 @@ writes logs to `logs/` (they grow by ~600 MB an hour; the previous run is kept a
 
 ## Reporting stutters and crashes
 
-Every launcher records frame timing while you play (about 25 MB an hour, no visible cost; the newest
+The game records frame timing while you play (*Record frame timing (F8)* in the launcher, on by default) (about 25 MB an hour, no visible cost; the newest
 10 sessions are kept in `perf\`). The window title shows `[RECORDING - F8 = stutter, N marked]`.
 
 1. **Press F8** in the game right after you see a stutter, hitch or slowdown. Each press puts a mark
@@ -178,7 +180,8 @@ What the zip contains (nothing else, and your Windows user name is removed from 
 | `log_tail.txt` | the last 400 lines of the game's log, from the same session (shows what it was doing if it crashed) |
 
 Curious yourself? `.venv\Scripts\python tools\perf_report.py` prints the same summary for your newest
-recording. To play without recording, `set DES_RECORD=0` before running a launcher.
+recording. To play without recording, untick *Record frame timing (F8)* in the launcher (or `set DES_RECORD=0`
+before running `PLAY.bat`).
 
 ## Optional: PC Remaster mod
 
@@ -190,18 +193,18 @@ The *Demon's Souls PC Remaster* mod by fromsoftserve (Nexus Mods, Demon's Souls 
 ```
 
 That builds `game_remaster/` as a hard-linked copy of `game/` (no extra disk space) with the mod's
-files swapped in. Your normal `game/` is not changed. Play with `PLAY_REMASTER.bat`.
+files swapped in. Your normal `game/` is not changed. Play it with *Game: PC Remaster mod* in the launcher.
 
 ## Optional: texture packs
 
 Textures can be replaced without unpacking any game files, at any resolution:
 
-1. Run `PLAY_DUMP_TEXTURES.bat` and play through the part you want to change. Every texture the game
+1. Tick *Dump textures* in the launcher and play through the part you want to change. Every texture the game
    draws is saved once to `textures\dump\` as `<KEY>_<width>x<height>_<format>.png`, exactly as it
    looks in game. The 16-character KEY comes from the texture's contents, so it is the same on every PC.
 2. Edit a PNG (or make a bigger one) and put it in `textures\replace\` with a name that starts with
    the same KEY, e.g. `0123456789ABCDEF_armour_4k.png`. Sub folders are fine.
-3. Start any launcher. Replacements load in the background; `.dds` files (DXT1/3/5, BC7, BC4 or 32-bit
+3. Play as usual (untick *Dump textures*). Replacements load in the background; `.dds` files (DXT1/3/5, BC7, BC4 or 32-bit
    RGBA, with or without mipmaps) load faster and use less video memory than PNG.
 
 Details and settings: `textures\README.txt`. Cubemaps (reflections) are not covered; for models see
@@ -220,7 +223,7 @@ anything that reads and writes glTF 2.0) and imported back:
 ```
 
 Import writes `game_mod\`, a copy of `game\` made of hard links (no extra disk space); `game\` is
-never changed. Play it with `PLAY_MODDED.bat`; delete `game_mod\` to undo everything. Shape, UVs,
+never changed. Play it with *Game: My models* in the launcher; delete `game_mod\` to undo everything. Shape, UVs,
 vertex colours and bone weights come from your file; materials, textures, skeleton, collision and
 animations stay the game's (change textures with texture packs). Edit the `_l` low-detail copy too,
 or the old shape shows from far away. Which file holds what and the rules: `models\README.txt`.
@@ -232,7 +235,7 @@ Exported models are the game's art -- share them only where that is allowed.
 ```
 SETUP.bat / BUILD.bat        one-time setup / rebuild after code changes
 DemonsSoulsLauncher.exe      the settings window (built by SETUP/BUILD from project/launcher/)
-PLAY*.bat                    launchers (environment switches documented inside PLAY.bat)
+PLAY.bat                     starts the game; the launcher runs it (environment switches documented inside)
 REPORT.bat                   packs the last session into a zip for a GitHub issue
 setup/setup.py, build.py     the setup pipeline and the toolchain finder + build
 project/                     CMake project: CMakeLists.txt, main.cpp, stubs.cpp

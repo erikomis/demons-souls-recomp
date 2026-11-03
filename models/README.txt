@@ -10,7 +10,7 @@ Run these from the repo folder (.venv\Scripts\python made by SETUP works, any Py
   ... Blender: File > Import > glTF 2.0, edit, File > Export > glTF 2.0 (.glb is fine) ...
   python tools\flver_tool.py import models\BD_F_5010\edited.glb game\PS3_GAME\USRDIR\PARTS\bd_f_5010.partsbnd.dcx
       -> writes game_mod\ (a copy of game\ made of hard links: no extra disk space; game\ is never
-         changed). Play it with PLAY_MODDED.bat. Delete game_mod\ to undo everything.
+         changed). Play it with "Game: My models" in the launcher. Delete game_mod\ to undo everything.
 
 Which file holds what (all under game\PS3_GAME\USRDIR; use the .dcx -- that is what the game reads):
   PARTS\  armour and weapons: hd_ head, bd_ body, am_ arms, lg_ legs, wp_ weapons/shields;
@@ -32,7 +32,7 @@ What import keeps and what it takes from your file:
     To change textures use texture packs (textures\README.txt) -- the exported PNGs are for reference.
   - More than 28 bones or 65535 vertices in one mesh: split into several meshes automatically.
   - Several models in one archive (some weapons): pick one with --entry 0, --entry 1, ...
-  - --mod game_remaster puts the change into the PC Remaster copy instead (play with PLAY_REMASTER.bat).
+  - --mod game_remaster puts the change into the PC Remaster copy instead (play with "Game: PC Remaster mod" in the launcher).
 
 python tools\flver_tool.py selftest   reads and writes back every model in game\ and checks the
 export -> import round trip (takes a few minutes).

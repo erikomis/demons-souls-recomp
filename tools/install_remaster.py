@@ -6,7 +6,7 @@ game_remaster/ is made as a copy of game/ out of hard links (no extra disk space
 Without --apply only reports. Each mod file is matched to the game's existing path case-insensitively
 (the mod uses lowercase folder names); an existing file is REMOVED first (it is a hard link shared with
 game/, so writing into it would change the normal game too), then the mod's copy is written.
-Replaced originals are listed in game_remaster/REMASTER_INSTALLED.txt. Play with PLAY_REMASTER.bat;
+Replaced originals are listed in game_remaster/REMASTER_INSTALLED.txt. Play with "Game: PC Remaster mod" in the launcher;
 to remove the mod delete game_remaster/. Download the mod yourself from Nexus Mods."""
 import os, shutil, sys, zipfile
 

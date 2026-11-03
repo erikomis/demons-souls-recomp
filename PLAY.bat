@@ -18,7 +18,7 @@ rem
 rem Every run is logged to logs\last_run_out.txt / last_run_err.txt (previous run kept as *_prev.txt).
 rem They grow by roughly 600 MB an hour. Attach the end of last_run_err.txt when you report a crash.
 rem Runs at up to 60 fps by default (docs\NOTES.md fix 28), 50 on a 100 Hz monitor (fix 42);
-rem set DES_FPS=30 for the original 30, or any whole number 31-240 (PLAY_CHOOSE_FPS.bat asks).
+rem set DES_FPS=30 for the original 30, or any whole number 31-240 (the launcher's Custom... asks).
 rem Frame timing is recorded on every run: press F8 in the game right after a stutter, then run
 rem REPORT.bat to pack it up for a GitHub issue (see README.md).
 rem Where the PC cannot hold 60 (Boletarian Palace: ~58 since fix 36) the game step stretches to match,
@@ -32,7 +32,8 @@ set "D=%~dp0"
 if "%D:~-1%"=="\" set "D=%D:~0,-1%"
 set "PS3_TITLE=Demon's Souls (ps3recomp)"
 rem DES_GAME=<folder next to this file> picks the game files (default "game"); the PC Remaster mod copy
-rem is "game_remaster" (PLAY_DEMONS_SOULS_REMASTER.bat, NOTES fix 45). Saves are shared.
+rem is "game_remaster" (the launcher's Game: PC Remaster mod, NOTES fix 45), your imported models
+rem "game_mod" (Game: My models). Saves are shared.
 if "%DES_GAME%"=="" set "DES_GAME=game"
 if /i "%DES_GAME%"=="game_remaster" set "PS3_TITLE=Demon's Souls (ps3recomp) - PC Remaster mod"
 set "PS3_HDD0_ROOT=%D%\hdd0"
@@ -70,8 +71,8 @@ rem 50 fps mode (NOTES fix 42): on a ~100 Hz monitor 60 fps cannot be even (fram
 rem refreshes -- judder when the camera turns), so there the default is 50 fps with every frame shown for
 rem exactly 2 refreshes: 100 Hz vblanks, guest clock 167%, present on every 2nd refresh. The adaptive step
 rem keeps game speed right. "set DES_FPS=60" (or 30 / 50) before launching picks the mode by hand
-rem ("set DES_FPS=unlimited" = uncapped, a number 31-240 = custom). PLAY_30FPS.bat / _50FPS.bat /
-rem _UNLIMITED.bat / PLAY_CHOOSE_FPS.bat next to this file just set DES_FPS and call it.
+rem ("set DES_FPS=unlimited" = uncapped, a number 31-240 = custom). The launcher's frame rate choice
+rem just sets DES_FPS and calls this file.
 set "DES_REFRESH="
 for /f %%R in ('powershell -NoProfile -Command "(Get-CimInstance Win32_VideoController | Where-Object CurrentRefreshRate | Select-Object -First 1).CurrentRefreshRate"') do set "DES_REFRESH=%%R"
 if "%DES_REFRESH%"=="" set "DES_REFRESH=60"

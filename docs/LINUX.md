@@ -42,7 +42,9 @@ rewritten for Vulkan; that is not planned for now.
    changed), or `~/DemonsSoulsRecomp/linux/play.sh`.
 
 Settings are the same environment variables as on Windows: `DES_FPS=30|50|60|unlimited|31-240`
-(a Steam Deck defaults to 30), `DES_MOVIES=0` (skip movies), `DES_NAME=<name>`, `DES_RECORD=0`.
+(a Steam Deck defaults to 30), `DES_MOVIES=0` (skip movies), `DES_NAME=<name>`, `DES_RECORD=0`,
+`DES_GAME=game_remaster` (PC Remaster mod) or `DES_GAME=game_mod` (imported models), `LD_TEX_DUMP=1`
+(dump textures for texture packs).
 For example: `DES_FPS=60 ./DemonsSoulsRecomp-Setup-x86_64.AppImage play`.
 
 Controllers: Steam Input / Proton present controllers as an Xbox pad, which the port uses. Keyboard and

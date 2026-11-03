@@ -1,9 +1,9 @@
 // DemonsSoulsLauncher.exe -- one window for the play options of the Demon's Souls PC port.
 //
-// It keeps the choices in launcher.ini next to PLAY.bat, sets the environment variables the
-// PLAY_*.bat files set (DES_FPS, DES_GAME, DES_RES_SCALE, ...) and runs PLAY.bat with them. PLAY.bat
-// keeps the frame-rate recipe, the logs, the recording and the cache clean-up, so the window and the
-// .bat files always start the game the same way. DES_LAUNCHER=1 tells PLAY.bat not to wait for a key
+// It keeps the choices in launcher.ini next to PLAY.bat, sets the environment variables PLAY.bat
+// reads (DES_FPS, DES_GAME, DES_RES_SCALE, ...) and runs PLAY.bat with them. PLAY.bat keeps the
+// frame-rate recipe, the logs, the recording and the cache clean-up, so the window and PLAY.bat on
+// its own always start the game the same way. DES_LAUNCHER=1 tells PLAY.bat not to wait for a key
 // at the end; a crash is reported here instead, with an offer to run REPORT.bat.
 //
 //   DemonsSoulsLauncher.exe          the window
@@ -164,7 +164,7 @@ struct EnvBlock {
     }
 };
 
-// The same variables the PLAY_*.bat files and the README's "set X=..." lines use. Every one is set
+// The same variables the README's "set X=..." lines use. Every one is set
 // or cleared, so a variable left over in this Windows session does not change what the window says.
 static wstring game_env(const Settings& s) {
     EnvBlock eb;

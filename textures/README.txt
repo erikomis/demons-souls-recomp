@@ -1,13 +1,13 @@
 Texture packs (docs/NOTES.md fix 60)
 ============================
 
-dump\     PLAY_DUMP_TEXTURES.bat saves every texture the game draws here, once, as it
+dump\     The launcher's "Dump textures" saves every texture the game draws here, once, as it
           looks in game:  <KEY>_<width>x<height>_<format>.png   (index.csv lists them all).
           KEY is 16 characters (0-9, A-F) computed from the texture's contents, so the same
           texture gets the same KEY every run and on every PC.
 
 replace\  Any .png or .dds here whose file name STARTS WITH a KEY is drawn instead of that
-          texture, in every launcher. Sub folders are fine; anything after the KEY in the name is
+          texture, however the game is started. Sub folders are fine; anything after the KEY in the name is
           ignored (e.g. 0123456789ABCDEF_knight_armour_4k.png).
           - Any size works (a 512x512 texture can be replaced by a 2048x2048 one).
           - .png: 8-bit RGBA or RGB. Mipmaps are made automatically.
@@ -19,7 +19,8 @@ replace\  Any .png or .dds here whose file name STARTS WITH a KEY is drawn inste
           - If both a .png and a .dds have the same KEY, the .dds is used.
           Restart the game to pick up new or changed files.
 
-Settings (environment variables, set before starting a launcher):
+Settings (environment variables, set before starting the launcher or PLAY.bat; or in the launcher's
+Extra settings box):
   LD_TEX_REPLACE=0       ignore the replace folder
   LD_TEX_DIR=<folder>    use another folder instead of this one
   LD_TEX_REPLACE_MB=4096 video memory kept for loaded replacements not drawn right now

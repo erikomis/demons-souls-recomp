@@ -40,7 +40,7 @@ SPURS_JOBS = [(0x176B480, 384, 'B1463A6F2DF960AC'), (0x176B600, 2064, 'BD46853E5
 LIFT_ARGS = ['--code-end', '0x16bb5e4', '--chunks', '128']
 # What to tell you to run: the Linux launchers (linux/setup.sh, the AppImage) set these
 SETUP_NAME = os.environ.get('DS_SETUP_NAME') or 'SETUP.bat'
-PLAY_HINT = os.environ.get('DS_PLAY_HINT') or 'Double-click PLAY.bat to play.'
+PLAY_HINT = os.environ.get('DS_PLAY_HINT') or 'Double-click DemonsSoulsLauncher.exe to play.'
 RPCS3_LINUX_RELEASES = 'https://api.github.com/repos/RPCS3/rpcs3-binaries-linux/releases/latest'
 
 
