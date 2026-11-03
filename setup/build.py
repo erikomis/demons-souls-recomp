@@ -36,6 +36,15 @@ XWIN_DIR = os.environ.get('DS_XWIN_DIR') or os.path.join(ROOT, 'deps', 'xwin')
 XWIN_VERSION = '0.10.0'
 XWIN_URL = 'https://github.com/Jake-Shadle/xwin/releases/download/{v}/xwin-{v}-{t}.tar.gz'
 XWIN_LICENSE = 'https://go.microsoft.com/fwlink/?LinkId=2086102'
+# The portable compiler for a Windows PC without Visual Studio's C++ tools or LLVM: LLVM's own release
+# (only clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt and clang's headers are unpacked, ~250 MB) with
+# xwin's Microsoft CRT + SDK. Chosen once; deps/.portable_compiler remembers it (DS_XWIN=0 = Visual Studio).
+LLVM_WIN_VERSION = '23.1.4'
+LLVM_WIN_URL = ('https://github.com/llvm/llvm-project/releases/download/llvmorg-{v}/'
+                'clang+llvm-{v}-x86_64-pc-windows-msvc.tar.zst')
+LLVM_WIN_SHA256 = '1a3f2f998e230b5791cc4e2bfe11a1f7c07fe42c96ff44f227c9db0bedfaf091'
+LLVM_WIN_TOOLS = ('clang-cl', 'lld-link', 'llvm-lib', 'llvm-rc', 'llvm-mt')
+PORTABLE_MARK = os.path.join(ROOT, 'deps', '.portable_compiler')
 
 
 def say(msg=''):
@@ -43,6 +52,9 @@ def say(msg=''):
 
 
 def ask(prompt):
+    if os.environ.get('DS_ASSUME_YES') == '1' and '[Y/n]' in prompt:   # tests: take the default
+        say(prompt + '(yes: DS_ASSUME_YES)')
+        return ''
     try:
         return input(prompt).strip().lower()
     except EOFError:
@@ -54,6 +66,8 @@ def fwd(p):
 
 
 def find_vs():
+    if os.environ.get('DS_TEST_NO_VS') == '1':   # tests: act as if Visual Studio were not installed
+        return None, None
     pf86 = os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')
     vswhere = os.path.join(pf86, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe')
     if os.path.isfile(vswhere):
@@ -78,6 +92,8 @@ def clang_version(bindir):
 
 
 def find_llvm(vs_path):
+    if os.environ.get('DS_TEST_NO_LLVM') == '1':   # tests: only a portable LLVM in deps/llvm counts
+        return find_llvm_cross()
     cands = []
     if os.environ.get('LLVM_DIR'):
         cands += [os.environ['LLVM_DIR'], os.path.join(os.environ['LLVM_DIR'], 'bin')]
@@ -106,8 +122,27 @@ def winget(pkg, extra=()):
                            '--accept-source-agreements', *extra]).returncode == 0
 
 
+def offer_portable(why):
+    """Windows without Visual Studio's C++ tools or LLVM: build with the portable compiler instead
+    (nothing installed, no administrator rights). True = chosen, remembered in deps/.portable_compiler."""
+    if os.name != 'nt':
+        return False
+    say(f'  {why}')
+    say('  This PC can build without installing anything: a portable LLVM (clang-cl; a 280 MB download,')
+    say('  250 MB unpacked) and Microsoft\'s C runtime + Windows SDK (about 1 GB, downloaded from Microsoft')
+    say(f'  by the open-source xwin tool; Microsoft\'s license applies: {XWIN_LICENSE}). It all stays in deps\\.')
+    if ask('  Use the portable compiler? [Y/n] ') == 'n':
+        return False
+    os.makedirs(os.path.dirname(PORTABLE_MARK), exist_ok=True)
+    with open(PORTABLE_MARK, 'w') as f:
+        f.write('Build with the portable compiler: LLVM in deps/llvm + xwin in deps/xwin (setup/build.py).\n')
+    return True
+
+
 def tools():
     vs_path, vcvars = find_vs()
+    if not vcvars and offer_portable('Visual Studio 2022\'s C++ tools are not installed.'):
+        return 'portable'
     if not vcvars:
         say('  Visual Studio 2022 with "Desktop development with C++" (or the free Build Tools) is needed')
         say('  for the Windows SDK and C++ libraries.')
@@ -124,6 +159,8 @@ def tools():
             say(f'  clang-cl in {llvm[1]} is too old ({llvm[2]}); LLVM {MIN_CLANG} or newer is needed.')
         else:
             say('  clang-cl (LLVM) is needed -- the recompiled code is built with it, not with MSVC.')
+        if offer_portable('No suitable LLVM is installed.'):
+            return 'portable'
         if ask('  Install LLVM now with winget? [Y/n] ') != 'n':
             winget('LLVM.LLVM')
             llvm = find_llvm(vs_path)
@@ -158,7 +195,8 @@ def want_avx2():
 # --- cross toolchain: clang-cl + lld-link + xwin (Linux; Windows with DS_XWIN=1) -----------------
 
 def use_xwin():
-    return os.name != 'nt' or os.environ.get('DS_XWIN', '').strip() == '1'
+    e = os.environ.get('DS_XWIN', '').strip()
+    return os.name != 'nt' or e == '1' or (e != '0' and os.path.isfile(PORTABLE_MARK))
 
 
 def find_llvm_cross():
@@ -168,10 +206,12 @@ def find_llvm_cross():
     for e in ('DS_LLVM_DIR', 'LLVM_DIR'):
         if os.environ.get(e):
             cands += [os.environ[e], os.path.join(os.environ[e], 'bin')]
+    if os.environ.get('DS_TEST_NO_LLVM') == '1':   # tests: only a portable LLVM in deps/llvm counts
+        cands = []
     cands += glob.glob(os.path.join(ROOT, 'deps', 'llvm', '**', 'bin'), recursive=True)
     if os.name != 'nt':
         cands += sorted(glob.glob('/usr/lib/llvm-*/bin'), reverse=True) + ['/usr/local/bin', '/usr/bin']
-    w = shutil.which('clang-cl')
+    w = None if os.environ.get('DS_TEST_NO_LLVM') == '1' else shutil.which('clang-cl')
     if w:
         cands.append(os.path.dirname(os.path.realpath(w)))
         cands.append(os.path.dirname(w))
@@ -182,6 +222,77 @@ def find_llvm_cross():
             if best is None or v > best[0]:
                 best = (v, c, text)
     return best
+
+
+def download_llvm():
+    """Windows: LLVM's own release (.tar.zst, checked against its pinned sha256); only the tools the build
+    uses and clang's headers are unpacked, into deps/llvm/<release folder>."""
+    try:
+        import zstandard
+    except ImportError:
+        say('  the zstandard package is missing: run SETUP.bat (it installs it into .venv).')
+        return False
+    url = LLVM_WIN_URL.format(v=LLVM_WIN_VERSION)
+    say(f'  downloading LLVM {LLVM_WIN_VERSION} (open source, 280 MB): {url}')
+    os.makedirs(os.path.join(ROOT, 'deps'), exist_ok=True)
+    part = os.path.join(ROOT, 'deps', 'llvm.tar.zst.part')
+    h = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(url, timeout=120) as r, open(part, 'wb') as f:
+            while True:
+                b = r.read(1 << 20)
+                if not b:
+                    break
+                h.update(b)
+                f.write(b)
+    except OSError as e:
+        say(f'  download failed: {e}')
+        return False
+    if h.hexdigest() != LLVM_WIN_SHA256:
+        os.remove(part)
+        say('  the LLVM download does not match its checksum; not using it')
+        return False
+    say('  unpacking clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt and clang\'s headers ...')
+    # into deps/llvm.part, renamed to deps/llvm only when complete: a stopped run leaves nothing half
+    final = os.path.join(ROOT, 'deps', 'llvm')
+    dest = final + '.part'
+    shutil.rmtree(dest, ignore_errors=True)
+    want = {f'bin/{t}.exe' for t in LLVM_WIN_TOOLS}
+    n = 0
+    try:
+        with open(part, 'rb') as f:
+            # LLVM's archives use zstd's long mode (a window of up to 2 GB)
+            rd = zstandard.ZstdDecompressor(max_window_size=2 ** 31).stream_reader(f)
+            with tarfile.open(fileobj=rd, mode='r|') as t:
+                for m in t:
+                    parts = m.name.replace('\\', '/').split('/')
+                    if len(parts) < 2 or '..' in parts or m.name.startswith(('/', '\\')):
+                        continue
+                    rel = '/'.join(parts[1:])
+                    if not (rel in want or rel.startswith('lib/clang/') or rel == 'LICENSE.TXT'):
+                        continue
+                    out = os.path.join(dest, *parts)
+                    if m.isdir():
+                        os.makedirs(out, exist_ok=True)
+                    elif m.isfile():
+                        os.makedirs(os.path.dirname(out), exist_ok=True)
+                        with t.extractfile(m) as src, open(out, 'wb') as dst:
+                            shutil.copyfileobj(src, dst, 1 << 20)
+                        n += 1
+    except (OSError, tarfile.TarError, zstandard.ZstdError) as e:
+        say(f'  unpacking LLVM failed: {e}')
+        return False
+    finally:
+        if os.path.isfile(part):
+            os.remove(part)
+    got = {os.path.basename(p)[:-4] for p in glob.glob(os.path.join(dest, '*', 'bin', '*.exe'))}
+    if not set(LLVM_WIN_TOOLS) <= got:
+        say('  the LLVM download lacks ' + ', '.join(sorted(set(LLVM_WIN_TOOLS) - got)))
+        return False
+    shutil.rmtree(final, ignore_errors=True)
+    os.replace(dest, final)
+    say(f'  LLVM {LLVM_WIN_VERSION}: {n} files in {final}')
+    return True
 
 
 def pip_tool(name):
@@ -316,6 +427,8 @@ def build_xwin(jobs=None, targets=(), runtime_only=False):
     """runtime_only: just ps3recomp's runtime library (deps/ps3recomp on its own, port/build_runtime),
     no game code -- a quick check of the toolchain that needs no disc (the Linux CI job runs it)."""
     llvm = find_llvm_cross()
+    if (not llvm or llvm[0] < MIN_CLANG) and os.name == 'nt' and download_llvm():
+        llvm = find_llvm_cross()
     if not llvm or llvm[0] < MIN_CLANG:
         say(f'  clang-cl + lld-link (LLVM {MIN_CLANG} or newer) are needed. The Linux AppImage brings them;')
         say('  from a git checkout install your distribution\'s clang and lld packages (Debian/Ubuntu:')
@@ -338,9 +451,17 @@ def build_xwin(jobs=None, targets=(), runtime_only=False):
     bdir = os.path.join(ROOT, 'port', 'build_runtime') if runtime_only else BUILD
     cache = os.path.join(bdir, 'CMakeCache.txt')
     if os.path.isfile(cache) and toolchain not in open(cache, errors='replace').read():
-        say(f'  {bdir} was configured with another toolchain (Visual Studio?). Delete that folder')
-        say('  (or set DS_XWIN=0) and build again.')
-        return 1
+        if os.path.isfile(PORTABLE_MARK) and not runtime_only:
+            # built with Visual Studio before, and the portable compiler chosen now: configure afresh
+            say(f'  {bdir} was built with Visual Studio before: building it again with the portable compiler')
+            for f in ('CMakeCache.txt', 'build.ninja'):
+                if os.path.isfile(os.path.join(bdir, f)):
+                    os.remove(os.path.join(bdir, f))
+            shutil.rmtree(os.path.join(bdir, 'CMakeFiles'), ignore_errors=True)
+        else:
+            say(f'  {bdir} was configured with another toolchain (Visual Studio?). Delete that folder')
+            say('  (or set DS_XWIN=0) and build again.')
+            return 1
     avx2 = want_avx2()
     flag = '-DDS_AVX2=' + ('ON' if avx2 else 'OFF')
     if not avx2 and not runtime_only:
@@ -403,6 +524,8 @@ def build(jobs=None, targets=()):
     if use_xwin():
         return build_xwin(jobs, targets)
     t = tools()
+    if t == 'portable':
+        return build_xwin(jobs, targets)
     if not t:
         say('  Missing build tools -- see README.md, "What you need".')
         return 1

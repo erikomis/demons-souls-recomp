@@ -5,15 +5,35 @@ rem it and it will ask. It extracts the game, recompiles it and builds DemonsSou
 rem Safe to run again: finished steps are skipped.
 setlocal EnableExtensions
 cd /d "%~dp0"
+set "KIT=%CD%"
+rem CMake treats [ ] in a path as a wildcard (its globs then find nothing) and cmd breaks on & in one:
+rem stop here with a clear message instead of failing later.
+set "DS_P=%CD%"
+if not "%DS_P:[=%"=="%DS_P%" goto :bad_path
+if not "%DS_P:]=%"=="%DS_P%" goto :bad_path
+if not "%DS_P:&=%"=="%DS_P%" goto :bad_path
 title Demon's Souls PC port - setup
 
+rem Python 3.10+ and Git: the installed ones, else portable copies downloaded into deps\ (nothing is
+rem installed). DS_TEST_NO_PYTHON=1 / DS_TEST_NO_GIT=1 (tests) act as if none were installed.
+if not exist "deps" mkdir "deps"
 set "PY="
+if defined DS_TEST_NO_PYTHON goto :portable_python
 where py >nul 2>nul && py -3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul && set "PY=py -3"
 if not defined PY (
   where python >nul 2>nul && python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul && set "PY=python"
 )
+:portable_python
+if not defined PY if not exist "deps\python\tools\python.exe" call :get_python
+if not defined PY if exist "deps\python\tools\python.exe" set "PY=deps\python\tools\python.exe"
 if not defined PY goto :need_python
-where git >nul 2>nul || goto :need_git
+if defined DS_TEST_NO_GIT goto :portable_git
+where git >nul 2>nul && goto :have_git
+:portable_git
+if not exist "deps\mingit\cmd\git.exe" call :get_git
+if not exist "deps\mingit\cmd\git.exe" goto :need_git
+set "PATH=%CD%\deps\mingit\cmd;%PATH%"
+:have_git
 
 rem The Python that made .venv may have been removed or upgraded since ("No Python at ..."): make it again.
 if exist ".venv\Scripts\python.exe" (
@@ -33,13 +53,34 @@ echo.
 pause
 exit /b 0
 
+:get_python
+echo No Python 3.10 or newer is installed: downloading a portable one (python.org's own build, 15 MB) into
+echo deps\python. Nothing is installed.
+pushd "%SystemRoot%"
+set "DS_FETCH=%KIT%\setup\fetch.ps1"
+set "DS_DEST=%KIT%\deps\python"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([IO.File]::ReadAllText($env:DS_FETCH))) -Url 'https://api.nuget.org/v3-flatcontainer/python/3.13.17/python.3.13.17.nupkg' -Sha256 dce409744b088f94c6e37ba41f8100c384c27e029e843237364c602d30d475e5 -Dest $env:DS_DEST -Name 'Python 3.13.17'; exit $LASTEXITCODE"
+popd
+exit /b 0
+
+:get_git
+echo Git is not installed: downloading a portable one (Git for Windows' MinGit, 40 MB) into deps\mingit.
+echo Nothing is installed.
+pushd "%SystemRoot%"
+set "DS_FETCH=%KIT%\setup\fetch.ps1"
+set "DS_DEST=%KIT%\deps\mingit"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([IO.File]::ReadAllText($env:DS_FETCH))) -Url 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/MinGit-2.56.0.4-64-bit.zip' -Sha256 e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877 -Dest $env:DS_DEST -Name 'MinGit 2.56.0.4'; exit $LASTEXITCODE"
+popd
+exit /b 0
+
 :need_python
-echo Python 3.10 or newer is needed (https://www.python.org/downloads/ - tick "Add python.exe to PATH").
+echo Python 3.10 or newer is needed and the portable one could not be downloaded
+echo (https://www.python.org/downloads/ - tick "Add python.exe to PATH").
 call :offer Python.Python.3.12
 goto :reopen
 
 :need_git
-echo Git is needed (https://git-scm.com/download/win).
+echo Git is needed and the portable one could not be downloaded (https://git-scm.com/download/win).
 call :offer Git.Git
 goto :reopen
 
@@ -60,5 +101,12 @@ exit /b 1
 :failed
 echo.
 echo Setup stopped. Fix the problem above and run SETUP.bat again - finished steps are skipped.
+pause
+exit /b 1
+
+:bad_path
+echo This folder's path has a [ ] or ^& in it, which the build tools cannot handle:
+echo   "%CD%"
+echo Move or rename the folder (for example C:\Games\DemonsSouls) and run this again.
 pause
 exit /b 1

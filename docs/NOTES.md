@@ -1830,6 +1830,43 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       system DLLs, or the job fails) and attaches DemonsSoulsRecomp-<tag>.zip (git archive of the tag + the
       launcher at its top level; game-file extensions refused). The same build here imports COMCTL32 / gdiplus / SHELL32 /
       USER32 / GDI32 / KERNEL32 only and holds no paths from the building PC.
+82. **Nothing to install: SETUP downloads a portable Python, Git, compiler and RPCS3 (2026-11-03, GitHub report
+    "Python is installed, but launcher cant read it" -- "pre-compile all executables to not rely on Python or
+    Visual Code"):**
+    - The game exe itself cannot be shipped (it is recompiled game code), so everything else comes without an
+      installer or administrator rights, into deps\, and only when the PC lacks it:
+      * Python: python.org's NuGet build 3.13.17 (15 MB, pinned sha256) into deps\python when no py -3 / python
+        >= 3.10. Git: Git for Windows' MinGit 2.56.0.4 (40 MB, pinned) into deps\mingit, first on PATH for
+        SETUP.bat and BUILD.bat. Both through setup/fetch.ps1 (.NET download, Get-FileHash, ZipFile into
+        <dest>.part, renamed when complete), which SETUP.bat runs as a script block from environment variables:
+        powershell -File treats the script's path as a wildcard pattern.
+      * Compiler: no Visual Studio C++ tools (or no LLVM >= 17) -> offer_portable [Y/n] -> deps/.portable_compiler
+        -> the xwin route (Linux's): LLVM 23.1.4's Windows .tar.zst (277 MB, pinned sha256) streamed through
+        zstandard (zstd long mode, 2 GB window); only clang-cl, lld-link, llvm-lib, llvm-rc, llvm-mt and lib/clang/**
+        (362 files, ~250 MB of 4 GB) into deps/llvm.part, renamed to deps/llvm when complete; Microsoft's CRT + SDK
+        via xwin (~1 GB, Microsoft's license). The exe then imports only system DLLs (static CRT) -- the game needs
+        no Visual C++ runtime either. A build_opt configured by Visual Studio before is reconfigured afresh.
+        Delete deps/.portable_compiler (or set DS_XWIN=0) to go back to Visual Studio.
+      * RPCS3: the latest RPCS3/rpcs3-binaries-win build (35 MB, the sha256 it publishes) into deps\rpcs3, unpacked
+        by Windows' own tar.exe, else (Windows 10 / 11 before 23H2: tar without LZMA; the archive uses BCJ2, which
+        py7zr cannot read) by 7-Zip's 7zr.exe 26.05 (600 KB, pinned). RPCS3 needs the Visual C++ runtime >= 14.40
+        (it is built with 14.51): vc_runtime_ok reads the DLL versions (64-bit System32 / Sysnative) and offers
+        winget Microsoft.VCRedist.2015+.x64.
+    - SETUP.bat and BUILD.bat refuse a folder path with [ ] or & up front (CMake's file(GLOB) treats [ ] as a
+      pattern and finds nothing; cmd breaks on &): "move or rename the folder".
+    - Test switches: DS_TEST_NO_PYTHON / _GIT / _VS / _LLVM / _TAR, DS_ASSUME_YES (take [Y/n] defaults).
+    - Tests: a release-style ZIP of the commit (files a day back, the CI-built launcher) unpacked with Expand-Archive
+      into a new folder; game files hard-linked from a test install, no EBOOT.elf; SETUP with every DS_TEST_NO_*:
+      Python + Git downloaded, .venv + packages, RPCS3 downloaded, EBOOT decrypted (sha256 = tested), ps3recomp
+      cloned with MinGit, lifted, LLVM unpacked, xwin SDK, game + launcher built -- 6.5 minutes on the 16-core
+      test PC -- then the launcher's Play started the game (50 fps on the 100 Hz test screen). Run twice (before and
+      after the review fixes). The 7zr path on its own (DS_TEST_NO_TAR): same rpcs3.exe as tar's. fetch.ps1 from a
+      folder "Games [BLUS-30443]": good download unpacked, a wrong checksum -> exit 1 and nothing left behind.
+      BUILD.bat in "Games [BLUS-30443]" and "Tom & Jerry": the clear message.
+    - Review (2 lenses + adversarial verify): 9 confirmed, 1 left (the launcher's Check for updates looks for git only
+      on PATH: matters for git clones only, which have Git) -- fixed: Windows 10's tar cannot read the .7z, [ ] in
+      the folder path, half-unpacked Python / Git / LLVM taken as installed, a Visual Studio build_opt refusing the
+      portable compiler, an old Visual C++ runtime passing the check, a 32-bit Python checking SysWOW64.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

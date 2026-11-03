@@ -35,16 +35,23 @@ takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
 - **Windows 10/11 x64** and a **Direct3D 12** GPU. AVX2 (Intel Haswell / AMD Ryzen or newer) is used
   when your CPU has it; on older CPUs BUILD.bat builds without it (a couple of fps slower in the
   heaviest areas).
-- About **12 GB** free disk space (8 GB game files + build).
+- About **14 GB** free disk space (8 GB game files + build + tools).
 - **Your disc image** of Demon's Souls USA (BLUS-30443): a `.iso` (a Redump `.zip` works as is), or a
   dumped disc folder with `PS3_GAME` in it. A Redump-style encrypted image also needs its
   **disc key** (the `.dkey` file that comes with the dump). No `.dkey`? The key is public: it is the
   "Disc Key" line on [Redump's page for this disc](http://redump.org/disc/16199/) (Demon's Souls, USA, BLUS-30443, version
   01.00). Copy it from there when SETUP asks.
-- **[RPCS3](https://rpcs3.net/download)**, used once to decrypt the game's `EBOOT.BIN`. Unzip it anywhere.
-- **Python 3.10+** and **Git**. If they are missing, SETUP.bat offers to install them with winget.
-- **Visual Studio 2022** (Community or the free **Build Tools**) with *Desktop development with C++*,
-  and **LLVM** (clang-cl) 17 or newer. If they are missing, setup offers to install them with winget.
+- **Nothing else to install.** SETUP downloads what it needs into the folder (`deps\`), with no
+  installer and no administrator rights: a portable **Python** and **Git** when you have none,
+  **[RPCS3](https://rpcs3.net)** (used once to decrypt the game's `EBOOT.BIN`), and, without Visual
+  Studio, a portable compiler (**LLVM** + Microsoft's C runtime and Windows SDK, about 1.3 GB, fetched
+  by [xwin](https://github.com/Jake-Shadle/xwin); Microsoft's license applies). The Python, Git, LLVM,
+  RPCS3 and xwin downloads are checked against pinned or published checksums. Already have Python 3.10+, Git, RPCS3
+  (`SETUP.bat --rpcs3 path\to\rpcs3.exe`) or **Visual Studio 2022** with *Desktop development with
+  C++* + **LLVM** 17 or newer? Then those are used instead. RPCS3 needs the Microsoft Visual C++
+  runtime, which most PCs already have; SETUP offers Microsoft's installer if yours does not. (Installed
+  Visual Studio later and want it used? Delete `deps\.portable_compiler`.) Keep the folder's path plain:
+  no `[ ]` or `&` in it (the build tools cannot handle them; SETUP says so).
 
 **Linux / Steam Deck:** a setup + play kit (an AppImage) builds the same port from your own disc
 image on Linux and runs it through Proton. See [docs/LINUX.md](docs/LINUX.md).

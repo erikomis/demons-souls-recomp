@@ -3,11 +3,19 @@ rem Rebuilds DemonsSoulsRecomp.exe after you change code (incremental; SETUP.bat
 rem   BUILD.bat [--jobs N] [ninja targets...]
 setlocal
 cd /d "%~dp0"
+rem CMake treats [ ] in a path as a wildcard (its globs then find nothing) and cmd breaks on & in one:
+rem stop here with a clear message instead of failing later.
+set "DS_P=%CD%"
+if not "%DS_P:[=%"=="%DS_P%" goto :bad_path
+if not "%DS_P:]=%"=="%DS_P%" goto :bad_path
+if not "%DS_P:&=%"=="%DS_P%" goto :bad_path
 if not exist ".venv\Scripts\python.exe" (
   echo Run SETUP.bat first.
   pause
   exit /b 1
 )
+rem Git from SETUP.bat's portable copy when it fetched one (updates re-apply patches with git apply).
+if exist "deps\mingit\cmd\git.exe" set "PATH=%CD%\deps\mingit\cmd;%PATH%"
 rem The Python that made .venv may have been removed or upgraded since ("No Python at ..."): then make
 rem .venv again with the Python installed now.
 ".venv\Scripts\python.exe" -c "" >nul 2>nul || call :remake_venv || exit /b 1
@@ -21,6 +29,7 @@ where py >nul 2>nul && py -3 -c "import sys; sys.exit(0 if sys.version_info >= (
 if not defined PY (
   where python >nul 2>nul && python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul && set "PY=python"
 )
+if not defined PY if exist "deps\python\tools\python.exe" set "PY=deps\python\tools\python.exe"
 if not defined PY goto :no_python
 rmdir /s /q ".venv"
 %PY% -m venv .venv || goto :venv_failed
@@ -32,5 +41,12 @@ pause
 exit /b 1
 :venv_failed
 echo Making the Python environment failed: run SETUP.bat.
+pause
+exit /b 1
+
+:bad_path
+echo This folder's path has a [ ] or ^& in it, which the build tools cannot handle:
+echo   "%CD%"
+echo Move or rename the folder (for example C:\Games\DemonsSouls) and run this again.
 pause
 exit /b 1

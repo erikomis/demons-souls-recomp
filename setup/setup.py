@@ -42,6 +42,12 @@ LIFT_ARGS = ['--code-end', '0x16bb5e4', '--chunks', '128']
 SETUP_NAME = os.environ.get('DS_SETUP_NAME') or 'SETUP.bat'
 PLAY_HINT = os.environ.get('DS_PLAY_HINT') or 'Double-click DemonsSoulsLauncher.exe to play.'
 RPCS3_LINUX_RELEASES = 'https://api.github.com/repos/RPCS3/rpcs3-binaries-linux/releases/latest'
+RPCS3_WIN_RELEASES = 'https://api.github.com/repos/RPCS3/rpcs3-binaries-win/releases/latest'
+# 7-Zip's own standalone 7zr.exe: unpacks RPCS3's .7z where Windows' tar.exe cannot (Windows 10 and Windows
+# 11 before 23H2 ship a tar without LZMA; RPCS3's archive also uses BCJ2, which no pip package reads)
+SEVENZR_URL = 'https://github.com/ip7z/7zip/releases/download/26.05/7zr.exe'
+SEVENZR_SHA256 = '9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7'
+VCRT_MIN = (14, 40)   # RPCS3's Windows builds are made with Visual C++ 14.5x; its runtime must not be older
 
 
 def say(msg=''):
@@ -58,6 +64,9 @@ def fail(msg):
 
 
 def ask(prompt):
+    if os.environ.get('DS_ASSUME_YES') == '1' and '[Y/n]' in prompt:   # tests: take the default
+        say(prompt + '(yes: DS_ASSUME_YES)')
+        return ''
     try:
         t = input(prompt).strip().strip('"')
     except EOFError:
@@ -248,6 +257,108 @@ def find_rpcs3(args, cfg):
     return None
 
 
+def download_rpcs3_windows():
+    """Windows: the newest RPCS3 build from RPCS3's own GitHub releases (checked against the sha256 they
+    publish), unpacked into deps/rpcs3 by Windows' own tar.exe (it reads .7z)."""
+    try:
+        rel = json.load(urllib.request.urlopen(RPCS3_WIN_RELEASES, timeout=60))
+        a = next(a for a in rel['assets'] if a['name'].endswith('_win64_msvc.7z'))
+        want = urllib.request.urlopen(a['browser_download_url'] + '.sha256', timeout=60).read().decode().split()[0].lower()
+    except (OSError, ValueError, KeyError, StopIteration, IndexError) as e:
+        say(f'  could not look up the RPCS3 download ({e})')
+        return None
+    d = os.path.join(ROOT, 'deps', 'rpcs3')
+    os.makedirs(d, exist_ok=True)
+    arc = os.path.join(ROOT, 'deps', a['name'])
+    say(f'  downloading {a["name"]} ({a["size"] >> 20} MB) from {a["browser_download_url"]}')
+    h = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(a['browser_download_url'], timeout=120) as r, open(arc, 'wb') as f:
+            while True:
+                b = r.read(1 << 20)
+                if not b:
+                    break
+                h.update(b)
+                f.write(b)
+    except OSError as e:
+        say(f'  download failed: {e}')
+        return None
+    try:
+        if h.hexdigest() != want:
+            say('  the RPCS3 download does not match its checksum; not using it')
+            return None
+        tar = os.path.join(sysdir(), 'tar.exe')
+        if os.environ.get('DS_TEST_NO_TAR') == '1':   # tests: as on Windows 10, whose tar cannot read RPCS3's .7z
+            tar = ''
+        if not (tar and os.path.isfile(tar) and subprocess.run([tar, '-xf', arc, '-C', d], stderr=subprocess.DEVNULL).returncode == 0):
+            say('  Windows\' own tar cannot unpack it here (no LZMA before Windows 11 23H2): using 7-Zip\'s 7zr.exe')
+            z = os.path.join(ROOT, 'deps', '7zr.exe')
+            try:
+                data = urllib.request.urlopen(SEVENZR_URL, timeout=120).read()
+            except OSError as e:
+                say(f'  downloading 7zr.exe failed: {e}')
+                return None
+            if hashlib.sha256(data).hexdigest() != SEVENZR_SHA256:
+                say('  7zr.exe does not match its checksum; not using it')
+                return None
+            with open(z, 'wb') as f:
+                f.write(data)
+            if subprocess.run([z, 'x', arc, '-o' + d, '-y'], stdout=subprocess.DEVNULL).returncode:
+                say(f'  could not unpack {a["name"]}')
+                return None
+    finally:
+        os.remove(arc)
+    exe = os.path.join(d, 'rpcs3.exe')
+    return exe if os.path.isfile(exe) else None
+
+
+def sysdir():
+    """The 64-bit System32 (a 32-bit Python sees SysWOW64 there; Sysnative is the real one)."""
+    w = os.environ.get('SystemRoot', r'C:\Windows')
+    n = os.path.join(w, 'Sysnative')
+    return n if os.path.isdir(n) else os.path.join(w, 'System32')
+
+
+def file_version(p):
+    """(major, minor) of a Windows file's version resource, or None."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        v = ctypes.windll.version
+        size = v.GetFileVersionInfoSizeW(p, None)
+        if not size:
+            return None
+        buf = ctypes.create_string_buffer(size)
+        if not v.GetFileVersionInfoW(p, 0, size, buf):
+            return None
+        ptr, n = ctypes.c_void_p(), wintypes.UINT()
+        if not v.VerQueryValueW(buf, '\\', ctypes.byref(ptr), ctypes.byref(n)):
+            return None
+        ffi = ctypes.cast(ptr, ctypes.POINTER(wintypes.DWORD * 4)).contents   # VS_FIXEDFILEINFO
+        return ffi[2] >> 16, ffi[2] & 0xFFFF
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def vc_runtime_ok():
+    """RPCS3's Windows build needs a recent Microsoft Visual C++ runtime (MSVCP140.dll and friends), which
+    most PCs have from games and other programs. Offer Microsoft's installer when it is missing or too old."""
+    names = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+    vers = [file_version(os.path.join(sysdir(), n)) if os.path.isfile(os.path.join(sysdir(), n)) else None for n in names]
+    if all(v is not None and v >= VCRT_MIN for v in vers):
+        return True
+    have = vers[0]
+    say('  RPCS3 needs the Microsoft Visual C++ runtime ' +
+        (f'{VCRT_MIN[0]}.{VCRT_MIN[1]} or newer (this PC has {have[0]}.{have[1]}).' if have else 'which is not installed on this PC.'))
+    if ask('  Install it now with winget (Microsoft\'s own installer, about 25 MB)? [Y/n] ').lower() != 'n':
+        if shutil.which('winget') and subprocess.run(
+                ['winget', 'install', '-e', '--id', 'Microsoft.VCRedist.2015+.x64',
+                 '--accept-package-agreements', '--accept-source-agreements']).returncode == 0:
+            return True
+    say('  Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe and run the setup again.')
+    return False
+
+
 def download_rpcs3():
     """Linux: the newest RPCS3 AppImage from RPCS3's own GitHub releases -> deps/rpcs3."""
     try:
@@ -283,6 +394,13 @@ def step_decrypt(args, cfg):
     elf = find_eboot_elf()
     if not elf:
         rpcs3 = find_rpcs3(args, cfg)
+        if not rpcs3 and os.name == 'nt':
+            say('  The game\'s EBOOT.BIN is a signed+encrypted PS3 executable (SELF); RPCS3 (the PS3')
+            say('  emulator, open source) decrypts it, once. It is not part of this kit.')
+            if ask('  Download RPCS3 from its GitHub releases now (~40 MB, into deps\\rpcs3)? [Y/n] ').lower() != 'n':
+                rpcs3 = download_rpcs3_windows()
+        if rpcs3 and os.name == 'nt' and not vc_runtime_ok():
+            sys.exit(1)
         if not rpcs3 and os.name != 'nt':
             say('  The game\'s EBOOT.BIN is a signed+encrypted PS3 executable (SELF); RPCS3 (the PS3')
             say('  emulator, open source) decrypts it. It is not part of this kit.')
