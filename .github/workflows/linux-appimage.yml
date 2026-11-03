@@ -30,9 +30,13 @@ jobs:
       - name: Enable Ubuntu and PPA source packages
         run: |
           sudo python3 - <<'EOF'
-          import glob, re
-          ours = re.compile(r'ubuntu\.com|launchpadcontent\.net|launchpad\.net')
-          lines = set()
+          import glob, re, subprocess
+          # the runner's own entries point at a mirror list file (mirror+file:), so the Ubuntu archive
+          # is named here; the PPAs' entries (git-core) are taken from their files
+          ours = re.compile(r'launchpadcontent\.net|launchpad\.net|ubuntu\.com')
+          code = subprocess.run(['lsb_release', '-cs'], capture_output=True, text=True).stdout.strip()
+          lines = {f'deb-src http://archive.ubuntu.com/ubuntu {code}{s} main restricted universe multiverse'
+                   for s in ('', '-updates', '-security')}
           for f in ['/etc/apt/sources.list'] + glob.glob('/etc/apt/sources.list.d/*.list'):
               for l in open(f):
                   if l.startswith('deb ') and ours.search(l):
@@ -44,8 +48,16 @@ jobs:
                       re.sub(r'(?m)^Types:.*$', 'Types: deb-src', s))
           open('/etc/apt/sources.list.d/ds-deb-src.list', 'w').write(''.join(l + '\n' for l in sorted(lines)))
           EOF
+          cat /etc/apt/sources.list.d/ds-deb-src.list
+      # The runner's git comes from a PPA that is no longer configured, so its source package cannot be
+      # fetched: the bundled git is Ubuntu's own, whose source is in the archive
       - name: Tools for packaging
-        run: sudo apt-get update -q && sudo apt-get install -yq patchelf zstd file git dpkg-dev
+        run: |
+          sudo apt-get update -q
+          v=$(apt-cache madison git | awk -F'|' '{gsub(/ /, "", $2); print $2}' | grep -v ppa | head -n 1)
+          echo "Ubuntu's git: $v"
+          sudo apt-get install -yq --allow-downgrades "git=$v" "git-man=$v" patchelf zstd file dpkg-dev
+          git --version
       - uses: actions/cache@v4
         with:
           path: build-appimage/cache
