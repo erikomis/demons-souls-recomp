@@ -16,6 +16,12 @@ PORT = os.path.join(ROOT, 'port')
 PS3RECOMP = os.path.join(ROOT, 'deps', 'ps3recomp')
 LIFTED_PATCH = os.path.join(ROOT, 'patches', 'lifted-code.patch')
 RUNTIME_PATCH = os.path.join(ROOT, 'patches', 'ps3recomp-local.patch')
+# ps3recomp's commit stores seven files with mixed CRLF / LF endings and the runtime patch is LF.
+# Git for Windows (core.autocrlf=true) compares them without the CRs; stock git elsewhere compares
+# byte for byte, so the patch failed on Linux. Every git apply on that checkout sets it itself:
+# Windows' usual "true", elsewhere "input" (also compares without CRs, but writes LF, so no script
+# in the checkout gets CRLF endings).
+GIT_EOL = ['-c', 'core.autocrlf=' + ('true' if os.name == 'nt' else 'input')]
 
 
 def say(msg=''):
@@ -105,12 +111,13 @@ def _restore_times(base, snap, paths):
 
 def _apply(cwd, patch_file, *flags, repo=False):
     """git apply in cwd. Outside a repository (port/) git must not find this checkout above it, or
-    it would take the patch's paths as relative to the checkout's top."""
+    it would take the patch's paths as relative to the checkout's top. In ps3recomp's checkout
+    (repo=True) the line-ending setting is GIT_EOL's."""
     env = dict(os.environ)
     if not repo:
         env['GIT_CEILING_DIRECTORIES'] = os.path.dirname(os.path.abspath(cwd))
-    return subprocess.run(['git', 'apply', '--whitespace=nowarn', '-p1', *flags, patch_file], cwd=cwd,
-                          capture_output=True, text=True, env=env)
+    return subprocess.run(['git', *(GIT_EOL if repo else []), 'apply', '--whitespace=nowarn', '-p1', *flags,
+                           patch_file], cwd=cwd, capture_output=True, text=True, env=env)
 
 
 def _history(rel):

@@ -354,7 +354,8 @@ def step_ps3recomp():
     git('-c', 'advice.detachedHead=false', 'checkout', '-q', '-f', PS3RECOMP_COMMIT, cwd=PS3RECOMP)
     git('reset', '-q', '--hard', cwd=PS3RECOMP)
     git('clean', '-q', '-fd', cwd=PS3RECOMP)
-    git('apply', '--whitespace=nowarn', os.path.join(ROOT, 'patches', 'ps3recomp-local.patch'), cwd=PS3RECOMP)
+    git(*patch_sync.GIT_EOL, 'apply', '--whitespace=nowarn', os.path.join(ROOT, 'patches', 'ps3recomp-local.patch'),
+        cwd=PS3RECOMP)   # GIT_EOL: the commit's mixed CRLF / LF files (patch_sync.py)
     with open(os.path.join(ROOT, 'patches', 'ps3recomp-local.patch'), 'rb') as f:
         patch_sync.save_runtime_state(PS3RECOMP_COMMIT, f.read())
     say('  patched')

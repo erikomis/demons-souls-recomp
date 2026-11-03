@@ -21,6 +21,18 @@ permissions:
   contents: read
 
 jobs:
+  patches:
+    # patches/ps3recomp-local.patch onto a fresh ps3recomp checkout, and the update from older versions of it
+    # (patch_sync), with stock Linux git -- what linux/setup.sh does. No game files; git history for the
+    # older versions.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply the runtime patch, fresh and as an update
+        run: python3 setup/selftest_patches.py
+
   appimage:
     runs-on: ubuntu-22.04   # oldest glibc still supported here = widest range of distros it runs on
     steps:
