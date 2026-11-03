@@ -17,9 +17,12 @@ story and endings; `set DES_MOVIES=0` skips them).
 
 **There is no online play yet.** Multiplayer will be added once the game is optimised.
 
+**Performance:** on high-end hardware the game is mostly smooth. Optimisations for lower-end PCs
+(fewer cores, older CPUs, Steam Deck) are happening now.
+
 I'm currently playing through the whole game to find and fix any spots that still run slower
 than they should (stutters, frame drops in heavy scenes). Boletarian Palace, the heaviest area
-tested so far, is already smooth. Expect more performance fixes as the playthrough goes on; see
+tested so far, is already smooth on a fast PC. Expect more performance fixes as the playthrough goes on; see
 [docs/NOTES.md](docs/NOTES.md) for the full development log (50 fixes and counting).
 
 If you hit a stutter or a crash, please report it: see
