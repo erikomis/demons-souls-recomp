@@ -13,8 +13,11 @@ update of this repo, steps 3 and 5 re-apply the patches that changed (setup/patc
 
 usage: SETUP.bat [image.iso | image.zip | dumped disc folder] [--key HEX | --key file.dkey]
                  [--rpcs3 path\\to\\rpcs3.exe] [--jobs N]
+
+On Linux the same steps run from linux/setup.sh or the AppImage (docs/LINUX.md); step 2 uses
+RPCS3's Linux AppImage and step 6 cross-compiles the Windows exe (setup/build.py).
 """
-import hashlib, json, os, shutil, subprocess, sys
+import glob, hashlib, json, os, shutil, subprocess, sys, urllib.parse, urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
@@ -35,6 +38,10 @@ EBOOT_ELF_SHA256 = '90eaa5e9e48b4874292badc311ccea253e6a622ff188bfbdbe76e6f68212
 # SPURS job binaries the game hands to SPU at run time; they sit inside the EBOOT (file offsets)
 SPURS_JOBS = [(0x176B480, 384, 'B1463A6F2DF960AC'), (0x176B600, 2064, 'BD46853E5ADE5098')]
 LIFT_ARGS = ['--code-end', '0x16bb5e4', '--chunks', '128']
+# What to tell you to run: the Linux launchers (linux/setup.sh, the AppImage) set these
+SETUP_NAME = os.environ.get('DS_SETUP_NAME') or 'SETUP.bat'
+PLAY_HINT = os.environ.get('DS_PLAY_HINT') or 'Double-click PLAY.bat to play.'
+RPCS3_LINUX_RELEASES = 'https://api.github.com/repos/RPCS3/rpcs3-binaries-linux/releases/latest'
 
 
 def say(msg=''):
@@ -52,9 +59,35 @@ def fail(msg):
 
 def ask(prompt):
     try:
-        return input(prompt).strip().strip('"')
+        t = input(prompt).strip().strip('"')
     except EOFError:
-        fail('no answer (input closed) -- run SETUP.bat in a console window')
+        fail(f'no answer (input closed) -- run {SETUP_NAME} in a console window')
+    if os.name != 'nt':   # what Linux terminals paste for a dropped file: 'quoted', file://, a\ b
+        t = t.strip("'")
+        if t.startswith('file://'):
+            t = urllib.parse.unquote(t[7:])
+        if not os.path.exists(t) and '\\' in t and os.path.exists(t.replace('\\', '')):
+            t = t.replace('\\', '')
+    return t
+
+
+def pick_file(title, filters):
+    """A file dialog on a Linux desktop (zenity or kdialog, whichever is there; a Steam Deck in desktop
+    mode has kdialog). None when there is none or it was cancelled -- then the path is typed."""
+    if os.name == 'nt' or not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+        return None
+    pats = ' '.join(f'*.{e} *.{e.upper()}' for e in filters)
+    for cmd in (['zenity', '--file-selection', f'--title={title}', f'--file-filter={title} | {pats}',
+                 '--file-filter=All files | *'],
+                ['kdialog', '--title', title, '--getopenfilename', os.path.expanduser('~'), f'{title} ({pats})']):
+        if shutil.which(cmd[0]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            p = r.stdout.strip()
+            return p if r.returncode == 0 and os.path.isfile(p) else None
+    return None
 
 
 def sha256(path):
@@ -99,6 +132,9 @@ def find_eboot_elf():
 
 def get_image(args, cfg):
     src = args.get('image') or cfg.get('image')
+    if not src or not os.path.exists(src):
+        say('  Pick your Demon\'s Souls (USA, BLUS-30443) disc image (.iso or Redump .zip)...')
+        src = pick_file("Demon's Souls disc image", ('iso', 'zip')) or src
     while not src or not os.path.exists(src):
         if src:
             say(f'  not found: {src}')
@@ -192,14 +228,46 @@ def step_game(args, cfg):
 # --- 2. EBOOT.BIN -> EBOOT.elf -----------------------------------------------------------------
 
 def find_rpcs3(args, cfg):
-    cands = [args.get('rpcs3'), os.environ.get('RPCS3'), cfg.get('rpcs3'),
-             os.path.join(ROOT, 'deps', 'rpcs3', 'rpcs3.exe'), shutil.which('rpcs3')]
+    """rpcs3.exe on Windows; on Linux the rpcs3 command or RPCS3's AppImage (in deps/rpcs3,
+    ~/Applications or ~/Downloads, where people keep AppImages)."""
+    cands = [args.get('rpcs3'), os.environ.get('RPCS3'), cfg.get('rpcs3')]
+    if os.name == 'nt':
+        cands.append(os.path.join(ROOT, 'deps', 'rpcs3', 'rpcs3.exe'))
+    else:
+        for d in (os.path.join(ROOT, 'deps', 'rpcs3'), '~/Applications', '~/Downloads'):
+            cands += sorted(glob.glob(os.path.join(os.path.expanduser(d), '[Rr][Pp][Cc][Ss]3*.AppImage')),
+                            reverse=True)
+    cands.append(shutil.which('rpcs3'))
     for c in cands:
         if c and os.path.isdir(c):
-            c = os.path.join(c, 'rpcs3.exe')
+            inner = [os.path.join(c, 'rpcs3.exe' if os.name == 'nt' else 'rpcs3')]
+            inner += sorted(glob.glob(os.path.join(c, '*.AppImage')), reverse=True)
+            c = next((i for i in inner if os.path.isfile(i)), None)
         if c and os.path.isfile(c):
             return os.path.abspath(c)
     return None
+
+
+def download_rpcs3():
+    """Linux: the newest RPCS3 AppImage from RPCS3's own GitHub releases -> deps/rpcs3."""
+    try:
+        rel = json.load(urllib.request.urlopen(RPCS3_LINUX_RELEASES, timeout=60))
+        a = next(a for a in rel['assets'] if a['name'].endswith('_linux64.AppImage'))
+    except (OSError, ValueError, KeyError, StopIteration) as e:
+        say(f'  could not look up the RPCS3 download ({e})')
+        return None
+    out = os.path.join(ROOT, 'deps', 'rpcs3', a['name'])
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    say(f'  downloading {a["name"]} ({a["size"] >> 20} MB) from {a["browser_download_url"]}')
+    try:
+        with urllib.request.urlopen(a['browser_download_url'], timeout=120) as r, open(out + '.part', 'wb') as f:
+            shutil.copyfileobj(r, f, 1 << 20)
+    except OSError as e:
+        say(f'  download failed: {e}')
+        return None
+    os.replace(out + '.part', out)
+    os.chmod(out, 0o755)
+    return out
 
 
 def step_decrypt(args, cfg):
@@ -215,25 +283,35 @@ def step_decrypt(args, cfg):
     elf = find_eboot_elf()
     if not elf:
         rpcs3 = find_rpcs3(args, cfg)
+        if not rpcs3 and os.name != 'nt':
+            say('  The game\'s EBOOT.BIN is a signed+encrypted PS3 executable (SELF); RPCS3 (the PS3')
+            say('  emulator, open source) decrypts it. It is not part of this kit.')
+            if ask('  Download RPCS3\'s Linux AppImage from its GitHub releases now (~80 MB)? [Y/n] ').lower() != 'n':
+                rpcs3 = download_rpcs3()
+        name = 'rpcs3.exe' if os.name == 'nt' else 'RPCS3 AppImage'
         while not rpcs3:
             say('  The game\'s EBOOT.BIN is a signed+encrypted PS3 executable (SELF); RPCS3 decrypts it.')
-            say('  Get RPCS3 from https://rpcs3.net/download (unzip it anywhere), then drag rpcs3.exe')
+            say(f'  Get RPCS3 from https://rpcs3.net/download (unzip it anywhere), then drag the {name}')
             say('  here and press Enter. (Or decrypt it yourself: RPCS3 -> Utilities -> Decrypt PS3')
             say(f'  Binaries -> {eboot}, then just press Enter.)')
-            t = ask('  rpcs3.exe: ')
+            t = ask(f'  {name}: ')
             if not t and find_eboot_elf():
                 break
             rpcs3 = find_rpcs3({'rpcs3': t}, {})
         if rpcs3:
             cfg['rpcs3'] = rpcs3; save_config(cfg)
             say('  running rpcs3 --decrypt (a window may flash up)')
+            # an AppImage runs without FUSE this way (a Steam Deck or a container may not have it)
+            env = dict(os.environ, APPIMAGE_EXTRACT_AND_RUN='1') if rpcs3.endswith('.AppImage') else None
             try:
-                subprocess.run([rpcs3, '--decrypt', eboot], timeout=180)
+                subprocess.run([rpcs3, '--decrypt', eboot], timeout=300, env=env)
             except subprocess.TimeoutExpired:
                 pass
+            except OSError as e:
+                say(f'  could not run {rpcs3}: {e}')
         elf = find_eboot_elf()
         while not elf:
-            say('  RPCS3 did not write EBOOT.elf (is another RPCS3 window open? close it and run SETUP.bat')
+            say(f'  RPCS3 did not write EBOOT.elf (is another RPCS3 window open? close it and run {SETUP_NAME}')
             say('  again), or decrypt by hand: RPCS3 -> Utilities -> Decrypt PS3 Binaries ->')
             say(f'  {eboot}  -- it writes EBOOT.elf next to it.')
             if ask('  Press Enter when EBOOT.elf is there (or type q to quit): ').lower() == 'q':
@@ -359,7 +437,7 @@ def main():
         else:
             args['image'] = x
     if shutil.which('git') is None:
-        fail('git is not installed (SETUP.bat normally checks this)')
+        fail(f'git is not installed ({SETUP_NAME} normally checks this)')
     cfg = load_config()
     say("Demon's Souls (BLUS-30443) -- ps3recomp PC port setup")
     step_game(args, cfg)
@@ -371,7 +449,7 @@ def main():
         os.makedirs(os.path.join(ROOT, d), exist_ok=True)
     if build.build(jobs=args.get('jobs')):
         fail('the build failed -- see the messages above')
-    say('\nAll done. Double-click PLAY.bat to play.')
+    say('\nAll done. ' + PLAY_HINT)
 
 
 if __name__ == '__main__':

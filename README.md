@@ -38,6 +38,11 @@ takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
 - **Visual Studio 2022** (Community or the free **Build Tools**) with *Desktop development with C++*,
   and **LLVM** (clang-cl) 17 or newer. If they are missing, setup offers to install them with winget.
 
+**Linux / Steam Deck (experimental):** a setup + play kit (an AppImage) builds the same port from your
+own disc image on Linux and runs it through Proton. See [docs/LINUX.md](docs/LINUX.md).
+**It has not been tested on a real Linux install or Steam Deck yet** (only its build steps, on Windows
+and on GitHub's servers), so expect problems, and please report how it goes.
+
 ## Build it (one time)
 
 1. Download this repo (green **Code** button → *Download ZIP*, or `git clone`) and unpack it
@@ -213,6 +218,8 @@ patches/lifted-code.patch    this port's edits to the recompiled game code (fram
 tools/                       disc extraction, UDF names, SPURS job lifting, perf report + issue zip, mod installer,
                              model export/import (flver_tool.py, souls_formats.py)
 docs/NOTES.md                development log: every fix, why, and how it was measured
+linux/, docs/LINUX.md        Linux / Steam Deck kit: setup.sh, play.sh, the AppImage (linux/appimage)
+setup/clang-cl-xwin.cmake    the cross toolchain Linux builds with (clang-cl + an SDK fetched by xwin)
 ```
 
 Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs) is in `.gitignore`.

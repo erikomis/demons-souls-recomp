@@ -1,0 +1,109 @@
+# The Linux / Steam Deck setup + play kit (docs/LINUX.md): a tools-only AppImage. It is built here from
+# this repo plus open-source tools, never from game data (linux/appimage/build-appimage.sh refuses any).
+name: Linux AppImage (tools only)
+
+on:
+  push:
+    paths: [linux/**, setup/**, tools/**, patches/**, project/**, .github/workflows/linux-appimage.yml]
+  pull_request:
+    paths: [linux/**, setup/**, tools/**, patches/**, project/**, .github/workflows/linux-appimage.yml]
+  workflow_dispatch:
+    inputs:
+      cross_build_test:
+        description: >-
+          Also download the Microsoft CRT + Windows SDK with xwin (accepting Microsoft's license,
+          https://go.microsoft.com/fwlink/?LinkId=2086102, for this CI run only; nothing of it is kept)
+          and cross-compile ps3recomp's runtime library with the AppImage's tools
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04   # oldest glibc still supported here = widest range of distros it runs on
+    steps:
+      - uses: actions/checkout@v4
+      # The AppImage's git and the libraries it needs are GPL/LGPL: build-appimage.sh fetches their
+      # source packages (apt-get source), published below next to the AppImage
+      - name: Enable Ubuntu and PPA source packages
+        run: |
+          sudo python3 - <<'EOF'
+          import glob, re, subprocess
+          # the runner's own entries point at a mirror list file (mirror+file:), so the Ubuntu archive
+          # is named here; the PPAs' entries (git-core) are taken from their files
+          ours = re.compile(r'launchpadcontent\.net|launchpad\.net|ubuntu\.com')
+          code = subprocess.run(['lsb_release', '-cs'], capture_output=True, text=True).stdout.strip()
+          lines = {f'deb-src http://archive.ubuntu.com/ubuntu {code}{s} main restricted universe multiverse'
+                   for s in ('', '-updates', '-security')}
+          for f in ['/etc/apt/sources.list'] + glob.glob('/etc/apt/sources.list.d/*.list'):
+              for l in open(f):
+                  if l.startswith('deb ') and ours.search(l):
+                      lines.add('deb-src ' + l[4:].strip())
+          for f in glob.glob('/etc/apt/sources.list.d/*.sources'):
+              s = open(f).read()
+              if ours.search(s) and not f.endswith('-ds-src.sources'):
+                  open(f[:-len('.sources')] + '-ds-src.sources', 'w').write(
+                      re.sub(r'(?m)^Types:.*$', 'Types: deb-src', s))
+          open('/etc/apt/sources.list.d/ds-deb-src.list', 'w').write(''.join(l + '\n' for l in sorted(lines)))
+          EOF
+          cat /etc/apt/sources.list.d/ds-deb-src.list
+      # The runner's git comes from a PPA that is no longer configured, so its source package cannot be
+      # fetched: the bundled git is Ubuntu's own, whose source is in the archive
+      - name: Tools for packaging
+        run: |
+          sudo apt-get update -q
+          v=$(apt-cache madison git | awk -F'|' '{gsub(/ /, "", $2); print $2}' | grep -v ppa | head -n 1)
+          echo "Ubuntu's git: $v"
+          sudo apt-get install -yq --allow-downgrades "git=$v" "git-man=$v" patchelf zstd file dpkg-dev
+          git --version
+      - uses: actions/cache@v4
+        with:
+          path: build-appimage/cache
+          key: appimage-downloads-${{ hashFiles('linux/appimage/build-appimage.sh', 'setup/build.py') }}
+          restore-keys: appimage-downloads-
+      - name: Build the AppImage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          bash linux/appimage/build-appimage.sh "$PWD/DemonsSoulsRecomp-Setup-x86_64.AppImage"
+          "$PWD/DemonsSoulsRecomp-Setup-sources.tar"
+      - name: Self-test on the runner
+        run: APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest
+      # No Python, no git, no compiler: what a fresh Steam Deck or a minimal distro looks like
+      - name: Self-test in bare Debian 12
+        run: >-
+          docker run --rm -v "$PWD:/w" -w /w debian:bookworm-slim
+          sh -c 'APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest'
+      - name: Self-test in bare Arch Linux (SteamOS is Arch-based)
+        run: >-
+          docker run --rm -v "$PWD:/w" -w /w archlinux:latest
+          sh -c 'APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DemonsSoulsRecomp-Setup-x86_64.AppImage
+          path: DemonsSoulsRecomp-Setup-x86_64.AppImage
+          if-no-files-found: error
+      # Same place, same lifetime as the AppImage: the source code of its GPL/LGPL parts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DemonsSoulsRecomp-Setup-sources
+          path: DemonsSoulsRecomp-Setup-sources.tar
+          if-no-files-found: error
+          compression-level: 0
+
+  cross-build-test:
+    if: github.event_name == 'workflow_dispatch' && inputs.cross_build_test
+    needs: appimage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DemonsSoulsRecomp-Setup-x86_64.AppImage
+      - name: Cross-compile ps3recomp's runtime with the AppImage (xwin CRT/SDK, clang-cl, lld-link)
+        env:
+          XWIN_ACCEPT_LICENSE: "true"
+        run: |
+          chmod +x DemonsSoulsRecomp-Setup-x86_64.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 ./DemonsSoulsRecomp-Setup-x86_64.AppImage selftest --cross-runtime "$RUNNER_TEMP/ds"
