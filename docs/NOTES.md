@@ -1621,6 +1621,25 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       thread, unwinder deadlock, TEB read race, slot-0 race); 2 refuted.
     - Next (measuring on a 5800X): native synth2 resampler loop, cheaper VM_WRITE_COH,
       per-draw renderer costs, -O2 for the remaining hot -O1 units.
+76. **Straight into offline play: no "Cannot connect (009)" / "Start the game in Offline Mode" boxes
+    (2026-11-03, GitHub issue #5):**
+    - NEW GAME and LOAD GAME build a login task (func_0019AFE8; state +0x8, handler table of 28 states filled by
+      func_001993F0, message to show at +0x64). State 0 (func_00197890) asks func_0052BD50(*netmgr) for the
+      "network connected" byte (net singleton +0x69), always 0 here -> +0x64 = 0xC546 (msg 50502 "Cannot connect to the
+      Demon's Souls server ... (009)"), state 0x10 (func_00199C00: func_0020DC58(0) = online-mode byte 0, the box,
+      func_0052B260(*netmgr) = net session shut down) -> 0x11 (func_00199B88: 0xC545 = 50501 "Start the game in
+      Offline Mode") -> 0x13 -> 0x1B -> -1. Messages from MSG/NA_ENGLISH/menu.msgbnd entry 78 (FMG v1 BE); every ID is
+      loaded as li 0 + ori 0xC5xx. The game's own automatic-offline route (state 1 -> C549 -> 0x13) does the same
+      teardown without the 009 box.
+    - PORT PATCH (ppu_recomp_018.cpp func_00197890, loc_001978F0): with no network it does func_0020DC58(0) +
+      func_0052B260(*netmgr), +0x64 = -1, state 0x13 -- the two boxes' side effects without the boxes. Log once
+      "[des] auto-offline: ...". DES_AUTO_OFFLINE=0 = the prompts again. HLE answers were not changed: reporting a
+      connection sends the game down sign-in / server login, which still ends in the Offline Mode box.
+    - Checked (sandbox, frame dumps): LOAD GAME -> Profile List directly; NEW GAME -> Create Profile path (with 4
+      profiles: "Profile slots full", the normal box); a save loads into the Palace (heavy75 flow); DES_AUTO_OFFLINE=0
+      -> the 009 box. Old test PAD_SCRIPTs that pressed Cross for these boxes now press it in the world (harmless in
+      the runs so far; retime if one matters).
+    - Found with an agent workflow (message IDs from the FMGs + the login state machine).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

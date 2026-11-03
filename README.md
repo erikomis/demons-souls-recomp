@@ -248,6 +248,9 @@ Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs)
 
 ## Troubleshooting
 
+- **No online play.** Demon's Souls' servers closed in 2018; the game now goes straight into offline play
+  without the "Cannot connect (009)" and "Offline Mode" boxes (`set DES_AUTO_OFFLINE=0` shows them again).
+
 - **"RPCS3 did not write EBOOT.elf"**: close any open RPCS3 window and run SETUP.bat again, or decrypt
   by hand: RPCS3 → *Utilities* → *Decrypt PS3 Binaries* → `game\PS3_GAME\USRDIR\EBOOT.BIN`.
   If RPCS3 itself complains, install the PS3 firmware in RPCS3 first (*File → Install Firmware*).
