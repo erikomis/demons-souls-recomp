@@ -25,6 +25,11 @@ import glob, hashlib, os, re, shutil, subprocess, sys, tarfile, tempfile, urllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, 'port', 'build_opt')
+# Copies of the patches the last successful full build was made from. PLAY.bat compares them with
+# patches/: a folder updated (git pull, a new ZIP) but not rebuilt -- or whose rebuild failed or was
+# stopped -- would run the old exe with the new files (GitHub #4: a black screen at the title).
+BUILT = os.path.join(BUILD, 'built')
+PATCHES = ('ps3recomp-local.patch', 'lifted-code.patch')
 MIN_CLANG = 17
 EXE = '.exe' if os.name == 'nt' else ''
 XWIN_DIR = os.environ.get('DS_XWIN_DIR') or os.path.join(ROOT, 'deps', 'xwin')
@@ -415,10 +420,14 @@ def build(jobs=None, targets=()):
         rc = subprocess.run(['cmd', '/d', '/c', bat]).returncode
     finally:
         os.remove(bat)
-    return finish(rc, avx2)
+    return finish(rc, avx2, full=not targets)
 
 
-def finish(rc, avx2):
+def finish(rc, avx2, full=True):
+    if rc == 0 and full:   # only a whole build: "BUILD.bat <target>" may leave the exe as it was
+        os.makedirs(BUILT, exist_ok=True)
+        for n in PATCHES:
+            shutil.copyfile(os.path.join(ROOT, 'patches', n), os.path.join(BUILT, n))
     if rc == 0:
         marker = os.path.join(BUILD, 'no_avx2.txt')
         if avx2:

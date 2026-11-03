@@ -55,7 +55,8 @@ not confirmed yet; please report how it goes.
 1. Download the newest release: **[Releases](https://github.com/timboat/demons-souls-recomp/releases/latest)** → `DemonsSoulsRecomp-<version>.zip` (or the
    green **Code** button → *Download ZIP*, or `git clone`), and unpack it somewhere with enough
    space, ideally a path without unusual characters. There is no ready-to-play download: the game
-   is built on your PC from your own disc.
+   is built on your PC from your own disc. The release ZIP already has `DemonsSoulsLauncher.exe`:
+   start it and press Play, and it offers to run SETUP.bat for you.
 2. **Drag your disc image onto `SETUP.bat`**, or double-click `SETUP.bat` and it asks for it.
 3. Answer its questions: the disc key if the image is encrypted, and where `rpcs3.exe` is.
 
@@ -82,6 +83,8 @@ replacing files; `game/`, `port/`, `deps/` and your saves are not in the ZIP, so
 run **`BUILD.bat`** (with a ZIP copy, *Check for updates* in the launcher just rebuilds). It re-applies
 the patches that changed since your last setup and recompiles only the files they touch. If it
 says so, run `SETUP.bat` instead: that also works, keeps the game files and skips what is done.
+If you forget, Play notices that the folder was updated but not rebuilt and runs BUILD.bat (PLAY.bat
+asks first); an old build with new files can stay on a black screen.
 Setups made before 2026-11-03 could not take updates (the patches were applied once and never
 again); the first `BUILD.bat` or `SETUP.bat` with this version brings them up to date.
 

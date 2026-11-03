@@ -196,8 +196,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
---- a/recompiled/ppu_recomp_011.cpp	2026-11-02 18:26:54.092515200 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-11-02 18:26:54.108621100 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-11-03 15:23:42.651755400 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-03 15:23:42.665783400 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -213,7 +213,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,280 @@
+@@ -38897,8 +38899,281 @@
          return;
  }
  
@@ -386,7 +386,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +          static int said;
 +          if (!said) { said = 1;
 +              const char* v[] = { "DES_FPS", "PS3_VBLANK_HZ", "PS3_CLOCK_SCALE", "LD_PRESENT_INTERVAL",
-+                                  "LD_PRESENT_PACE", "DES_GAME", "DES_REFRESH" };
++                                  "LD_PRESENT_PACE", "DES_GAME", "DES_REFRESH", "DES_RES_SCALE", "LD_RES_SCALE",
++                                  "LD_RES_SCALE_SHADOW", "DES_FULLSCREEN", "DES_MOVIES", "DES_CUT_BLEND" };
 +              char info[512]; info[0] = 0;
 +              for (unsigned i = 0; i < sizeof v / sizeof v[0]; i++) { const char* x = getenv(v[i]);
 +                  snprintf(info + strlen(info), sizeof info - strlen(info), " %s=%s", v[i], x && *x ? x : "-"); }

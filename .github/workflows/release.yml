@@ -1,0 +1,75 @@
+# Release downloads: the tools ZIP with DemonsSoulsLauncher.exe already in it, plus the launcher on its own.
+# Neither holds game code: the game is still built on each player's PC from their own disc (SETUP.bat).
+# The launcher is this repo's own program (project/launcher), built here so the exe carries no paths or
+# names from anyone's PC. Runs when a release is published, or by hand for an existing tag.
+name: Release downloads
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build the downloads for (they replace the release's current ones)
+        required: true
+
+permissions:
+  contents: write   # to attach the files to the release
+
+jobs:
+  assets:
+    runs-on: windows-2022
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Build DemonsSoulsLauncher.exe (static C runtime, so nothing has to be installed)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null   # copy_to_root.cmake copies into it; it does not create it
+          cmake -S project/launcher -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded "-DDS_LAUNCHER_DEST=$PWD/out"
+          if ($LASTEXITCODE) { exit 1 }
+          cmake --build build --config Release
+          if ($LASTEXITCODE) { exit 1 }
+          if (!(Test-Path out/DemonsSoulsLauncher.exe)) { throw "the launcher was not built" }
+
+      - name: Check it needs no Visual C++ runtime
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+                     Where-Object FullName -like '*Hostx64\x64*' | Select-Object -First 1
+          $deps = & $dumpbin.FullName /dependents out/DemonsSoulsLauncher.exe | Out-String
+          $deps
+          if ($deps -match 'VCRUNTIME|MSVCP|api-ms-win-crt') { throw "the launcher links the dynamic C runtime" }
+
+      - name: Tools ZIP with the launcher in it
+        shell: pwsh
+        run: |
+          $zip = "DemonsSoulsRecomp-$env:TAG.zip"
+          git archive --format=zip "--prefix=DemonsSoulsRecomp-$env:TAG/" -o $zip HEAD   # HEAD = the tag checked out above
+          if ($LASTEXITCODE) { exit 1 }
+          @'
+          import os, zipfile
+          tag = os.environ['TAG']
+          with zipfile.ZipFile('DemonsSoulsRecomp-%s.zip' % tag, 'a', zipfile.ZIP_DEFLATED) as z:
+              z.write('out/DemonsSoulsLauncher.exe', 'DemonsSoulsRecomp-%s/DemonsSoulsLauncher.exe' % tag)
+              names = z.namelist()
+          bad = [n for n in names if n.lower().endswith(('.elf', '.self', '.sprx', '.sdat', '.pam', '.dcx', '.iso', '.dkey'))]
+          assert not bad, bad
+          print(len(names), 'files')
+          '@ | Set-Content add_launcher.py
+          python add_launcher.py
+          if ($LASTEXITCODE) { exit 1 }
+
+      - name: Attach to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload $env:TAG "DemonsSoulsRecomp-$env:TAG.zip" out/DemonsSoulsLauncher.exe --clobber
+          if ($LASTEXITCODE) { exit 1 }

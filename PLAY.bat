@@ -134,6 +134,39 @@ if not exist "%EXE%" (
   if not defined DES_LAUNCHER pause
   exit /b 1
 )
+rem After an update (git pull, or a new ZIP unpacked over this folder) the game has to be rebuilt:
+rem BUILD.bat re-applies the patches that changed and recompiles. Until then this would run the OLD
+rem exe with the NEW settings -- e.g. movies on with an exe that cannot play them stays on a black
+rem screen (GitHub #4). A successful full build leaves a copy of the patches it was made from in
+rem port\build_opt\built (setup/build.py); when the folder's patches differ from those (or a build from
+rem before 2026-11-03 left none, or a rebuild failed or was stopped) the game was not rebuilt.
+rem (gotos, not ( ) blocks: a ")" in the folder's path would end a block.)
+call :stale
+if not defined STALE goto play
+if defined DES_LAUNCHER goto stale_launcher
+echo.
+echo This folder was updated, but the game was not rebuilt yet. The old build may not work with
+echo the new files, for example a black screen at the title.
+choice /c YN /m "Rebuild now with BUILD.bat (a few minutes)"
+if errorlevel 2 goto play
+call "%D%\BUILD.bat"
+if errorlevel 1 goto build_failed
+goto play
+:stale_launcher
+rem The launcher runs this file without a window: rebuild in a window of its own and wait for it (the
+rem launcher keeps Play greyed out meanwhile), then start the game if the build is now current.
+start "Demon's Souls - rebuilding after the update" /wait /d "%D%" cmd /c call "%D%\BUILD.bat" ^& pause
+call :stale
+if not defined STALE goto play
+exit /b 1
+:build_failed
+echo BUILD.bat did not finish. If it asks for SETUP.bat, run SETUP.bat: it keeps your game files.
+pause
+exit /b 1
+:play
+rem (again: a rebuild may have switched between the AVX2 and the plain build)
+set "PS3_REQUIRE_AVX2="
+if not exist "%D%\port\build_opt\no_avx2.txt" set "PS3_REQUIRE_AVX2=1"
 rem A killed run can leave truncated files in the HDD1 cache that the next run trusts.
 if exist "%D%\hdd1\cache" rmdir /s /q "%D%\hdd1\cache"
 if not exist "%D%\logs" mkdir "%D%\logs"
@@ -155,6 +188,15 @@ rem Custom frame rate N (31-240): 2 vblanks per game frame, guest clock N/30 (at
 rem 60 fps and uncapped modes), shortest adaptive step 1/N above 60. When the monitor's refresh is a
 rem whole multiple of N every frame stays up the same number of refreshes (vsync, even pacing);
 rem otherwise vsync is off, which is smooth on a G-Sync / FreeSync screen and may tear on others.
+rem STALE=1 when patches\ differs from what the last successful build used (see :play above).
+:stale
+set "STALE="
+for %%P in (ps3recomp-local.patch lifted-code.patch) do (
+  if not exist "%D%\port\build_opt\built\%%P" set "STALE=1"
+  fc /b "%D%\patches\%%P" "%D%\port\build_opt\built\%%P" >nul 2>&1 || set "STALE=1"
+)
+exit /b 0
+
 :custom_fps
 set "N="
 set /a "N=%DES_FPS%" 2>nul
