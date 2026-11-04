@@ -414,6 +414,12 @@ def xwin_sdk():
            'splat', '--output', XWIN_DIR, '--use-winsysroot-style', '--preserve-ms-arch-notation']
     if os.name == 'nt':
         cmd.append('--disable-symlinks')
+    if os.name == 'nt':
+        # xwin.exe needs the Visual C++ runtime (VCRUNTIME140.dll); setup.py installs it for RPCS3 in step 2, but a
+        # setup whose EBOOT.elf was already there skips that (Windows Sandbox test: "VCRUNTIME140.dll was not found")
+        import setup as _setup   # setup.py imports this module too; by now both are loaded
+        if not _setup.vc_runtime_ok('xwin (it downloads the C runtime + Windows SDK)'):
+            return None
     shutil.rmtree(XWIN_DIR, ignore_errors=True)
     say('  > xwin splat (downloading the Microsoft CRT + SDK, a few minutes)')
     if subprocess.run(cmd).returncode:

@@ -409,14 +409,14 @@ def install_vcredist(run=True):
             pass
 
 
-def vc_runtime_ok():
-    """RPCS3's Windows build needs a recent Microsoft Visual C++ runtime (MSVCP140.dll and friends), which
+def vc_runtime_ok(who='RPCS3'):
+    """RPCS3's Windows build (and xwin.exe, build.py) needs a recent Microsoft Visual C++ runtime (MSVCP140.dll and friends), which
     most PCs have from games and other programs. Install Microsoft's when it is missing or too old: with winget
     when there is one, else Microsoft's installer straight from Microsoft (Windows Sandbox has no winget)."""
     if vc_current():
         return True
     have = vc_versions()[0]
-    say('  RPCS3 needs the Microsoft Visual C++ runtime ' +
+    say(f'  {who} needs the Microsoft Visual C++ runtime ' +
         (f'{VCRT_MIN[0]}.{VCRT_MIN[1]} or newer (this PC has {have[0]}.{have[1]}).' if have else 'which is not installed on this PC.'))
     if ask('  Install it now (Microsoft\'s own installer, about 25 MB)? [Y/n] ').lower() != 'n':
         if shutil.which('winget') and os.environ.get('DS_TEST_NO_WINGET') != '1' and subprocess.run(
