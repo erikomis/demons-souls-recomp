@@ -197,6 +197,13 @@ or **PageUp / PageDown** are L1 / R1. A click in a menu needs no capturing click
 buttons attack and block as before. `set PAD_MENU_MOUSE=0` turns this off. (Pointing at an item is not supported
 yet.)
 
+**Button icons follow what you play with:** while the keyboard / mouse is what you used last, the game's button
+icons (key guides, "Pick up" prompts, the HUD's equipment boxes, the Start menu tabs) show the keys and mouse
+buttons instead of the PS3 buttons; touch the controller and they are PS3 buttons again. BUILD.bat draws them
+once from your own copy of the game into `textures\kbm` (the letters are the game's own font). `set LD_TEX_KBM=0`
+always shows the PS3 buttons, `set LD_TEX_KBM=1` always the keyboard ones. (The title's "PRESS START BUTTON" is
+plain text and stays.)
+
 The mouse turns the camera directly (no stick dead zone or speed limit) and follows the game's invert-camera
 options. `set PAD_MOUSE_LOOK_SENS=0.0012` sets the sensitivity (radians per mouse count), `set PAD_MOUSE_LOOK=0`
 goes back to the old stick-style mouse.

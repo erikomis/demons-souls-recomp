@@ -2050,6 +2050,42 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       part; the queue line ping-pong between HighGraphics and the dispatcher is.
     - Next: fewer round trips per command rather than cheaper ones -- e.g. the dispatcher's empty-queue spin
       (GETLLAR + RdEventStat, 0.87 per command) re-reads the very line HighGraphics is writing.
+91. **Keyboard / mouse button icons instead of the PS3 ones while the keyboard / mouse is used (2026-11-04, asked
+    for: "mouse and keyboard icons for the HUD instead of the ps3 ones when mnk is used"; the art was shown and
+    approved before this went in):**
+    - Where the game's button art is: every in-text button (key guides, "Pick up" prompts, messages) is a FMG tag
+      that draws an icon character (U+2460..) from the font page DSFont24_1000 (FONT\NA_ENGLISH\dsfont24.tpf; the
+      glyph table dsfont24.ccm says which cell); the HUD equipment boxes take L / R / square from Menu08, the Start
+      menu's tab bar its L1 / R1 plates and engraved L2 / R2 from Menu00 (MENU\menu.tpf). Three atlases cover them
+      all, and as texture-pack keys (fix 60) they are CE4F0427E62376F5, 073A392EE5388F44 and 0740A345421ED259.
+    - tools/kbm_icons.py redraws each PS3 button cell of those atlases as the key / mouse button it is on the souls
+      layout: E / Space / R / F for cross / circle / square / triangle, a mouse with the left / right button lit for
+      R1 / L1, Shift / Ctrl for R2 / L2, Tab and C for R3 / L3, arrow keys for the d-pad, a moving mouse for the
+      right stick, a 4-key cluster without letters for the left stick (keys go by position: AZERTY = ZQSD), Enter /
+      Backspace for START / SELECT, and Ctrl / Shift engraved next to the tabs. Letters are cut from the game's own
+      serif font, plates / mice / arrows drawn in the colours of the game's own button art (cream lettering, gold
+      arrows, dark plates). Built from the player's own disc: setup/build.py runs it after every successful build
+      when textures\kbm\version.txt differs from the script's VERSION (installs Pillow into .venv if a setup from
+      before this lacks it; a failure only leaves the PS3 icons). Each atlas is checked against the English
+      BLUS-30443 one first (sha1 of the decoded texture); another disc's is left alone. textures\kbm is ignored by
+      git: it is made from the game.
+    - rsx_tex_pack.c: <dir>\kbm (LD_TEX_DIR, default textures) is scanned like replace\ into the same table under
+      KEY ^ a salt; texpack_kbm_find(key), texpack_kbm_want() (LD_TEX_KBM=0 never, 1 always, else
+      ps3_host_kbm_active()). LD_TEX_KBM_DIR = another folder.
+    - rsx_live_draw.c: a texture cache entry remembers its kbm slot (kbm_idx) and which set it was made for
+      (kbm_shown). tp_lookup takes the kbm file while it is wanted, else the replace\ file or the guest art. On a
+      cache hit whose set no longer matches (read once a frame), tp_kbm_switch rebuilds the entry from the same
+      content (no dump) and swaps it in; a kbm file still loading shows the PS3 art until tp_poll swaps it in.
+    - cellPad.c: ps3_host_kbm_active() = no pad on port 0, or a key / mouse button / captured mouse used after the
+      pad (the same "keyboard used last" that already decides mouse capture); kept while the window is in the
+      background; 0 with PAD_NO_KEYBOARD. PAD_TEST_FAKE_PAD="<sec>:<hex mask>:<dur>,..." (TEST) also holds buttons
+      on the fake pad.
+    - Test (2x internal resolution, a save in the Nexus, fake pad + scripted keys): pad -> L / R / square on the
+      HUD; C pressed -> both mice and R at once; L3 on the pad -> PS3 again; Start menu opened with Enter -> "arrows
+      :Select E:Enter Space:Close", the pad -> "d-pad:Select cross:Enter circle:Close", a key -> keyboard again.
+      The generated atlases are pixel-identical to the approved prototype's.
+    - Not covered: "PRESS START BUTTON" on the title is plain text (no icon), and other languages' font pages
+      (another FONT folder) keep the PS3 icons.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

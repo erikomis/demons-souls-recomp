@@ -739,7 +739,38 @@ def finish(rc, avx2, full=True):
             with open(marker, 'w') as f:
                 f.write('Built without AVX2 (setup/build.py); PLAY.bat does not require it.\n')
         say(f'\n  built {os.path.join(BUILD, "DemonsSoulsRecomp.exe")}')
+        kbm_icons()
     return rc
+
+
+def kbm_icons():
+    """Keyboard / mouse button icons (docs/NOTES.md fix 91): tools/kbm_icons.py draws them into textures/kbm from
+    this PC's copy of the game, once, and again when the script's art changes (its VERSION). Never stops the
+    build: without them the game shows the PS3 buttons as before."""
+    out = os.path.join(ROOT, 'textures', 'kbm')
+    usr = os.path.join(ROOT, 'game', 'PS3_GAME', 'USRDIR')
+    try:
+        src = open(os.path.join(ROOT, 'tools', 'kbm_icons.py'), encoding='utf-8').read()
+        want = re.search(r'^VERSION = (\d+)', src, re.M).group(1)
+        try:
+            with open(os.path.join(out, 'version.txt')) as f:
+                have = f.read().strip()
+        except OSError:
+            have = ''
+        if have == want or not os.path.isdir(usr):
+            return
+        try:
+            import PIL  # noqa: F401
+        except ImportError:   # a setup from before fix 91 (setup/requirements.txt has it now)
+            say('  installing Pillow (draws the keyboard / mouse button icons) ...')
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '-q', 'Pillow>=10'],
+                           check=True, stdin=subprocess.DEVNULL)
+        sys.path.insert(0, os.path.join(ROOT, 'tools'))
+        import kbm_icons as k
+        n = k.make(usr, out)
+        say(f'  keyboard / mouse button icons: {n} of 3 made in {out}')
+    except Exception as e:   # noqa: BLE001 -- an optional extra
+        say(f'  keyboard / mouse button icons not made ({e}); the game shows the PS3 buttons')
 
 
 def sync_patches():

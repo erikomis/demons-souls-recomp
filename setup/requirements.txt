@@ -3,3 +3,4 @@ cryptography>=41     # disc decryption (AES) in tools/iso_extract.py
 cmake>=3.24
 ninja>=1.11
 zstandard>=0.22  # the portable LLVM download (.tar.zst), setup/build.py
+Pillow>=10       # the keyboard / mouse button icons (tools/kbm_icons.py)

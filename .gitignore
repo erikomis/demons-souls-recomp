@@ -13,6 +13,7 @@
 /captures/
 /textures/dump/
 /textures/replace/
+/textures/kbm/
 /models/*
 !/models/README.txt
 /.venv/
