@@ -257,8 +257,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
---- a/recompiled/ppu_recomp_011.cpp	2026-11-03 15:23:42.651755400 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-11-03 15:23:42.665783400 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-11-03 22:09:03.793740600 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-03 22:09:03.807245700 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -274,7 +274,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,281 @@
+@@ -38897,8 +38899,295 @@
          return;
  }
  
@@ -283,6 +283,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +extern "C" void ps3_host_title_suffix(const char* s);
 +extern "C" void ps3_perf_note(const char* fmt, ...);   /* rsx_live_draw.c (DES_PERF) */
 +extern "C" int ps3_host_pad_debug(int* rx, int* ry, int* polls, int* mdx, int* mdy);   /* cellPad.c */
++extern "C" void ps3_host_menu_state(unsigned mask);   /* cellPad.c, fix 89 */
 +extern "C" unsigned long long ps3_thread_cpu_us(void);   /* rsx_live_draw.c */
 +extern "C" void ps3_perf_step_begin(void);               /* rsx_live_draw.c (DES_PERF_STACKS) */
 +extern "C" __declspec(dllimport) void __stdcall Sleep(unsigned long ms);   /* kernel32 (DES_HITCH_AT) */
@@ -368,6 +369,19 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +          fprintf(stderr, "[des] steps %.1f/s, game time %.3f s per real s (step %.5f)\n",
 +                  steps / secs, steps * step / secs, step);
 +          t0 = t; n0 = n; } } }
++    /* Menu state for the mouse in menus (PORT PATCH, NOTES fix 89): every step the game's own menu bitmask --
++     * func_00720F80, which folds the open flags at menuMan+0x14+id*4 (menuMan = *0x01B4B114) into the mask whose
++     * bits 0x7FFF777F keep the player's action buttons off -- goes to cellPad.c (ps3_host_menu_state), which then
++     * turns the mouse into menu controls. func_00720F80 reads menuMan without a null check, hence the guard; it runs
++     * with the stack pointer moved below this function's red zone, the registers restored after. */
++    { uint32_t mask = 0;
++      if (vm_read32(0x01B4B114)) {
++          ppu_context save = *ctx;
++          ctx->gpr[1] -= 0x400; ctx->lr = 0x0001B8D0;
++          func_00720F80(ctx); DRAIN_TRAMPOLINE(ctx);
++          mask = (uint32_t)ctx->gpr[3];
++          *ctx = save; }
++      ps3_host_menu_state(mask); }
 +    /* God mode (PORT PATCH): F9 in the game window toggles it, DES_GOD=1 starts with it on.
 +     * While on, every step the player (character 10000) gets the flag the event scripts set with
 +     * SetDeadMode(10000, true) -- "the player does not die" (bit 0x10 of the flags at chr+0x310) --

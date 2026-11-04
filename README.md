@@ -191,6 +191,12 @@ camera once you press a key or mouse button, and the controller takes it back wh
 | Alt+Enter / F11 | borderless fullscreen on/off (`set DES_FULLSCREEN=1` starts in it) |
 | F9 | god mode on/off (no death, HP/MP/stamina stay full) |
 
+**In menus** (title screen, Start menu, inventory, shops, level-up, ...) the mouse works as menu controls: **left
+click = confirm**, **right click = back**, the **wheel** moves the cursor up and down, and the mouse's side buttons
+or **PageUp / PageDown** are L1 / R1. A click in a menu needs no capturing click first. Outside menus the mouse
+buttons attack and block as before. `set PAD_MENU_MOUSE=0` turns this off. (Pointing at an item is not supported
+yet.)
+
 The mouse turns the camera directly (no stick dead zone or speed limit) and follows the game's invert-camera
 options. `set PAD_MOUSE_LOOK_SENS=0.0012` sets the sensitivity (radians per mouse count), `set PAD_MOUSE_LOOK=0`
 goes back to the old stick-style mouse.

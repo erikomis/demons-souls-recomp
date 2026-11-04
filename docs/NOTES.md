@@ -1980,6 +1980,45 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
     - Next: spu_wrch itself (16% of the dispatcher); the 30-context scan on lines the PPU does use could index by
       line instead; the intermittent abort at Boletaria 2-2 (2,0,996, -104 91 744: tid 35 null calls in the
       func_00CCBDD8 -> func_00CAD6F0 chain) also happens on builds before fix 77.
+89. **The mouse in the menus: wheel, left click = confirm, right click = back (2026-11-03, asked for: "use the mouse
+    for the HUD"):**
+    - Before: in every menu LMB / RMB / MMB were still R1 / L1 / R3 (they switched tabs or did nothing), the wheel was
+      not read at all, and the first click into the window was eaten to capture the mouse.
+    - The game knows when a menu is open: the menu manager (*0x01B4B114) keeps one open flag per menu at
+      menuMan+0x14+id*4, and func_00720F80 folds about 30 of them into a bitmask; the player's action buttons are
+      ignored while (mask & 0x7FFF777F) != 0 (PadManipulator helpers, unit_001B615C). Measured: title screen 0x8,
+      Start menu 0x40, inventory list 0x240, equipment 0x41, closed 0.
+    - PORT PATCH (ppu_recomp_011.cpp, the per-step hook next to god mode): func_00720F80 on the saved registers (stack
+      pointer 0x400 lower, menuMan null-checked first: the function does not; it only loads) ->
+      ps3_host_menu_state(mask).
+    - cellPad.c (souls layout), while (mask & 0x7FFF777F):
+      - LMB = CROSS (confirm), RMB = CIRCLE (back); mouse side buttons X1 / X2 and PageUp / PageDown = L1 / R1.
+        Shift / Ctrl stay R2 / L2, which switch the top tabs (Inventory -> Equipment ...).
+      - Each wheel notch = one d-pad up / down press, held for PAD_WHEEL_HOLD (default 2) fresh reports and released
+        for as many. Notches queue (at most 8); the queue is dropped when the mask changes (a submenu opened, backed
+        out, closed) and on a confirm / back click, so leftover notches never move another menu's cursor. The wheel
+        only counts while a menu is open, and is dropped when the window loses focus.
+      - Uncaptured, a click counts only if it starts over the game window's client area, and a click in a menu does
+        not capture the mouse (no wasted first click).
+      - Mouse buttons across a menu's edges: one held when a menu opens stays dead in it (a held block does not become
+        "back"); one pressed in the menu and still held when it closes stays dead until released (the click that
+        closes a menu does not then attack); one held right through (block held while picking something up) works
+        again when the prompt closes, as a pad's L1 does.
+      - The same mask gates the game's own action buttons, so a click can never confirm and attack at once.
+        Outside menus nothing changed. PAD_MENU_MOUSE=0 = off; DES_MENU_LOG=1 = the mask with times.
+    - rsx_null_backend.c WM_INPUT: RI_MOUSE_WHEEL -> ps3_host_mouse_wheel (also from absolute pointers).
+    - Test (PAD_TEST_WHEEL="<sec>:<notches>" new, LMB / RMB through PAD_KEY_SCRIPT, frame dumps): Start menu (0x40);
+      LMB opened the inventory (0x240); 3 notches down moved the list cursor Crescent Moon Grass -> Full Moon Grass,
+      2 up -> Half Moon Grass; RMB back to the tab bar, RMB again closed the menu (0); LMB in the game then cast the
+      right-hand spell (R1) as before. 8 queued notches + RMB 0.3 s later: back out, no stray moves.
+    - Agent review (2 lenses + adversarial verify): 2 confirmed (Shift read per queued notch instead of per notch;
+      queued notches outliving the menu they were meant for) -> fixed as above; low findings fixed too (a click
+      starting on the title bar, wheel counts saved up while nothing polled, a block held through a prompt, the
+      pulse one report too long, keyboard-only L1 / R1). Shift + wheel = L1 / R1 was dropped: Shift is R2, which
+      already changes the top tab the moment it is pressed. The hook itself (pointer, load-only callee, register
+      restore) was checked clean.
+    - Not yet: pointing (hover / click on an item). Every item rectangle is in MENU\menu.drb (1280x720 design space),
+      but which stacked dialog has focus and the slide-in animations still need work.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
