@@ -2086,6 +2086,29 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       The generated atlases are pixel-identical to the approved prototype's.
     - Not covered: "PRESS START BUTTON" on the title is plain text (no icon), and other languages' font pages
       (another FONT folder) keep the PS3 icons.
+92. **"PRESS ENTER BUTTON" on the title while the keyboard / mouse icons are shown (2026-11-04, asked for: "since its
+    plain text could you make it say press enter button instead if its mnk?"):**
+    - The title's "PRESS START BUTTON" is FMG 77 ("menu other") id 30000 -- data, not code: menu.drb's T00_text dialog
+      has a Text shape text_press_start_button with type byte 1 (FMG text), category 0x4D, id 0x7530, which
+      DsMenuDlgTitle_vf24_007D9EE0 instantiates. The shape factory (Class018836B0_ctor_dtor_00F76308) looks the text
+      up once through the menu host's GetText (Class01865EC0_vf07_0071C7E8 = func_005C2810(category) +
+      func_005C2848(fmg, id)) and keeps the pointer at shape+0x30; the draw (Shared_vf02_00F9E0A8) hands that pointer
+      to the font renderer on every frame. The pointer goes straight into the message manager's heap copy of the FMG
+      (MSG MAN = *0x01B485D8, the FMG of category c at +4+c*4; groups {first index, first id, last id} at fmg+0x1C,
+      count at +0xC, string-offset table at +0x14, made absolute by the loader func_005C3CD8; file size at +4).
+    - PORT PATCH (ppu_recomp_011.cpp, the per-step hook after the fix 89 menu state): the string is found by the same
+      group walk func_005C2848 does, and its 5 letters START are rewritten in place as ENTER while texpack_kbm_want()
+      (the keyboard / mouse icons, fix 91: same choice, same LD_TEX_KBM) and back for the pad. "START" and "ENTER"
+      are both 5 letters, so nothing moves. Written only when the choice changes and only when all 18 units plus the
+      terminator still read one of the two (another language or a reload is left alone). The walk trusts a table
+      only once +0x14 points inside the FMG (the loader stores the FMG pointer before it copies the file); while not
+      found it looks again every 64 steps.
+    - rsx_tex_pack.c: texpack_kbm_want() runs tp_ensure() first (the game thread can now ask before the renderer
+      touched the texture pack).
+    - Test (fake pad + scripted keys, title screen held): pad -> "PRESS START BUTTON"; C pressed -> "PRESS ENTER
+      BUTTON" on the next frames; L3 on the pad -> START again; a key -> ENTER again. In game unchanged.
+    - Agent review (2 lenses + adversarial verify): the walk matches func_005C2848; the two findings (a same-address
+      reload, a walk during the load's copy) were judged impractical, and hardened anyway as above.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

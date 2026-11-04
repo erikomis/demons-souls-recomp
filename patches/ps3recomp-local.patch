@@ -13240,10 +13240,10 @@ index 32e8a95..98d396b 100644
          s_state.title_time = now;
 diff --git a/libs/video/rsx_tex_pack.c b/libs/video/rsx_tex_pack.c
 new file mode 100644
-index 0000000..e9bbd02
+index 0000000..93e3253
 --- /dev/null
 +++ b/libs/video/rsx_tex_pack.c
-@@ -0,0 +1,796 @@
+@@ -0,0 +1,797 @@
 +/* rsx_tex_pack -- see rsx_tex_pack.h. */
 +#include "rsx_tex_pack.h"
 +
@@ -13520,8 +13520,9 @@ index 0000000..e9bbd02
 +int texpack_kbm_find(uint64_t key) { return (s_kbm_count && key) ? texpack_find(key ^ TP_KBM_SALT) : -1; }
 +
 +extern int ps3_host_kbm_active(void);   /* libs/input/cellPad.c */
-+int texpack_kbm_want(void)
++int texpack_kbm_want(void)   /* also the game thread (the title text, NOTES fix 92) */
 +{
++    tp_ensure();
 +    if (!s_kbm_count) return 0;
 +    return s_kbm_mode == 1 ? 1 : ps3_host_kbm_active();
 +}

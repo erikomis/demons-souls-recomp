@@ -257,8 +257,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
---- a/recompiled/ppu_recomp_011.cpp	2026-11-03 22:09:03.793740600 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-11-03 22:09:03.807245700 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-11-04 08:23:56.789630100 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-04 08:23:56.803643400 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -274,7 +274,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,295 @@
+@@ -38897,8 +38899,347 @@
          return;
  }
  
@@ -284,6 +284,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +extern "C" void ps3_perf_note(const char* fmt, ...);   /* rsx_live_draw.c (DES_PERF) */
 +extern "C" int ps3_host_pad_debug(int* rx, int* ry, int* polls, int* mdx, int* mdy);   /* cellPad.c */
 +extern "C" void ps3_host_menu_state(unsigned mask);   /* cellPad.c, fix 89 */
++extern "C" int texpack_kbm_want(void);   /* rsx_tex_pack.c: keyboard / mouse button icons shown (fix 91) */
 +extern "C" unsigned long long ps3_thread_cpu_us(void);   /* rsx_live_draw.c */
 +extern "C" void ps3_perf_step_begin(void);               /* rsx_live_draw.c (DES_PERF_STACKS) */
 +extern "C" __declspec(dllimport) void __stdcall Sleep(unsigned long ms);   /* kernel32 (DES_HITCH_AT) */
@@ -382,6 +383,57 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +          mask = (uint32_t)ctx->gpr[3];
 +          *ctx = save; }
 +      ps3_host_menu_state(mask); }
++    /* Title text with the keyboard / mouse icons (PORT PATCH, NOTES fix 92): "PRESS START BUTTON" is FMG 77
++     * ("menu other") id 30000, which the title's T00_text shape looks up once and then hands to the font renderer
++     * on every draw straight from the message manager's heap copy (MSG MAN = *0x01B485D8, FMG of category c at
++     * +4+c*4; groups {first index, first id, last id} at fmg+0x1C, count at +0xC, string-offset table pointer at
++     * +0x14, made absolute by the loader). So the 5 letters of START are rewritten in place as ENTER while the
++     * keyboard / mouse icons are shown (texpack_kbm_want: same choice, same LD_TEX_KBM) and back for the pad --
++     * only when all 18 units still read one of the two (another language or a reload is left alone). */
++    { static uint32_t ps_mm, ps_fmg, ps_str, ps_retry; static int ps_shown = -1;
++      const uint32_t mm = vm_read32(0x01B485D8);
++      const uint32_t fmg = mm ? vm_read32(mm + 4 + 77 * 4) : 0;
++      /* found again when the FMG changes, and while not found every 64 steps: the loader stores the FMG pointer
++       * before it copies the file and makes +0x14 absolute, so only a table inside the FMG (size at +4) counts */
++      if (mm != ps_mm || fmg != ps_fmg || (!ps_str && (++ps_retry & 63u) == 0)) {
++          ps_mm = mm; ps_fmg = fmg; ps_str = 0; ps_shown = -1;
++          const uint32_t size = fmg ? vm_read32(fmg + 0x04) : 0;
++          const uint32_t ng = fmg ? vm_read32(fmg + 0x0C) : 0;
++          const uint32_t offs = fmg ? vm_read32(fmg + 0x14) : 0;
++          const int ready = fmg && size > 0x1C && size < 0x1000000u && offs > fmg && offs < fmg + size &&
++                            ng < 4096 && 0x1C + 12 * ng <= size;
++          for (uint32_t i = 0; ready && i < ng; i++) {
++              const uint32_t g = fmg + 0x1C + 12 * i;
++              const uint32_t first = vm_read32(g + 4), last = vm_read32(g + 8);
++              if (first <= 30000u && 30000u <= last) {
++                  const uint32_t ent = offs + (vm_read32(g) + 30000u - first) * 4;
++                  const uint32_t off = (ent >= offs && ent + 4 <= fmg + size) ? vm_read32(ent) : 0;
++                  if (off && off + 38 <= size) ps_str = fmg + off;
++                  break;
++              }
++          }
++      }
++      if (ps_str) {
++          const int want = texpack_kbm_want() ? 1 : 0;
++          if (want != ps_shown) {
++              static const char head[] = "PRESS ", tail[] = " BUTTON", words[2][6] = { "START", "ENTER" };
++              int ok = vm_read16(ps_str + 36) == 0, cur = -1;
++              for (int k = 0; ok && k < 6; k++) ok = vm_read16(ps_str + 2 * k) == (uint16_t)head[k];
++              for (int k = 0; ok && k < 7; k++) ok = vm_read16(ps_str + 22 + 2 * k) == (uint16_t)tail[k];
++              for (int w = 0; ok && w < 2 && cur < 0; w++) {
++                  int m = 1;
++                  for (int k = 0; m && k < 5; k++) m = vm_read16(ps_str + 12 + 2 * k) == (uint16_t)words[w][k];
++                  if (m) cur = w;
++              }
++              if (cur < 0) ps_str = 0;   /* not the English title text: leave it (looked for again later) */
++              else {
++                  if (cur != want)
++                      for (int k = 0; k < 5; k++) vm_write16(ps_str + 12 + 2 * k, (uint16_t)words[want][k]);
++                  ps_shown = want;
++              }
++          }
++      }
++    }
 +    /* God mode (PORT PATCH): F9 in the game window toggles it, DES_GOD=1 starts with it on.
 +     * While on, every step the player (character 10000) gets the flag the event scripts set with
 +     * SetDeadMode(10000, true) -- "the player does not die" (bit 0x10 of the flags at chr+0x310) --
