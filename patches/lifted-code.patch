@@ -1,3 +1,64 @@
+diff -ruN a/recompiled/ppu_recomp.h b/recompiled/ppu_recomp.h
+--- a/recompiled/ppu_recomp.h	2026-11-03 20:01:07.050047300 -0700
++++ b/recompiled/ppu_recomp.h	2026-11-03 20:01:07.085043400 -0700
+@@ -40,6 +40,48 @@
+ /* Field order and types match runtime/ppu/ppu_context.h exactly, so the
+  * same pointer can flow between recompiled code and runtime syscall
+  * handlers without layout drift. Keep the two in sync. */
++/* fix 88: the lines any PPU thread has ever reserved (lwarx / ldarx), one
++ * bit per line, hashed. ppu_resv_break_line (ppu_loader.cpp) runs on the SPU
++ * threads for every write to an SPU-reserved line and compared that line with
++ * every PPU thread's reserve_addr; with the bit clear no PPU thread can hold
++ * it, and the scan is skipped. Bits are never cleared. The bit is set before
++ * reserve_addr is stored, and x86 makes stores visible in program order, so a
++ * scan that sees the bit clear could not have seen the reservation either.
++ * Defined in runtime/spu/spu_coherency.c. Same block in ppu_recomp.h. */
++#ifndef PPU_RESV_FILTER_WORDS
++#define PPU_RESV_FILTER_WORDS 1024
++#ifdef __cplusplus
++extern "C" uint64_t g_ppu_resv_filter[PPU_RESV_FILTER_WORDS];
++#else
++extern uint64_t g_ppu_resv_filter[PPU_RESV_FILTER_WORDS];
++#endif
++static inline void ppu_resv_filter_mark(uint64_t ea)
++{
++    const uint32_t h = (uint32_t)(ea >> 7) & (PPU_RESV_FILTER_WORDS * 64 - 1);
++    uint64_t* w = &g_ppu_resv_filter[h >> 6];
++    const uint64_t m = 1ull << (h & 63);
++    if (!(__atomic_load_n(w, __ATOMIC_ACQUIRE) & m)) __atomic_fetch_or(w, m, __ATOMIC_SEQ_CST);
++}
++static inline int ppu_resv_filter_test(uint32_t ea)
++{
++    const uint32_t h = (ea >> 7) & (PPU_RESV_FILTER_WORDS * 64 - 1);
++    return (int)((__atomic_load_n(&g_ppu_resv_filter[h >> 6], __ATOMIC_ACQUIRE) >> (h & 63)) & 1);
++}
++#endif
++
++#ifdef __cplusplus
++/* fix 88: reserve_addr in the lifted code. Same size and layout as the
++ * runtime's uint64_t; assigning a reservation marks g_ppu_resv_filter first. */
++struct ppu_resv_addr {
++    uint64_t v;
++    operator uint64_t() const { return v; }
++    ppu_resv_addr& operator=(uint64_t a) { if (a) ppu_resv_filter_mark(a); v = a; return *this; }
++};
++#define PPU_RESV_ADDR_T ppu_resv_addr
++#else
++#define PPU_RESV_ADDR_T uint64_t
++#endif
++
+ typedef struct ppu_context {
+     uint64_t gpr[32];   /* General-purpose registers  */
+     double   fpr[32];   /* Floating-point registers   */
+@@ -56,7 +98,7 @@
+     uint32_t vscr;      /* Vector status/control reg   */
+     uint64_t cia;       /* Current instruction address */
+     uint64_t thread_id;     /* PPU thread ID              */
+-    uint64_t reserve_addr;  /* lwarx/stwcx. reservation address */
++    PPU_RESV_ADDR_T reserve_addr;  /* lwarx/stwcx. reservation address */
+     uint64_t reserve_value; /* lwarx/stwcx. reservation value   */
+     int      reserve_valid; /* lwarx/stwcx. reservation flag    */
+     uint32_t vrsave;        /* VRSAVE (SPR 256): plain state      */
 diff -ruN a/recompiled/ppu_recomp_000.cpp b/recompiled/ppu_recomp_000.cpp
 --- a/recompiled/ppu_recomp_000.cpp	2026-10-31 08:09:10.043282700 -0700
 +++ b/recompiled/ppu_recomp_000.cpp	2026-10-31 08:09:15.531322300 -0700

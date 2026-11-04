@@ -1941,6 +1941,45 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       README troubleshooting: in a sandbox/VM decrypt on another PC and copy EBOOT.elf in.
     - Test kit: scratch\DemonsSoulsTest.wsb has VGpu Disable (did not stop the crash in one run, unconfirmed);
       scratch\sandbox_games\rpcs3-diag.bat lists the DLLs RPCS3 loads inside the sandbox (not run yet).
+88. **Latria 4-2 start 49.6 -> 55.4 fps on a 5800X: PPU reservation scans skipped for lines no PPU thread ever
+    reserved; the SPU decrementer clock without divides (2026-11-03, 5800X + RTX 3070, 60 Hz):**
+    - A god-mode tour of every archstone (DES_WARP_AT, two camera turns + a walk per stop) on fix 77: Latria 4-2's
+      start (4,0,998, arrival view, 252.00 69.57 -91.00, ~910 draws) and Boletaria 1-1's (2,0,999, ~990 draws) were the
+      heaviest views; the Shrine, Stonefang and most of the rest hold 60. The tour's first pass measured 38-42 fps at
+      Latria 4-2, the same spot loaded directly ~50: that pass was the first visit ever (rsx_pso_worker 29%,
+      shaders compiling) -- the same route again gives 49.6. Repro: DES_WARP_AT=140:4,0,998, stand still, 150-200 s.
+    - Same shape as the Palace (fix 77): HighGraphics does ~13 ms of its own work per frame and waits 31-51% in the
+      0x9023 usleep loop (func_00ACAFA8) for the SPU dispatcher ("spu job", 100%). Dispatcher RIP samples: lifted
+      code 45%, spu_wrch 16, ppu_resv_break_line 8, mfc_do_transfer 5, mfc_channel_write 5, coh notify 3, decrementer
+      (spu_host_ns: QPC + two 64-bit divides) ~2. Ceiling test (test-only switches, not kept): skipping
+      ppu_resv_break_line 49.2 -> 53.7 fps, the divide-free clock 49.2 -> 51.9.
+    - Not the cause: false sharing. reserve_addr sits in the cache line with cr / lr / ctr / xer, so the first try
+      moved the reservation fields onto their own padded lines (needs both struct copies + lifted-code.patch): no
+      change (51.3 -> 51.0 fps), break_line still 7.2% with samples spread over the loop. A registration log showed 30
+      PPU contexts, no duplicates (the registry never shrinks, but threads are not re-registered): the cost is a
+      30-entry scan on every SPU write to an SPU-reserved line, ~1M+/s.
+    - Fix:
+      - g_ppu_resv_filter (spu_coherency.c; block in ppu_context.h and ppu_recomp.h): 65536 bits, one per 128-byte line
+        hash, set by every PPU reservation and never cleared. ppu_resv_break_line and ppu_resv_break return at once
+        when the line's bit is clear (no PPU thread has ever reserved it, so none can hold it). The lifted lwarx /
+        ldarx write `ctx->reserve_addr = ea` inline; in ppu_recomp.h (lifted-code.patch: its first hunk, no relift --
+        the field is reached by name) reserve_addr is a C++ wrapper of the same size whose assignment marks the bit
+        first (acquire load, seq_cst fetch_or only when missing), then stores. x86 makes stores visible in order, so a
+        scan that sees the bit clear could not have seen the reservation either; the lwarx-vs-SPU-write window that
+        predates this (no StoreLoad fence on either side) is unchanged. Runtime ppu_lwarx / ppu_ldarx mark too.
+        The loader uses the filter only when ppu_recomp.h defines PPU_RESV_ADDR_T (the wrapper); with a stock lifter
+        header (Linux boot smoke, check_ppu_scaffold.py) it scans as before.
+      - spu_host_ns: QPC * 100 when QPC runs at 10 MHz (Windows 10+; exact, same value as before), else the old path.
+    - A/B at Latria 4-2 (E = cdaca1d, H = this, H built by BUILD from the pre-fix state, i.e. the update path, code
+      byte-identical to what was measured): 50.5 / 48.6 -> 55.6 / 55.1 fps, frames over 25 ms 89 / 130 -> 40 / 34,
+      HighGraphics 87 / 88 -> 78 / 77%. Palace spot (60 cap): 59.0 / 58.8 -> 59.0 / 59.2, over 25 ms 15 / 17 -> 5 / 5.
+      Tour on H (Shrine 3-1 x2, Latria 4-1 / 4-2, Boletaria 1-1, Stonefang 1-1, turns + walks): every stop 58.4-60 mean
+      (Latria 4-2 58.4, Boletaria 1-1 59.4, was 43-49); no aborts or null calls. test_spu_coherency 195 passed, 0
+      failed (its PPU lwarx cases mark the filter); test_mfc_resume_elements OK in all four modes. Review (3 lenses +
+      verify): one real finding, fixed -- the loader called the filter with a stock lifter header (above).
+    - Next: spu_wrch itself (16% of the dispatcher); the 30-context scan on lines the PPU does use could index by
+      line instead; the intermittent abort at Boletaria 2-2 (2,0,996, -104 91 744: tid 35 null calls in the
+      func_00CCBDD8 -> func_00CAD6F0 chain) also happens on builds before fix 77.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
