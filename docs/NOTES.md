@@ -2019,6 +2019,37 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       restore) was checked clean.
     - Not yet: pointing (hover / click on an item). Every item rectangle is in MENU\menu.drb (1280x720 design space),
       but which stacked dialog has focus and the slide-in animations still need work.
+90. **Latria 4-2 54.2 -> 55.2 fps on a 5800X, frames over 25 ms 42 -> 25: the watch list skipped on coherent stores
+    (2026-11-03, 5800X + RTX 3070, 60 Hz):**
+    - What the SPU dispatcher ("spu job", SPU image 2 here) does at the heavy spot, from per-channel counters: it
+      consumes a PPU->SPU command queue whose control line is 0x01B51080 at ~1.8M commands/s (~32k per frame), 69%
+      of them command 8 (one 32-bit store into a local-store table, handler 0x49C0) and 14% command 7. Per command:
+      GETLLAR (4618), a PUTLLC of the unchanged line (4694), a 128-byte GET of the entry, a 16-byte PUT (C358), and
+      when the queue is empty (0.87 times per command) RdEventStat + GETLLAR again (5120). The producer is
+      HighGraphics: 98% of PPU coherent stores are to that line, ~1.75M/s, and an SPU holds the line at store time
+      for only ~12% of them.
+    - HighGraphics RIP samples (in exe): spu_coherency.c 16%, spu_coh_notify_write_ppu alone 9.6%, most of it in
+      spu_coh_wake_watches -- a walk of the WAIT_SIGNAL watch list (6 nodes, each on a parked task's stack) on every
+      coherent store, a dependent cache miss per node; the list head also shares a cache line with
+      g_lockline_wait_ticks / g_lockline_contended.
+    - Fix (spu_coherency.c): s_coh_watch_mask, one bit per watched line hash ((line >> 7) & 63) on its own 64-byte
+      line, set by spu_coh_watch_add and rebuilt by spu_coh_watch_remove, both under the lock-line lock like every
+      notifier. spu_coh_wake_watches returns at once when the line's bit is clear (no watch can have it).
+    - A/B at Latria 4-2 (K = fix 88, L = this, alternating, 150-200 s): 55.1 / 53.2 / 54.3 -> 55.6 / 55.1 / 55.0 fps,
+      over 25 ms 36 / 64 / 27 -> 23 / 28 / 25. test_spu_coherency 195 passed, 0 failed. test_spurs_task_signal and
+      test_spu_workload_masked (the watch users) are POSIX-only and were not run here.
+    - Tried and dropped: taking those stores off the lock-line lock. Design (agent audit of every lock holder, two
+      designs, three adversarial reviews, none refuted): the PPU store announces itself in a per-line-hash counter
+      (xadd, 8 padded buckets), takes the lock-free path only if the lock is free, no slot shows the line, nothing is
+      unslotted and the watch bit is clear, then stores and retracts; every lock holder drains all buckets after
+      acquiring and spu_coh_reserve_fast drains its line's bucket after its fence -- so no fast store overlaps a
+      PUTLLC's compare-and-commit and no SPU-side change is needed. It worked (80% of the stores took the fast path;
+      lock busy 10%, holder 9%), tests passed, but Latria 4-2 went 55.2 -> 54.4 fps (3 runs each), over 25 ms 29 -> 38.
+      Each fast store still touches three lines the dispatcher writes (the bucket, the lock word, the slots), about
+      what the lock cost, and every SPU lock taker now pays a miss on the bucket. The lock was not the expensive
+      part; the queue line ping-pong between HighGraphics and the dispatcher is.
+    - Next: fewer round trips per command rather than cheaper ones -- e.g. the dispatcher's empty-queue spin
+      (GETLLAR + RdEventStat, 0.87 per command) re-reads the very line HighGraphics is writing.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
