@@ -493,14 +493,28 @@ def step_decrypt(args, cfg):
         if rpcs3:
             cfg['rpcs3'] = rpcs3; save_config(cfg)
             say('  running rpcs3 --decrypt (a window may flash up)')
-            # an AppImage runs without FUSE this way (a Steam Deck or a container may not have it)
-            env = dict(os.environ, APPIMAGE_EXTRACT_AND_RUN='1') if rpcs3.endswith('.AppImage') else None
-            try:
-                subprocess.run([rpcs3, '--decrypt', eboot], timeout=300, env=env)
-            except subprocess.TimeoutExpired:
-                pass
-            except OSError as e:
-                say(f'  could not run {rpcs3}: {e}')
+            # Decrypting needs no graphics, but RPCS3 still loads the Vulkan driver at start, and a broken one
+            # crashes it before it writes anything (Windows Sandbox's virtual GPU: an access violation inside
+            # vk_icdNegotiateLoaderICDInterfaceVersion). These standard Vulkan loader settings hide every driver.
+            nodrv = os.path.join(ROOT, 'no-vulkan-driver.json')   # never exists
+            env = dict(os.environ, VK_ICD_FILENAMES=nodrv, VK_DRIVER_FILES=nodrv, VK_LOADER_DRIVERS_DISABLE='*')
+            if rpcs3.endswith('.AppImage'):
+                env['APPIMAGE_EXTRACT_AND_RUN'] = '1'   # runs without FUSE (a Steam Deck or a container may lack it)
+            for attempt in range(3):
+                if attempt:
+                    say(f'  no EBOOT.elf yet: trying again ({attempt + 1} of 3)')
+                try:
+                    r = subprocess.run([rpcs3, '--decrypt', eboot], timeout=300, env=env)
+                    if r.returncode and not find_eboot_elf():
+                        say(f'  RPCS3 stopped with exit code {r.returncode:#x}'
+                            f' (its log: {os.path.join(os.path.dirname(rpcs3), "log", "RPCS3.log")})')
+                except subprocess.TimeoutExpired:
+                    say('  RPCS3 took over 5 minutes and was stopped')
+                except OSError as e:
+                    say(f'  could not run {rpcs3}: {e}')
+                    break
+                if find_eboot_elf():
+                    break
         elf = find_eboot_elf()
         while not elf:
             say(f'  RPCS3 did not write EBOOT.elf (is another RPCS3 window open? close it and run {SETUP_NAME}')
