@@ -495,7 +495,10 @@ def step_decrypt(args, cfg):
             say('  running rpcs3 --decrypt (a window may flash up)')
             # Decrypting needs no graphics, but RPCS3 still loads the Vulkan driver at start, and a broken one
             # crashes it before it writes anything (Windows Sandbox's virtual GPU: an access violation inside
-            # vk_icdNegotiateLoaderICDInterfaceVersion). These standard Vulkan loader settings hide every driver.
+            # vk_icdNegotiateLoaderICDInterfaceVersion). These standard Vulkan loader settings hide every driver --
+            # except in a process running as administrator, where the loader ignores them (Windows Sandbox runs
+            # everything as administrator). A vulkan-1.dll stub next to rpcs3.exe is no way out: RPCS3 refuses to
+            # start with one there ("module vulkan-1.dll was incorrectly installed").
             nodrv = os.path.join(ROOT, 'no-vulkan-driver.json')   # never exists
             env = dict(os.environ, VK_ICD_FILENAMES=nodrv, VK_DRIVER_FILES=nodrv, VK_LOADER_DRIVERS_DISABLE='*')
             if rpcs3.endswith('.AppImage'):
@@ -504,7 +507,8 @@ def step_decrypt(args, cfg):
                 if attempt:
                     say(f'  no EBOOT.elf yet: trying again ({attempt + 1} of 3)')
                 try:
-                    r = subprocess.run([rpcs3, '--decrypt', eboot], timeout=300, env=env)
+                    r = subprocess.run([rpcs3, '--decrypt', eboot], timeout=300, env=env,
+                                       stdin=subprocess.DEVNULL)   # a failed decrypt asks for a key on stdin
                     if r.returncode and not find_eboot_elf():
                         say(f'  RPCS3 stopped with exit code {r.returncode:#x}'
                             f' (its log: {os.path.join(os.path.dirname(rpcs3), "log", "RPCS3.log")})')
