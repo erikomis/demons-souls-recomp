@@ -47,6 +47,24 @@ LLVM_WIN_TOOLS = ('clang-cl', 'lld-link', 'llvm-lib', 'llvm-rc', 'llvm-mt')
 PORTABLE_MARK = os.path.join(ROOT, 'deps', '.portable_compiler')
 
 
+def no_quickedit():
+    """Windows consoles with QuickEdit on (the default) pause any program that writes to them while text is selected
+    -- one stray click in the window and the setup or the build seems to hang until a key or a right-click ends the
+    selection. Turn it off for this window (the console's own setting, only this window)."""
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-10)   # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if h and k.GetConsoleMode(h, ctypes.byref(mode)):
+            # ENABLE_EXTENDED_FLAGS (0x80) must be set for the QuickEdit bit (0x40) to be changed
+            k.SetConsoleMode(h, (mode.value & ~0x40) | 0x80)
+    except (OSError, AttributeError, ValueError):
+        pass
+
+
 def say(msg=''):
     print(msg, flush=True)
 
@@ -671,6 +689,7 @@ def sync_patches():
 
 
 if __name__ == '__main__':
+    no_quickedit()
     a = sys.argv[1:]
     jobs = None
     if '--jobs' in a:

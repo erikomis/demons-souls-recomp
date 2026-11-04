@@ -1914,6 +1914,13 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       DS_BUILD_VERBOSE=1 = the old full output. No compiler flags change (that would recompile every install).
     - Tested: a fake build (5 steps, 2000 warning lines, a failed file) shows the progress and the failure only; a
       real incremental build on a test install printed 4 lines (log 4086).
+85. **A click in the setup window paused it (2026-11-03, Windows Sandbox test: "stuck waiting for 30 mins"):**
+    - Windows consoles have QuickEdit on by default: while text is selected (one click is enough) any program writing
+      to the window is blocked until a key or a right-click ends the selection -- the build stood still for half an
+      hour, then "zoomed right on" after the right-click. setup/build.py no_quickedit() clears ENABLE_QUICK_EDIT_MODE
+      (with ENABLE_EXTENDED_FLAGS) on the console's input handle: called by build.py and setup.py at start and by
+      update.py --install. Only that window; the full output is in logs/build_last.txt anyway (fix 84).
+    - Tested in a real console window: mode 0x1F7 (QuickEdit on) -> 0x1B7 (off), the other flags kept.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

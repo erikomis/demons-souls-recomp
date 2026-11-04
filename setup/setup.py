@@ -609,6 +609,7 @@ def step_lift():
 
 
 def main():
+    build.no_quickedit()   # a click in the window must not pause the setup
     args, a = {}, sys.argv[1:]
     while a:
         x = a.pop(0)

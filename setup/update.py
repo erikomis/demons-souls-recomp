@@ -154,6 +154,13 @@ def install(zip_path=None, tag=None):
 
 
 if __name__ == '__main__':
+    if '--install' in sys.argv:   # its own console window: a click must not pause it
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import build
+            build.no_quickedit()
+        except Exception:
+            pass
     a = sys.argv[1:]
     if '--check' in a:
         sys.exit(check())
