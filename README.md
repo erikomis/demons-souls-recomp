@@ -16,6 +16,10 @@ screen, 30, uncapped, or any frame rate you pick), with keyboard + mouse or an X
 story and endings; `set DES_MOVIES=0` skips them). The in-engine cutscenes are smooth at 60 fps and above too:
 their camera is blended between its 30 fps keys (`set DES_CUT_BLEND=0` for the original nearest-key camera).
 
+**Above 60 fps there are known bugs**, such as the sound drifting out of sync with the picture and the
+character's run speed being off. 60 fps (or 50 on a 100 Hz screen) is the recommended setting; higher frame
+rates are still being worked on.
+
 **There is no online play yet.** Multiplayer will be added once the game is optimised.
 
 **Performance:** on high-end hardware the game is mostly smooth. Optimisations for lower-end PCs
