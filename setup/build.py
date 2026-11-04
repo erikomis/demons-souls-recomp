@@ -22,6 +22,9 @@ usage: BUILD.bat [--jobs N] [ninja targets...]
        build.py --runtime-only [--jobs N]   (cross toolchain: ps3recomp's runtime alone, no game needed)
 """
 import glob, hashlib, os, re, shutil, subprocess, sys, tarfile, tempfile, threading, time, urllib.request
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netcert                                                   # noqa: E402
+netcert.install()   # HTTPS on a fresh Windows: let Windows fetch missing root certificates (netcert.py)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, 'port', 'build_opt')
@@ -448,6 +451,11 @@ def build_xwin(jobs=None, targets=(), runtime_only=False):
     if (not llvm or llvm[0] < MIN_CLANG) and os.name == 'nt' and download_llvm():
         llvm = find_llvm_cross()
     if not llvm or llvm[0] < MIN_CLANG:
+        if os.name == 'nt':
+            say(f'  clang-cl + lld-link (LLVM {MIN_CLANG} or newer) are needed. Run SETUP.bat again to retry the')
+            say('  portable compiler download (check the internet connection), or install Visual Studio 2022 with')
+            say('  "Desktop development with C++" + LLVM (winget install LLVM.LLVM), or set DS_LLVM_DIR.')
+            return 1
         say(f'  clang-cl + lld-link (LLVM {MIN_CLANG} or newer) are needed. The Linux AppImage brings them;')
         say('  from a git checkout install your distribution\'s clang and lld packages (Debian/Ubuntu:')
         say('  clang lld llvm, Fedora: clang lld llvm, Arch: clang lld llvm) or set DS_LLVM_DIR.')

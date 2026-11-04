@@ -40,7 +40,7 @@ takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
   dumped disc folder with `PS3_GAME` in it. A Redump-style encrypted image also needs its
   **disc key** (the `.dkey` file that comes with the dump). No `.dkey`? The key is public: it is the
   "Disc Key" line on [Redump's page for this disc](http://redump.org/disc/16199/) (Demon's Souls, USA, BLUS-30443, version
-  01.00). Copy it from there when SETUP asks.
+  01.00). SETUP opens that page for you when it needs the key.
 - **Nothing else to install.** SETUP downloads what it needs into the folder (`deps\`), with no
   installer and no administrator rights: a portable **Python** and **Git** when you have none,
   **[RPCS3](https://rpcs3.net)** (used once to decrypt the game's `EBOOT.BIN`), and, without Visual
@@ -61,15 +61,29 @@ not confirmed yet; please report how it goes.
 
 ## Build it (one time)
 
+The setup below has been tested on a clean Windows install (Windows Sandbox: no
+Python, Git, Visual Studio, RPCS3 or Visual C++ runtime) and on a normal gaming PC.
+
 1. Download the newest release: **[Releases](https://github.com/timboat/demons-souls-recomp/releases/latest)** → `DemonsSoulsRecomp-<version>.zip` (or the
    green **Code** button → *Download ZIP*, or `git clone`), and unpack it somewhere with enough
-   space, ideally a path without unusual characters. There is no ready-to-play download: the game
-   is built on your PC from your own disc. The release ZIP already has `DemonsSoulsLauncher.exe`:
-   start it and press Play, and it offers to run SETUP.bat for you.
-2. **Drag your disc image onto `SETUP.bat`**, or double-click `SETUP.bat` and it asks for it.
-3. Answer its questions: the disc key if the image is encrypted, and where `rpcs3.exe` is.
+   space, for example `C:\Games\DemonsSouls`. Keep the path plain (no `[ ]` or `&`). There is no
+   ready-to-play download: the game is built on your PC from your own disc.
+2. Double-click **`DemonsSoulsLauncher.exe`** (it is in the release ZIP) and press **PLAY**. It sees
+   that the game is not built yet and offers to run `SETUP.bat`: answer **Yes**. (Or drag your disc
+   image onto `SETUP.bat`, or double-click `SETUP.bat`; same thing.)
+3. Answer SETUP's questions. Pressing **Enter** takes the suggested answer, which is right almost always:
+   - **your disc image**: drag the `.iso` / `.zip` / disc folder into the window (or paste its path) and
+     press Enter;
+   - **the disc key**, only for an encrypted image without a `.dkey` file: SETUP opens
+     [Redump's page](http://redump.org/disc/16199/) in your browser; copy the long code on its
+     "Disc Key" line and paste it with **Ctrl+V**;
+   - whether it may **download** RPCS3, a portable Python / Git and the portable compiler (say yes);
+   - the **Microsoft Visual C++ runtime** for RPCS3, if your PC has none: Windows asks you to allow
+     Microsoft's installer;
+   - **xwin** asks you to accept Microsoft's license for the C runtime / Windows SDK it downloads.
+4. Wait for **All done**, then press **PLAY** in the launcher.
 
-That's it. SETUP.bat then:
+SETUP.bat then:
 
 | step | what happens | time* |
 |---|---|---|
@@ -289,10 +303,19 @@ Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs)
 - **"RPCS3 did not write EBOOT.elf"**: close any open RPCS3 window and run SETUP.bat again, or decrypt
   by hand: RPCS3 → *Utilities* → *Decrypt PS3 Binaries* → `game\PS3_GAME\USRDIR\EBOOT.BIN`.
   If RPCS3 itself complains, install the PS3 firmware in RPCS3 first (*File → Install Firmware*).
+  SETUP tries three times and shows RPCS3's exit code and log. In **Windows Sandbox or a virtual
+  machine** RPCS3 can crash inside the virtual GPU's driver before it decrypts anything (it starts
+  Vulkan even just to decrypt, and as administrator Vulkan cannot be told to skip the driver): decrypt
+  `EBOOT.BIN` on another PC with RPCS3 and copy the `EBOOT.elf` into `game\PS3_GAME\USRDIR\`, then
+  run SETUP.bat again.
 - **"EBOOT.BIN is not the tested one"**: only the USA disc (BLUS-30443, version as on the disc) is
   supported. Other regions or updated EBOOTs need different patches.
-- **Build tools not found**: install Visual Studio 2022 Build Tools with *Desktop development with C++*
+- **Build tools not found**: run SETUP.bat or BUILD.bat again and let it download the portable
+  compiler (answer yes). Or install Visual Studio 2022 Build Tools with *Desktop development with C++*
   and LLVM (`winget install LLVM.LLVM`), or set `LLVM_DIR` to an LLVM folder, then run BUILD.bat.
+- **The setup window seems stuck**: the compile shows one progress line and can sit on one file for
+  a minute; its full output is in `logs\build_last.txt`. If nothing moves for many minutes, press
+  Enter once in the window.
 - **The game window stays black / closes**: look at the end of `logs\last_run_err.txt`.
 - **Uneven frames at 100+ fps in busy areas** (e.g. the Valley of Defilement swamp): the game's own
   frame work can need more than 10 ms there; the 50 fps mode is even everywhere. On CPUs with two

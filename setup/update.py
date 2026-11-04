@@ -11,6 +11,9 @@ Only the kit's own files are written: game\\, port\\, deps\\, .venv\\, saves, lo
 and are never touched. VERSION (written last) says which release this folder now has.
 """
 import hashlib, json, os, re, sys, time, urllib.request, zipfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netcert                                                   # noqa: E402
+netcert.install()   # HTTPS on a fresh Windows: let Windows fetch missing root certificates (netcert.py)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = 'timboat/demons-souls-recomp'

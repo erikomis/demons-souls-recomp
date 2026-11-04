@@ -1927,6 +1927,20 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       and paste it with Ctrl+V (right-click no longer pastes with QuickEdit off, fix 85). The key itself stays out of
       the kit (a decryption key in the repo would make it the thing handing the key out). DS_NO_BROWSER=1 = no browser.
     - Tested with the browser call intercepted: the page URL is opened, the hint printed, then the prompt.
+87. **SETUP's RPCS3 decrypt and a crashing GPU driver (2026-11-03, Windows Sandbox test of v2026.11.03.9):**
+    - rpcs3 --decrypt still builds RPCS3's render_creator, which creates a Vulkan instance to list GPUs before anything
+      else. In Windows Sandbox (GPU-PV, host NVIDIA driver) a driver thread then faults in RtlAllocateHeap (log stack:
+      RtlAllocateHeap / vk_icdNegotiateLoaderICDInterfaceVersion / DrvPresentBuffers = nvoglv64.dll) and RPCS3 dies
+      with 0xC0000409 before EBOOT.elf is written. Intermittent: earlier sandbox runs decrypted.
+    - setup.py step 2 now runs RPCS3 with VK_ICD_FILENAMES / VK_DRIVER_FILES pointing at a missing json and
+      VK_LOADER_DRIVERS_DISABLE=*, stdin=DEVNULL (a failed decrypt asks for a KLIC on stdin), up to 3 tries, and prints
+      the exit code + RPCS3.log path. On a normal (Medium-integrity) PC no vendor driver DLL loads at all (module list
+      checked); EBOOT.elf matches. BUT the Vulkan loader ignores those variables in an elevated process, and Windows
+      Sandbox runs everything as administrator, so the sandbox still crashed. Tried: a generated vulkan-1.dll stub next
+      to rpcs3.exe (loads fine) -- RPCS3 refuses it ("module vulkan-1.dll was incorrectly installed", fatal box).
+      README troubleshooting: in a sandbox/VM decrypt on another PC and copy EBOOT.elf in.
+    - Test kit: scratch\DemonsSoulsTest.wsb has VGpu Disable (did not stop the crash in one run, unconfirmed);
+      scratch\sandbox_games\rpcs3-diag.bat lists the DLLs RPCS3 loads inside the sandbox (not run yet).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
