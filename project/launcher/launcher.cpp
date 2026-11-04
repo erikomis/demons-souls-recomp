@@ -34,6 +34,8 @@ static wstring g_ini;
 
 static bool exists(const wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
 static wstring at(const wchar_t* rel) { return g_root + L"\\" + rel; }
+static wstring widen(const std::string& s);   // UTF-8 -> UTF-16, below
+static std::string g_update_notice;          // a newer release the check at start found (status line)
 
 // Next to PLAY.bat (where the build copies it), or still in the build tree (port\build_opt\launcher).
 static bool find_root() {
@@ -375,6 +377,20 @@ static void update_status() {
             s += game_present(0) ? L"  \u00b7  ready to play" : L"  \u00b7  game files missing: run SETUP.bat";
         }
     }
+    {   // which release this folder has (VERSION: the release ZIP and update.py write it)
+        HANDLE f = CreateFileW(at(L"VERSION").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (f != INVALID_HANDLE_VALUE) {
+            char v[64] = {};
+            DWORD n = 0;
+            ReadFile(f, v, sizeof v - 1, &n, nullptr);
+            CloseHandle(f);
+            std::string t(v, n);
+            while (!t.empty() && (t.back() == '\n' || t.back() == '\r' || t.back() == ' ')) t.pop_back();
+            if (!t.empty() && t.size() < 40) s += L"  \u00b7  " + widen(t);
+        }
+    }
+    if (!g_update_notice.empty() && exists(exe_path()))
+        s = L"New version " + widen(g_update_notice) + L" is available: press Check for updates.";
     if (exists(pending_marker()) && !g_game) s = L"The last update did not finish building: press Check for updates.";
     if (g_game) s = L"Playing. The logos and the first load take about a minute.";
     SetWindowTextW(item(ID_STATUS), s.c_str());
@@ -542,16 +558,41 @@ static wstring widen(const std::string& s) {
 
 // "Check for updates" asks GitHub (git fetch) on a thread of its own, so a slow network never
 // freezes the window; WM_UPDATE_CHECKED brings the answer back.
+// A copy without git (a release ZIP, GitHub's Download ZIP; or git is not installed) asks GitHub's
+// releases instead: setup\update.py --check with the setup's own Python.
 struct UpdateCheck {
     wstring git;
     bool fetched = false, counted = false;
     int behind = 0;
     std::string out, log;
+    bool zip = false;                        // the releases path (update.py)
+    bool quiet = false;                      // the check at start: only the status line, no message box
+    wstring py;                              // .venv\Scripts\python.exe
+    std::string latest, current, notes;
 };
 static bool g_checking;
 
+static wstring venv_python() { return at(L".venv\\Scripts\\python.exe"); }
+
 static DWORD WINAPI check_thread(void* p) {
     UpdateCheck* c = (UpdateCheck*)p;
+    if (c->zip) {
+        c->fetched = git_run(c->py, L"\"" + at(L"setup\\update.py") + L"\" --check", &c->out, 60000);
+        size_t i = 0;
+        while (i < c->out.size()) {
+            size_t e = c->out.find('\n', i);
+            std::string l = c->out.substr(i, (e == std::string::npos ? c->out.size() : e) - i);
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            if (l.rfind("latest=", 0) == 0) c->latest = l.substr(7);
+            else if (l.rfind("current=", 0) == 0) c->current = l.substr(8);
+            else if (l.rfind("note=", 0) == 0) c->notes += l.substr(5) + "\n";
+            if (e == std::string::npos) break;
+            i = e + 1;
+        }
+        c->counted = c->fetched && !c->latest.empty();
+        if (!PostMessageW(g_wnd, WM_UPDATE_CHECKED, 0, (LPARAM)c)) delete c;
+        return 0;
+    }
     std::string count;
     c->fetched = git_run(c->git, L"fetch --quiet", &c->out, 90000);
     c->counted = c->fetched && git_run(c->git, L"rev-list --count HEAD..@{u}", &count, 15000);
@@ -563,7 +604,7 @@ static DWORD WINAPI check_thread(void* p) {
 
 // The build replaces DemonsSoulsLauncher.exe, which cannot happen while it runs: a small script in
 // %TEMP% does the work (git pull when pull, then BUILD.bat) and starts the launcher again at the end.
-static void start_update(const wstring& git, bool pull) {
+static void start_update(const wstring& git, bool pull, bool zip = false) {
     read_controls();
     save_settings();
     wchar_t tmp[MAX_PATH];
@@ -575,18 +616,26 @@ static void start_update(const wstring& git, bool pull) {
         GetModuleFileNameW(nullptr, me, MAX_PATH * 2);
         self = me;
     }
+    // A path as the script writes it: UTF-8 (the script switches cmd to code page 65001 first, so a folder
+    // name outside the OEM code page survives) with % doubled (cmd expands %...% even inside quotes).
     auto oem = [](const wstring& w) {
-        int n = WideCharToMultiByte(CP_OEMCP, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+        int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
         std::string o(n, '\0');
-        WideCharToMultiByte(CP_OEMCP, 0, w.c_str(), (int)w.size(), o.data(), n, nullptr, nullptr);
-        return o;
+        WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), o.data(), n, nullptr, nullptr);
+        std::string e;
+        for (char ch : o) { e += ch; if (ch == '%') e += '%'; }
+        return e;
     };
-    std::string s = "@echo off\r\ntitle Demon's Souls - update\r\n";
-    s += "cd /d \"" + oem(g_root) + "\"\r\n";
+    std::string s = "@echo off\r\nchcp 65001 >nul\r\ntitle Demon's Souls - update\r\n";
+    s += "cd /d \"" + oem(g_root) + "\" || goto :failed\r\n";
     if (pull)
         s += "echo Getting the newest version (git pull)...\r\n\"" + oem(git) + "\" pull --ff-only || goto :failed\r\necho.\r\n";
-    // full paths: with NoDefaultCurrentDirectoryInExePath set, cmd does not look in the current folder
-    s += "call \"" + oem(at(L"BUILD.bat")) + "\" || goto :failed\r\n"
+    if (zip)   // the launcher has closed by now; update.py waits a moment if its exe is still in use
+        s += "echo Getting the newest version from GitHub...\r\n\"" + oem(venv_python()) + "\" \"" +
+             oem(at(L"setup\\update.py")) + "\" --install || goto :failed\r\necho.\r\n";
+    // .\ : with NoDefaultCurrentDirectoryInExePath set, cmd does not look in the current folder for a bare name;
+    // and no full path, because call expands % a second time (a folder named "100%" would break it)
+    s += "call \".\\BUILD.bat\" || goto :failed\r\n"
          "del \"" + oem(pending_marker()) + "\" 2>nul\r\n"
          "echo.\r\necho Up to date. Opening the launcher again...\r\n"
          "start \"\" \"" + oem(self) + "\"\r\ntimeout /t 4 >nul\r\nexit /b 0\r\n"
@@ -612,10 +661,43 @@ static void start_update(const wstring& git, bool pull) {
 }
 
 static void on_update_checked(UpdateCheck* c) {
+    if (c->quiet) {   // the check at start: a newer release only shows in the status line
+        if (c->counted && c->latest != c->current) {
+            g_update_notice = c->latest;
+            update_status();
+        }
+        return;
+    }
     g_checking = false;
     EnableWindow(item(ID_UPDATE), !g_game);
     update_status();
     if (g_game) return;   // the player started the game meanwhile; the answer can wait for the next press
+    if (c->zip) {
+        if (!c->counted) {
+            // update.py prints error=... when GitHub did not answer; no such line = its Python did not run
+            bool py_ran = c->out.find("error=") != std::string::npos;
+            wstring msg = py_ran ? L"Could not check for updates (no internet, or GitHub did not answer).\n\n"
+                                 : L"Could not check for updates: the setup's Python environment does not start "
+                                   L"(Python was removed or upgraded?). Press PLAY: it repairs it, then try again.\n\n";
+            msg += widen(c->out.substr(0, 600));
+            MessageBoxW(g_wnd, msg.c_str(), L"Check for updates", MB_ICONWARNING);
+            return;
+        }
+        if (c->latest == c->current) {
+            MessageBoxW(g_wnd, (L"You have the newest version (" + widen(c->latest) + L").").c_str(),
+                        L"Check for updates", MB_ICONINFORMATION);
+            return;
+        }
+        wstring msg = L"Version " + widen(c->latest) + L" is available" +
+                      (c->current == "unknown" ? wstring(L".") : L" (you have " + widen(c->current) + L").") +
+                      (c->notes.empty() ? wstring() : L"\n\nWhat's new:\n" + widen(c->notes)) +
+                      L"\nInstall it now? It downloads it from GitHub (under 1 MB), puts it in this folder "
+                      L"(your game files, saves and settings stay) and rebuilds the game in a console window: "
+                      L"a few minutes. The launcher closes and opens again when it is done.";
+        if (MessageBoxW(g_wnd, msg.c_str(), L"Check for updates", MB_ICONQUESTION | MB_YESNO) == IDYES)
+            start_update(L"", false, true);
+        return;
+    }
     if (!c->fetched || !c->counted) {
         wstring msg = L"Could not check for updates";
         msg += c->fetched ? L" (this copy follows no GitHub branch)." : L" (no internet, or GitHub did not answer).";
@@ -645,10 +727,30 @@ static void on_update() {
     bool have_git = SearchPathW(nullptr, L"git.exe", nullptr, MAX_PATH, gitbuf, nullptr) > 0;
     wstring git = have_git ? gitbuf : L"";
     bool from_git = exists(at(L".git"));
+    bool zip_copy = !from_git && exists(venv_python()) && exists(at(L"setup\\update.py"));
     if (build_pending()) {
-        if (MessageBoxW(g_wnd, L"The last update was downloaded but did not finish building.\n\nBuild it now (BUILD.bat)?",
-                        L"Check for updates", MB_ICONQUESTION | MB_YESNO) == IDYES)
-            start_update(git, false);
+        // a copy without git may have stopped while downloading or copying: then fetch it again too
+        const wchar_t* msg = zip_copy
+            ? L"The last update did not finish.\n\nFinish it now (download it again and rebuild with BUILD.bat)?"
+            : L"The last update was downloaded but did not finish building.\n\nBuild it now (BUILD.bat)?";
+        if (MessageBoxW(g_wnd, msg, L"Check for updates", MB_ICONQUESTION | MB_YESNO) == IDYES)
+            start_update(git, false, zip_copy);
+        return;
+    }
+    g_update_notice.clear();
+    if (zip_copy) {
+        // not a git clone: ask GitHub's releases (update.py), on a thread like the git check. (A clone
+        // without git.exe on PATH -- GitHub Desktop's -- keeps the old message: copying release files over a
+        // checkout would leave it modified and block its next pull.)
+        UpdateCheck* c = new UpdateCheck;
+        c->zip = true;
+        c->py = venv_python();
+        HANDLE t = CreateThread(nullptr, 0, check_thread, c, 0, nullptr);
+        if (!t) { delete c; return; }
+        CloseHandle(t);
+        g_checking = true;
+        EnableWindow(item(ID_UPDATE), FALSE);
+        SetWindowTextW(item(ID_STATUS), L"Checking for updates...");
         return;
     }
     if (!from_git || !have_git) {
@@ -807,7 +909,8 @@ static void create_controls() {
     y += 54;
     const int bw = (W - 3 * 8) / 4;
     add(WC_BUTTONW, L"Check for updates", BS_PUSHBUTTON | WS_TABSTOP, ID_UPDATE, L, y, bw, 28,
-        L"Asks GitHub whether there is a newer version, shows what changed and installs it if you want (git pull + BUILD.bat).");
+        L"Asks GitHub whether there is a newer version, shows what changed and installs it if you want, then rebuilds "
+        L"(BUILD.bat). No git needed: a copy from a release ZIP gets the newest release.");
     add(WC_BUTTONW, L"Report a problem", BS_PUSHBUTTON | WS_TABSTOP, ID_REPORT, L + (bw + 8), y, bw, 28,
         L"Packs your last session (recording, F8 marks, log, PC specs) into a zip and opens a GitHub issue (REPORT.bat).");
     add(WC_BUTTONW, L"Controls", BS_PUSHBUTTON | WS_TABSTOP, ID_CONTROLS, L + 2 * (bw + 8), y, bw, 28);
@@ -826,6 +929,16 @@ static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
         create_controls();
         write_controls();
         update_status();
+        // Players rarely press Check for updates: a copy without git asks GitHub's releases once at start, in
+        // the background, and a newer one shows in the status line (no message box; offline = nothing).
+        if (!exists(at(L".git")) && exists(venv_python()) && exists(at(L"setup\\update.py"))) {
+            UpdateCheck* c = new UpdateCheck;
+            c->zip = c->quiet = true;
+            c->py = venv_python();
+            HANDLE t = CreateThread(nullptr, 0, check_thread, c, 0, nullptr);
+            if (t) CloseHandle(t);
+            else delete c;
+        }
         return 0;
     case WM_COMMAND: {
         int id = LOWORD(wp), code = HIWORD(wp);

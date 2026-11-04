@@ -66,6 +66,8 @@ jobs:
           src.close()
           entries.append((zipfile.ZipInfo('DemonsSoulsRecomp-%s/DemonsSoulsLauncher.exe' % tag),
                           open('out/DemonsSoulsLauncher.exe', 'rb').read()))
+          # which release this is: the launcher shows it, and Check for updates compares it (setup/update.py)
+          entries.append((zipfile.ZipInfo('DemonsSoulsRecomp-%s/VERSION' % tag), (tag + '\n').encode()))
           with zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED) as z:
               for old, data in entries:
                   i = zipfile.ZipInfo(old.filename, date_time=when)

@@ -85,11 +85,15 @@ and run SETUP.bat again: finished steps are skipped.
 
 ## Updating
 
-Press **Check for updates** in the launcher: it asks GitHub, lists what is new and installs it if you
-say yes. Or by hand: get the new version (`git pull` in the repo folder, or download the newest
-[release](https://github.com/timboat/demons-souls-recomp/releases/latest) ZIP (or the Code ZIP) and copy everything inside its folder over your old folder,
-replacing files; `game/`, `port/`, `deps/` and your saves are not in the ZIP, so they stay), then
-run **`BUILD.bat`** (with a ZIP copy, *Check for updates* in the launcher just rebuilds). It re-applies
+Press **Check for updates** in the launcher: it asks GitHub, lists what is new and, if you say yes,
+downloads it, puts it in the folder and rebuilds the game; the launcher then opens again. **No Git
+needed:** a copy from a release ZIP (or the Code ZIP) gets the newest release (checked against the
+checksum GitHub publishes for it; your game files, build, saves and settings are not touched), a
+`git clone` gets `git pull`. The launcher's status line shows which release you have.
+Copies from before release v2026.11.03.7 need this once by hand: download the newest
+[release](https://github.com/timboat/demons-souls-recomp/releases/latest) ZIP and copy everything inside its folder over your old folder,
+replacing files (`game/`, `port/`, `deps/` and your saves are not in the ZIP, so they stay), then
+press Play (or run **`BUILD.bat`**). It re-applies
 the patches that changed since your last setup and recompiles only the files they touch. If it
 says so, run `SETUP.bat` instead: that also works, keeps the game files and skips what is done.
 If you forget, Play notices that the folder was updated but not rebuilt and runs BUILD.bat first

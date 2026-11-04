@@ -1867,6 +1867,42 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       on PATH: matters for git clones only, which have Git) -- fixed: Windows 10's tar cannot read the .7z, [ ] in
       the folder path, half-unpacked Python / Git / LLVM taken as installed, a Visual Studio build_opt refusing the
       portable compiler, an old Visual C++ runtime passing the check, a 32-bit Python checking SysWOW64.
+83. **Updates without Git; the Visual C++ runtime without winget; checkouts owned by another account (2026-11-03,
+    a tester's recording + the first Windows Sandbox test):**
+    - The tester's perf.txt (GitHub #4): 59.4 fps, startup boxes and logos as normal, then 4 draws a frame for over three
+      minutes from 40 s on = the attract movie: an exe from before fix 71 (no info host / cpu_clock lines) with the new
+      PLAY.bat's movies on. He never rebuilt (the broken .venv stopped BUILD.bat) and cannot update: no Git.
+    - Updates for a copy that is not a git clone: setup/update.py --check asks GitHub's releases/latest (latest=,
+      current= from VERSION, note= lines from "New in this release", stdout forced to UTF-8 for the launcher's pipe);
+      --install downloads the release ZIP, checks it against the sha256 digest GitHub publishes for the asset, copies
+      the files under DemonsSoulsRecomp-<tag>/ over the folder through <file>.new + os.replace (waits for the closing
+      launcher's exe, last resort renames it aside), never anything in KEEP (game, port, deps, .venv, saves, logs,
+      launcher.ini, ...; any letter case), and writes VERSION last. The release job writes VERSION into the ZIP.
+    - Launcher: Check for updates on a copy without .git runs update.py --check on a thread (git_run), shows the
+      version and what is new, and on Yes its %TEMP% script runs update.py --install, then .\BUILD.bat, then opens
+      the launcher again (script written as UTF-8 under chcp 65001, % doubled; .\BUILD.bat because call expands %
+      again). A git clone keeps git pull (a clone without git.exe on PATH keeps the old message: copying release
+      files over a checkout would block its next pull). An update that stopped is offered again in full (download +
+      build). At start a copy without .git checks quietly once: a newer release shows in the status line. The status
+      line shows VERSION. A broken .venv says "press PLAY: it repairs it" instead of "no internet".
+    - Visual C++ runtime (RPCS3 needs it; Windows Sandbox has no winget): without winget, Microsoft's own
+      vc_redist.x64.exe from https://aka.ms/vs/17/release/vc_redist.x64.exe, used only if Get-AuthenticodeSignature
+      says Valid and the signer is Microsoft Corporation, run elevated (one Windows prompt; a "No" is reported as such,
+      exit 1223; 3010 = restart Windows first); the DLL versions are checked again after.
+    - Git's "detected dubious ownership" (a folder owned by another Windows account: shared into Windows Sandbox,
+      made by an admin, copied from another PC): patch_sync trusts the kit's checkouts for the git commands the
+      setup runs, through GIT_CONFIG_COUNT (command-line scope, which safe.directory honours), never globally.
+    - Tests on a test install marked as the older v2026.11.03.5: Check for updates -> "Version v2026.11.03.6 is
+      available" with the notes -> Yes -> the real v2026.11.03.6 downloaded and verified, copied over while the
+      launcher closed, BUILD.bat, the launcher back -- 6-9 s, three runs; the status line at start: "New version ... is
+      available", nothing when current. The update script in a folder "Démon's Sôuls 100%" with
+      NoDefaultCurrentDirectoryInExePath=1. vc_redist: download + Microsoft signature check (a fake file refused);
+      the elevated run is for the Sandbox re-test. safe.directory shows at "command" scope.
+    - Review (2 lenses + adversarial verify): 12 confirmed, 3 refuted; fixed: notes characters crashing --check
+      (cp1252 pipe), a clone without git on PATH overwritten, a stopped update only rebuilt, a declined prompt read as
+      success, 3010 not explained, a broken .venv reported as no internet, OEM / % in the script's paths, ZIP names
+      (drive letters, other top folders, KEEP in another case), a raw middle dot in the source. Left: a Code-button
+      ZIP copy has no VERSION, so it is offered the newest release even if its own files are newer (rare).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

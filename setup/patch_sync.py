@@ -24,6 +24,24 @@ RUNTIME_PATCH = os.path.join(ROOT, 'patches', 'ps3recomp-local.patch')
 GIT_EOL = ['-c', 'core.autocrlf=' + ('true' if os.name == 'nt' else 'input')]
 
 
+def _trust_own_checkouts():
+    """The kit's own git checkouts (deps/ps3recomp, and this folder when it is a clone) can belong to another
+    Windows account -- a folder an administrator made, one copied from another PC, or one shared into Windows
+    Sandbox -- and git then refuses them ("detected dubious ownership in repository"). Trust them for the git
+    commands this setup runs (and their children) only: git's environment configuration (GIT_CONFIG_COUNT,
+    which counts as command-line configuration), never the player's global settings."""
+    n = int(os.environ.get('GIT_CONFIG_COUNT', '0') or 0)
+    if any(os.environ.get(f'GIT_CONFIG_KEY_{i}') == 'safe.directory' and os.environ.get(f'GIT_CONFIG_VALUE_{i}') == '*'
+           for i in range(n)):
+        return
+    os.environ[f'GIT_CONFIG_KEY_{n}'] = 'safe.directory'
+    os.environ[f'GIT_CONFIG_VALUE_{n}'] = '*'
+    os.environ['GIT_CONFIG_COUNT'] = str(n + 1)
+
+
+_trust_own_checkouts()
+
+
 def say(msg=''):
     print(msg, flush=True)
 

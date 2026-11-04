@@ -48,6 +48,7 @@ RPCS3_WIN_RELEASES = 'https://api.github.com/repos/RPCS3/rpcs3-binaries-win/rele
 SEVENZR_URL = 'https://github.com/ip7z/7zip/releases/download/26.05/7zr.exe'
 SEVENZR_SHA256 = '9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7'
 VCRT_MIN = (14, 40)   # RPCS3's Windows builds are made with Visual C++ 14.5x; its runtime must not be older
+VCREDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'   # Microsoft's own link to the newest x64 runtime
 
 
 def say(msg=''):
@@ -340,22 +341,84 @@ def file_version(p):
         return None
 
 
+def vc_versions():
+    names = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+    return [file_version(os.path.join(sysdir(), n)) if os.path.isfile(os.path.join(sysdir(), n)) else None for n in names]
+
+
+def vc_current():
+    if os.environ.get('DS_TEST_NO_VCRT') == '1':   # tests: act as if the runtime were missing
+        return False
+    return all(v is not None and v >= VCRT_MIN for v in vc_versions())
+
+
+def ps(cmd, **env):
+    """A PowerShell one-liner with its paths passed through the environment (no quoting, no wildcards)."""
+    return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cmd],
+                          env=dict(os.environ, **env)).returncode
+
+
+def install_vcredist(run=True):
+    """Without winget: Microsoft's own installer from Microsoft's own link, used only if Authenticode says it is
+    validly signed by Microsoft; run elevated (Windows asks once). run=False: download and check only (tests)."""
+    exe = os.path.join(ROOT, 'deps', 'vc_redist.x64.exe')
+    os.makedirs(os.path.dirname(exe), exist_ok=True)
+    say(f'  downloading Microsoft\'s Visual C++ runtime installer from {VCREDIST_URL}')
+    try:
+        with urllib.request.urlopen(VCREDIST_URL, timeout=120) as r, open(exe, 'wb') as f:
+            shutil.copyfileobj(r, f, 1 << 20)
+    except OSError as e:
+        say(f'  download failed: {e}')
+        return False
+    try:
+        if ps("$s = Get-AuthenticodeSignature -LiteralPath $env:DS_FILE; "
+              "if ($s.Status -eq 'Valid' -and $s.SignerCertificate.Subject -like '*O=Microsoft Corporation*') "
+              "{ exit 0 } else { Write-Host ('  not signed by Microsoft: ' + $s.Status); exit 1 }", DS_FILE=exe):
+            say('  the download is not a Microsoft-signed installer; not running it')
+            return False
+        if not run:
+            return True
+        say('  installing it (Windows asks you to allow Microsoft\'s installer to make changes) ...')
+        # a "No" at the Windows prompt makes Start-Process throw: report it as 1223 (ERROR_CANCELLED), not as 0
+        rc = ps("try { $p = Start-Process -FilePath $env:DS_FILE -ArgumentList '/install','/passive','/norestart' "
+                "-Verb RunAs -Wait -PassThru -ErrorAction Stop; exit $p.ExitCode } catch { exit 1223 }", DS_FILE=exe)
+        if rc == 1223:
+            say('  the Windows prompt was answered with No, so the runtime was not installed')
+            return False
+        if rc not in (0, 3010, 1638):   # 3010: done, restart later; 1638: a newer one is already there
+            say(f'  the installer stopped (code {rc})')
+            return False
+        if rc == 3010:
+            say('  installed; Windows wants a restart before it is used')
+        return True
+    finally:
+        try:
+            os.remove(exe)
+        except OSError:
+            pass
+
+
 def vc_runtime_ok():
     """RPCS3's Windows build needs a recent Microsoft Visual C++ runtime (MSVCP140.dll and friends), which
-    most PCs have from games and other programs. Offer Microsoft's installer when it is missing or too old."""
-    names = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
-    vers = [file_version(os.path.join(sysdir(), n)) if os.path.isfile(os.path.join(sysdir(), n)) else None for n in names]
-    if all(v is not None and v >= VCRT_MIN for v in vers):
+    most PCs have from games and other programs. Install Microsoft's when it is missing or too old: with winget
+    when there is one, else Microsoft's installer straight from Microsoft (Windows Sandbox has no winget)."""
+    if vc_current():
         return True
-    have = vers[0]
+    have = vc_versions()[0]
     say('  RPCS3 needs the Microsoft Visual C++ runtime ' +
         (f'{VCRT_MIN[0]}.{VCRT_MIN[1]} or newer (this PC has {have[0]}.{have[1]}).' if have else 'which is not installed on this PC.'))
-    if ask('  Install it now with winget (Microsoft\'s own installer, about 25 MB)? [Y/n] ').lower() != 'n':
-        if shutil.which('winget') and subprocess.run(
+    if ask('  Install it now (Microsoft\'s own installer, about 25 MB)? [Y/n] ').lower() != 'n':
+        if shutil.which('winget') and os.environ.get('DS_TEST_NO_WINGET') != '1' and subprocess.run(
                 ['winget', 'install', '-e', '--id', 'Microsoft.VCRedist.2015+.x64',
-                 '--accept-package-agreements', '--accept-source-agreements']).returncode == 0:
+                 '--accept-package-agreements', '--accept-source-agreements']).returncode == 0 and vc_current():
             return True
-    say('  Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe and run the setup again.')
+        if install_vcredist():
+            if vc_current():
+                say('  Visual C++ runtime installed')
+                return True
+            say('  Restart Windows, then press Play (or run the setup) again: finished steps are skipped.')
+            return False
+    say(f'  Install it from {VCREDIST_URL} and run the setup again.')
     return False
 
 
