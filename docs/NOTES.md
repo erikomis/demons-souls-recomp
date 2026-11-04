@@ -1903,6 +1903,17 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       success, 3010 not explained, a broken .venv reported as no internet, OEM / % in the script's paths, ZIP names
       (drive letters, other top folders, KEEP in another case), a raw middle dot in the source. Left: a Code-button
       ZIP copy has no VERSION, so it is offered the newest release even if its own files are newer (rare).
+84. **The build shows a progress line, not thousands of warnings (2026-11-03, the Windows Sandbox test: "should I
+    stop it?"):**
+    - The compile printed clang's warnings (-Weverything-style: unsafe-buffer-usage, padding, pre-C11 ...) by the
+      thousand, harmless but alarming. setup/build.py run_quiet() runs cmake / ninja (both the Visual Studio and the
+      portable route) with the output piped: one line updated in place, "compiling 47/322 (15%) - 3:12" (ninja's
+      [n/N]; a ticker thread keeps the time moving while one big lifted file compiles for minutes); a failed step
+      (FAILED:, ninja: error, CMake Error, or an error line) is printed in full above it; a failure with no line
+      recognised prints the output's last 25 lines; the whole output goes to logs/build_last.txt.
+      DS_BUILD_VERBOSE=1 = the old full output. No compiler flags change (that would recompile every install).
+    - Tested: a fake build (5 steps, 2000 warning lines, a failed file) shows the progress and the failure only; a
+      real incremental build on a test install printed 4 lines (log 4086).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

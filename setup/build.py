@@ -21,7 +21,7 @@ takes that path on Windows too, without Visual Studio.
 usage: BUILD.bat [--jobs N] [ninja targets...]
        build.py --runtime-only [--jobs N]   (cross toolchain: ps3recomp's runtime alone, no game needed)
 """
-import glob, hashlib, os, re, shutil, subprocess, sys, tarfile, tempfile, time, urllib.request
+import glob, hashlib, os, re, shutil, subprocess, sys, tarfile, tempfile, threading, time, urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, 'port', 'build_opt')
@@ -483,11 +483,11 @@ def build_xwin(jobs=None, targets=(), runtime_only=False):
         cfg = None
     else:   # existing build: a quick CMake re-run; the SPU code rebuilds only when the choice changed
         cfg = [cmake, flag, fwd(bdir)]
-    if cfg and subprocess.run(cfg, env=env, stdout=subprocess.DEVNULL if len(cfg) == 3 else None).returncode:
+    if cfg and run_quiet(cfg, env=env, what='configuring'):
         return 5
     if runtime_only:
         targets = targets or ['ps3recomp_runtime']
-    rc = subprocess.run([ninja, '-C', bdir, '-j', str(jobs), *targets], env=env).returncode
+    rc = run_quiet([ninja, '-C', bdir, '-j', str(jobs), *targets], env=env)
     if runtime_only:
         say('\n  runtime library built' if rc == 0 else '\n  runtime library build FAILED')
         return rc
@@ -517,6 +517,76 @@ def fix_future_times():
     if n:
         say(f'  {n} file(s) from the download were dated in the future (another time zone): dated now')
     return n
+
+
+def run_quiet(cmd, env=None, what='compiling'):
+    """Run a build command showing one progress line ("compiling 47/322 (15%) - 3:12", from ninja's [n/N] lines)
+    instead of the compiler's warnings, which are harmless but scare people. A failed step (ninja's FAILED:, or an
+    error line) is shown in full. Everything goes to logs/build_last.txt. DS_BUILD_VERBOSE=1: the old full output."""
+    if os.environ.get('DS_BUILD_VERBOSE') == '1':
+        return subprocess.run(cmd, env=env).returncode
+    os.makedirs(os.path.join(ROOT, 'logs'), exist_ok=True)
+    logp = os.path.join(ROOT, 'logs', 'build_last.txt')
+    t0 = time.time()
+    state = {'line': f'  {what} ...', 'shown': False}
+    lock = threading.Lock()
+
+    def show(final=False):
+        el = int(time.time() - t0)
+        text = f"{state['line']}  -  {el // 60}:{el % 60:02d}"
+        sys.stdout.write('\r' + text.ljust(78) + ('\n' if final else ''))
+        sys.stdout.flush()
+        state['shown'] = not final
+
+    def above(text):   # a line of its own, then the progress line again under it
+        with lock:
+            if state['shown']:
+                sys.stdout.write('\r' + ' ' * 79 + '\r')
+            sys.stdout.write(text.rstrip('\n') + '\n')
+            show()
+
+    done = threading.Event()
+
+    def tick():   # the elapsed time keeps moving while one big file compiles for minutes
+        while not done.wait(1.0):
+            with lock:
+                show()
+
+    p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    th = threading.Thread(target=tick, daemon=True)
+    th.start()
+    errors = 0
+    loud = False   # inside a failed step's output (from FAILED: to the next [n/N] line)
+    tail = []
+    with open(logp, 'w', encoding='utf-8', errors='replace') as log:
+        for b in p.stdout:
+            line = b.decode('utf-8', 'replace').rstrip('\r\n')
+            log.write(line + '\n')
+            tail = (tail + [line])[-40:]
+            m = re.match(r'\[(\d+)/(\d+)\]', line)
+            if m:
+                loud = False
+                n, total = int(m.group(1)), int(m.group(2))
+                with lock:
+                    state['line'] = f'  {what} {n}/{total} ({100 * n // max(total, 1)}%)'
+                    show()
+                continue
+            if line.startswith('FAILED:') or line.startswith('ninja: error') or line.startswith('CMake Error'):
+                loud = True
+            if loud or re.search(r'(?:^|[\s:)])(?:fatal )?error(?: [A-Z]+\d+)?:', line):
+                errors += 1
+                above('  ' + line)
+    rc = p.wait()
+    done.set()
+    th.join()
+    with lock:
+        show(final=True)
+    if rc and not errors:   # failed without an error line we recognised: show the end of the output
+        for l in tail[-25:]:
+            say('  ' + l)
+    if rc:
+        say(f'  the full build output is in {logp}')
+    return rc
 
 
 def build(jobs=None, targets=()):
@@ -566,7 +636,7 @@ def build(jobs=None, targets=()):
     with os.fdopen(fd, 'w') as f:
         f.write('\r\n'.join(lines) + '\r\n')
     try:
-        rc = subprocess.run(['cmd', '/d', '/c', bat]).returncode
+        rc = run_quiet(['cmd', '/d', '/c', bat])
     finally:
         os.remove(bat)
     return finish(rc, avx2, full=not targets)

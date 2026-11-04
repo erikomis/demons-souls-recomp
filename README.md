@@ -80,8 +80,9 @@ That's it. SETUP.bat then:
 | 5 | applies this port's edits to the recompiled code (`patches/lifted-code.patch`) | seconds |
 | 6 | compiles everything with clang-cl into `port/build_opt/DemonsSoulsRecomp.exe` (plus `DemonsSoulsLauncher.exe`, next to `PLAY.bat`) | 10–30 min |
 
-\* on a fast 16-core PC; the first compile is the long part. If anything fails, fix what it says
-and run SETUP.bat again: finished steps are skipped.
+\* on a fast 16-core PC; the first compile is the long part. The compile shows one progress line
+(`compiling 47/322 (15%)`); the compiler's full output goes to `logs\build_last.txt`. If anything fails, fix
+what it says and run SETUP.bat again: finished steps are skipped.
 
 ## Updating
 
