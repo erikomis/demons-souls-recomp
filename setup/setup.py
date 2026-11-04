@@ -637,8 +637,28 @@ def step_lift():
     say('  done')
 
 
+def long_path_warning():
+    """Windows limits paths to 260 characters unless LongPathsEnabled is set (it is not on a new PC); the
+    build's deepest paths are ~130 characters inside the folder, so a long folder path breaks it midway."""
+    if os.name != 'nt' or len(ROOT) <= 100:
+        return
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\FileSystem') as k:
+            if winreg.QueryValueEx(k, 'LongPathsEnabled')[0] == 1:
+                return
+    except OSError:
+        pass
+    say(f'  NOTE: this folder\'s path is long ({len(ROOT)} characters): {ROOT}')
+    say('  Windows limits paths to 260 characters and the build goes ~130 deep, so it may fail partway.')
+    say('  Moving the folder somewhere short (for example C:\\Games\\DemonsSouls) avoids that.')
+    if ask('  Continue here anyway? [y/N] ').lower() != 'y':
+        sys.exit(1)
+
+
 def main():
     build.no_quickedit()   # a click in the window must not pause the setup
+    long_path_warning()
     args, a = {}, sys.argv[1:]
     while a:
         x = a.pop(0)

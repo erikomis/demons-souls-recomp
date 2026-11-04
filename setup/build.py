@@ -102,11 +102,27 @@ def find_vs():
     return None, None
 
 
+BLOCKED_WINERRORS = (4551, 1260)   # application control policy (Smart App Control / WDAC), group policy
+
+
+def blocked(e, what):
+    """True (and says why) when Windows refused to start `what` because of an application control policy."""
+    if getattr(e, 'winerror', None) not in BLOCKED_WINERRORS:
+        return False
+    say(f'  Windows blocked {what}: Smart App Control (or another app control policy) does not let unsigned')
+    say('  programs run, and this port is built on your PC, so its tools and the game are unsigned. Turn it off')
+    say('  in Windows Security -> App & browser control -> Smart App Control (Windows cannot turn it back on')
+    say('  without a reinstall), then run the setup again.')
+    return True
+
+
 def clang_version(bindir):
     try:
         out = subprocess.run([os.path.join(bindir, 'clang-cl' + EXE), '--version'], capture_output=True,
                              text=True).stdout
-    except OSError:
+    except OSError as e:
+        if blocked(e, os.path.join(bindir, 'clang-cl' + EXE)):
+            sys.exit(1)
         return 0, ''
     m = re.search(r'version (\d+)\.', out)
     return (int(m.group(1)) if m else 0), out.splitlines()[0] if out else ''
@@ -292,6 +308,8 @@ def download_llvm():
                     rel = '/'.join(parts[1:])
                     if not (rel in want or rel.startswith('lib/clang/') or rel == 'LICENSE.TXT'):
                         continue
+                    if '/finclude/' in rel:   # Fortran modules: unused, and the longest paths (MAX_PATH)
+                        continue
                     out = os.path.join(dest, *parts)
                     if m.isdir():
                         os.makedirs(out, exist_ok=True)
@@ -302,6 +320,9 @@ def download_llvm():
                         n += 1
     except (OSError, tarfile.TarError, zstandard.ZstdError) as e:
         say(f'  unpacking LLVM failed: {e}')
+        if isinstance(e, FileNotFoundError) and len(ROOT) > 90:
+            say(f'  The folder path is long ({len(ROOT)} characters) and Windows limits paths to 260: move the')
+            say('  folder somewhere short, such as C:\\Games\\DemonsSouls, and run the setup again.')
         return False
     finally:
         if os.path.isfile(part):
@@ -422,7 +443,13 @@ def xwin_sdk():
             return None
     shutil.rmtree(XWIN_DIR, ignore_errors=True)
     say('  > xwin splat (downloading the Microsoft CRT + SDK, a few minutes)')
-    if subprocess.run(cmd).returncode:
+    try:
+        rc = subprocess.run(cmd).returncode
+    except OSError as e:
+        if not blocked(e, xwin):
+            say(f'  could not run {xwin}: {e}')
+        return None
+    if rc:
         say('  xwin failed (see above); run the setup again to retry.')
         return None
     shutil.rmtree(cache, ignore_errors=True)   # the downloaded packages, no longer needed
@@ -437,10 +464,29 @@ def xwin_sdk():
 
 
 def default_jobs():
-    """One compile per core, but on Linux no more than ~1 per 2.5 GB of free memory: the biggest
-    lifted files need about that much, and a Steam Deck has 16 GB for 8 threads."""
+    """One compile per core, but no more than ~1 per 2.5 GB of free memory: the biggest lifted files need
+    about that much (a Steam Deck has 16 GB for 8 threads; Windows Sandbox gets every host thread but its own
+    RAM). Windows: 1 per 2 GB of installed RAM; Linux: 1 per 2.5 GB of MemAvailable."""
     n = os.cpu_count() or 4
-    if os.name != 'nt':
+    if os.name == 'nt':
+        try:
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong),
+                            ('ullTotalPhys', ctypes.c_ulonglong), ('ullAvailPhys', ctypes.c_ulonglong),
+                            ('ullTotalPageFile', ctypes.c_ulonglong), ('ullAvailPageFile', ctypes.c_ulonglong),
+                            ('ullTotalVirtual', ctypes.c_ulonglong), ('ullAvailVirtual', ctypes.c_ulonglong),
+                            ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+            st = MEMORYSTATUSEX()
+            st.dwLength = ctypes.sizeof(st)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                # by installed RAM (2 GB per compile): the page file grows as needed and most files need far
+                # less than the biggest, so free memory right now would be too strict (a 64 GB PC: 32 jobs)
+                n = max(1, min(n, int(st.ullTotalPhys / (2 * 1024 ** 3))))
+        except (OSError, AttributeError, ValueError):
+            pass
+    else:
         try:
             with open('/proc/meminfo') as f:
                 kb = next(int(l.split()[1]) for l in f if l.startswith('MemAvailable:'))
@@ -584,7 +630,12 @@ def run_quiet(cmd, env=None, what='compiling'):
             with lock:
                 show()
 
-    p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        p = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as e:
+        if not blocked(e, cmd[0]):
+            say(f'  could not run {cmd[0]}: {e}')
+        return 1
     th = threading.Thread(target=tick, daemon=True)
     th.start()
     errors = 0
@@ -633,7 +684,7 @@ def build(jobs=None, targets=()):
         return 1
     vcvars, (ver, llvm, ver_text), cmake, ninja = t
     say(f'  compiler: {ver_text} ({llvm})')
-    jobs = int(jobs or os.cpu_count() or 8)
+    jobs = int(jobs or default_jobs())
     L = fwd(llvm)
     lines = ['@echo off', f'call "{vcvars}" >nul || exit /b 4',
              f'set "PATH={os.path.dirname(cmake)};{os.path.dirname(ninja)};{llvm};%PATH%"']
