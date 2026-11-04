@@ -195,7 +195,7 @@ camera once you press a key or mouse button, and the controller takes it back wh
 click = confirm**, **right click = back**, the **wheel** moves the cursor up and down, and the mouse's side buttons
 or **PageUp / PageDown** are L1 / R1. A click in a menu needs no capturing click first. Outside menus the mouse
 buttons attack and block as before. `set PAD_MENU_MOUSE=0` turns this off. (Pointing at an item is not supported
-yet.)
+yet but is currently being worked on.)
 
 **Button icons follow what you play with:** while the keyboard / mouse is what you used last, the game's button
 icons (key guides, "Pick up" prompts, the HUD's equipment boxes, the Start menu tabs) show the keys and mouse
