@@ -1921,6 +1921,12 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       (with ENABLE_EXTENDED_FLAGS) on the console's input handle: called by build.py and setup.py at start and by
       update.py --install. Only that window; the full output is in logs/build_last.txt anyway (fix 84).
     - Tested in a real console window: mode 0x1F7 (QuickEdit on) -> 0x1B7 (off), the other flags kept.
+86. **SETUP opens Redump's page when it needs the disc key (2026-11-03):**
+    - An encrypted Redump image without a .dkey next to it: setup.py disc_key() opens REDUMP_PAGE
+      (http://redump.org/disc/16199/, BLUS-30443 v1.00) in the default browser and says to copy its "Disc Key" line
+      and paste it with Ctrl+V (right-click no longer pastes with QuickEdit off, fix 85). The key itself stays out of
+      the kit (a decryption key in the repo would make it the thing handing the key out). DS_NO_BROWSER=1 = no browser.
+    - Tested with the browser call intercepted: the page URL is opened, the hint printed, then the prompt.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

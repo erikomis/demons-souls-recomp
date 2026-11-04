@@ -41,6 +41,9 @@ LIFT_ARGS = ['--code-end', '0x16bb5e4', '--chunks', '128']
 # What to tell you to run: the Linux launchers (linux/setup.sh, the AppImage) set these
 SETUP_NAME = os.environ.get('DS_SETUP_NAME') or 'SETUP.bat'
 PLAY_HINT = os.environ.get('DS_PLAY_HINT') or 'Double-click DemonsSoulsLauncher.exe to play.'
+# Redump's page for the disc: its "Disc Key" line is the key an encrypted Redump image needs. Opened for the player
+# when there is no .dkey; the key itself is never part of this kit.
+REDUMP_PAGE = 'http://redump.org/disc/16199/'
 RPCS3_LINUX_RELEASES = 'https://api.github.com/repos/RPCS3/rpcs3-binaries-linux/releases/latest'
 RPCS3_WIN_RELEASES = 'https://api.github.com/repos/RPCS3/rpcs3-binaries-win/releases/latest'
 # 7-Zip's own standalone 7zr.exe: unpacks RPCS3's .7z where Windows' tar.exe cannot (Windows 10 and Windows
@@ -202,7 +205,15 @@ def disc_key(args, image, needs_key, check):
             return k
     say('  This image is encrypted (as Redump images are) and needs its disc key: the 32 hex digits')
     say('  that came with your dump (a .dkey file next to the .iso), or the "Disc Key" on the Redump')
-    say('  page for your disc: http://redump.org/disc/16199/ (Demon\'s Souls USA, BLUS-30443, version 01.00).')
+    say(f'  page for your disc: {REDUMP_PAGE} (Demon\'s Souls USA, BLUS-30443, version 01.00).')
+    if os.environ.get('DS_NO_BROWSER') != '1':
+        try:
+            import webbrowser
+            if webbrowser.open(REDUMP_PAGE):
+                say('  That page is now open in your browser: copy the long code on its "Disc Key" line and')
+                say('  paste it here with Ctrl+V.')
+        except Exception:
+            pass
     while True:
         t = ask('  Disc key (or drag the .dkey file here): ')
         try:
