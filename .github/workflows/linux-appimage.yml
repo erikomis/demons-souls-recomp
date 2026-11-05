@@ -70,6 +70,19 @@ jobs:
           echo "Ubuntu's git: $v"
           sudo apt-get install -yq --allow-downgrades "git=$v" "git-man=$v" patchelf zstd file dpkg-dev
           git --version
+          # The libraries git links against are bundled too, with their source packages. The runner image
+          # can be older than the archive, whose index keeps only the newest source (pcre2 10.39-3ubuntu0.1
+          # in the image vs 0.2 in the archive, 2026-11-05): bring those packages up to the archive's version.
+          pkgs=$(ldd /usr/bin/git /usr/lib/git-core/git-remote-http | awk '/=> \//{print $3}' | sort -u |
+            while read -r f; do
+              r=$(readlink -f "$f")
+              for p in "$f" "$r" "${r#/usr}" "/usr$r"; do
+                o=$(dpkg -S "$p" 2>/dev/null | head -n 1) || true
+                [ -n "$o" ] && { echo "${o%%:*}" | sed 's/,.*//'; break; }
+              done
+            done | sort -u)
+          echo "git's library packages: $(echo $pkgs)"
+          sudo apt-get install -yq --only-upgrade $pkgs
       - uses: actions/cache@v4
         with:
           path: build-appimage/cache

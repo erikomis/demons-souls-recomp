@@ -174,7 +174,8 @@ if [ "${SKIP_SOURCES:-}" = 1 ]; then
 else
   sort -u "$WORK/specs.txt" | while read -r spec; do
     (cd "$SRC/packages" && apt-get source --download-only -q "$spec" >/dev/null) ||
-      { echo "apt-get source $spec failed (deb-src entries missing?)"; exit 1; }
+      { echo "apt-get source $spec failed (deb-src entries missing, or the installed package is older than"
+        echo "the archive's: apt-get install --only-upgrade it)"; exit 1; }
   done
   tar -cf "$SRC_OUT" -C "$SRC" .
   echo "  $(sort -u "$WORK/specs.txt" | wc -l) source packages, $(du -h "$SRC_OUT" | cut -f1)"
