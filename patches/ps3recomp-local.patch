@@ -5137,7 +5137,7 @@ index 0000000..d9edd4d
 +
 +#endif /* PS3RECOMP_VDEC_MF_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..e7f2928 100644
+index afdd93d..48b526c 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -16,6 +16,7 @@
@@ -5172,7 +5172,7 @@ index afdd93d..e7f2928 100644
      HWND fg = GetForegroundWindow();
      if (!fg) return 0;
      DWORD pid = 0;
-@@ -277,23 +282,444 @@ static int pad_host_window_focused(void)
+@@ -277,23 +282,592 @@ static int pad_host_window_focused(void)
      return pid == GetCurrentProcessId();
  }
  
@@ -5264,7 +5264,7 @@ index afdd93d..e7f2928 100644
 +                vk_of[i] = v ? (int)v : 'A' + i;
 +            }
 +        }
-+    }
+     }
 +    return vk_of[us_letter - 'A'];
 +}
 +/* Keys for the game layouts (fix 73 review): a key or mouse button that is already down when the
@@ -5283,7 +5283,7 @@ index afdd93d..e7f2928 100644
 +    if (s_key_gate) s_key_stale[vk] = 1;
 +    return !s_key_stale[vk];
 +}
-+
+ 
 +/* Port hotkeys (Demon's Souls god mode, NOTES fix 44): ps3_host_hotkey(vk) is 1 once per press of
 + * vk while the game window is in front (or from PAD_KEY_SCRIPT). Call it from one thread only.
 + * ps3_host_title_suffix(s) shows s after the game window's title ("" = the plain title again); a
@@ -5317,7 +5317,7 @@ index afdd93d..e7f2928 100644
 +        _snwprintf(t, 400, L"%ls%hs", base, (const char*)p);
 +        t[399] = 0;
 +        SetWindowTextW(w, t);
-     }
++    }
 +    ReleaseSRWLockExclusive(&lock);
 +    free(p);
 +    return 0;
@@ -5329,7 +5329,7 @@ index afdd93d..e7f2928 100644
 +    HANDLE h = CreateThread(NULL, 0, pad_title_thread, copy, 0, NULL);
 +    if (h) CloseHandle(h); else free(copy);
 +}
- 
++
 +/* PAD_KEYMAP=souls: a keyboard + mouse layout for third-person action games (Demon's Souls).
 + *   WASD = left stick (move)            mouse / IJKL = right stick (camera)
 + *   LMB = R1 (attack)  SHIFT = R2 (strong attack)  RMB = L1 (block)  CTRL = L2 (parry)
@@ -5383,10 +5383,60 @@ index afdd93d..e7f2928 100644
 +        fflush(stderr);
 +    }
 +}
++/* Menu pointing (Demon's Souls NOTES fix 93; on by default, DES_POINT=0 turns it off). While a menu is open the mouse is
++ * released and the Windows arrow shows; a mouse that was captured before the menu opened is captured again when
++ * it closes. The arrow's place in menu layout units (1280 x 720, ps3_host_client_to_guest in rsx_live_draw.c) is
++ * published with "pointer authority": set when the mouse moves 2+ units, cleared by any key or pad direction --
++ * so a mouse resting on the screen never fights the keyboard or pad. ps3_host_pointer() -> 1 with x / y while the
++ * pointer has authority. PAD_TEST_CLIENT="<sec>:<cx>,<cy>[;...]" (TEST) puts the arrow at client pixel cx,cy;
++ * PAD_TEST_POINT=1 (TEST) lets the release / recapture run under PAD_KEY_SCRIPT. */
++extern int ps3_host_client_to_guest(int cx, int cy, int cw, int ch, float* gx, float* gy);   /* rsx_live_draw.c */
++static int s_point_on = -1;
++static volatile LONG s_ptr_auth, s_ptr_seq;          /* authority; bumped on every move that counts */
++static volatile LONG64 s_ptr_pos;                    /* position, layout units * 10: x in the high, y in the low half */
++static volatile LONG s_point_norecap;                /* Esc released the mouse during this menu: no recapture */
++static volatile LONG s_ptr_inside;                   /* the arrow is over the game picture (position valid) */
++/* What the arrow is over in the focused menu, from the game thread once per step (ppu_recomp_086.cpp des_pt_step):
++ * -1 = no pointing-aware dialog has focus (clicks behave as before: confirm anywhere), 0 = no item (a click is
++ * dropped), 1 = the selected item (a click confirms), 2 = another item (a click selects it, then confirms). */
++static volatile LONG s_hit_state = -1;
++void ps3_host_point_hit(int state) { InterlockedExchange(&s_hit_state, state); }
++int ps3_host_pointer_pos(float* x, float* y)
++{
++    const LONG64 p = s_ptr_pos;
++    if (!s_ptr_inside) return 0;
++    *x = (float)(LONG)(p >> 32) / 10.0f; *y = (float)(LONG)(p & 0xFFFFFFFF) / 10.0f;
++    return 1;
++}
++static volatile LONG s_menu_epoch;                   /* menu openings: each starts without authority */
++static int pad_point_on(void)
++{
++    if (s_point_on < 0) { const char* e = getenv("DES_POINT"); s_point_on = (e && *e == '0') ? 0 : 1; }   /* on; DES_POINT=0 off */
++    return s_point_on;
++}
++int ps3_host_pointer(float* x, float* y, unsigned* seq)
++{
++    for (int tries = 0; tries < 4; tries++) {   /* the position and its move counter as one pair */
++        const LONG s1 = s_ptr_seq;
++        const LONG64 p = s_ptr_pos;
++        if (!s_ptr_auth) return 0;
++        if (s_ptr_seq != s1) continue;
++        *x = (float)(LONG)(p >> 32) / 10.0f; *y = (float)(LONG)(p & 0xFFFFFFFF) / 10.0f;
++        if (seq) *seq = (unsigned)s1;
++        return 1;
++    }
++    return 0;
++}
++static HWND pad_game_hwnd(void)
++{
++    static HWND w;
++    if (!w || !IsWindow(w)) { w = NULL; EnumWindows(pad_find_game_window, (LPARAM)&w); }
++    return w;
++}
 +void ps3_host_mouse_wheel(int delta)   /* window thread; only while a menu is open (none saved up for later) */
 +{ if (delta && ((unsigned)s_menu_mask & DES_MENU_GATE)) InterlockedAdd(&s_wheel_acc, delta); }
 +static void pad_mouse_capture(int on);
-+void ps3_host_mouse_release(void) { pad_mouse_capture(0); }   /* Esc in the game window */
++void ps3_host_mouse_release(void) { s_point_norecap = 1; pad_mouse_capture(0); }   /* Esc in the game window */
 +/* Real mouse look (ppu_recomp_016.cpp, the game's free camera): the camera update calls look_frame() each
 + * frame and, in the free camera, look_take() -- which hands it the counts and keeps them out of the stick for
 + * 100 ms. In lock-on, aiming, menus and cutscenes take() is not called and the stick path below gets them
@@ -5448,6 +5498,7 @@ index afdd93d..e7f2928 100644
 +    *ry = (int)(diry * m * 127.0 + (diry < 0 ? -0.5 : 0.5));
 +}
 +
++static int pad_stick_moved(u8 v);
 +static void pad_poll_keyboard_souls(PadHostState* hs, int mouse_ok)
 +{
 +    static const struct { int vk; u16 btn; } map[] = {
@@ -5471,7 +5522,9 @@ index afdd93d..e7f2928 100644
 +    static const int mb[] = { VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2 };
 +    if (menu_on < 0) { const char* e = getenv("PAD_MENU_MOUSE"); menu_on = !(e && e[0] == '0'); }
 +    const unsigned mask_now = (unsigned)s_menu_mask;
-+    const int menu = menu_on && (mask_now & DES_MENU_GATE) != 0;
++    /* pointing (local): the title / profile select run with menu mask 0; a pointing-aware dialog with focus (the game
++     * publishes a hit state >= 0 for it every step) counts as a menu too */
++    const int menu = menu_on && ((mask_now & DES_MENU_GATE) != 0 || (pad_point_on() && s_hit_state >= 0));
 +    const int scr = pad_key_script_active();
 +    if (menu && !menu_was) {
 +        carry = 0;
@@ -5484,6 +5537,22 @@ index afdd93d..e7f2928 100644
 +    } else if (menu) {
 +        for (unsigned i = 0; i < sizeof mb / sizeof mb[0]; i++)
 +            if (!pad_key_down(mb[i])) carry &= ~(1 << i);   /* let go in the menu: no longer carried */
++    }
++    /* pointing: free the arrow while a menu is open, give the mouse back to the camera when it closes */
++    {
++        static int recap = 0;
++        static int test = -1;
++        if (test < 0) { const char* e = getenv("PAD_TEST_POINT"); test = (e && *e == '1') ? 1 : 0; }
++        if (menu && !menu_was) InterlockedIncrement(&s_menu_epoch);
++        if (pad_point_on() && (!scr || test)) {
++            if (menu && !menu_was) { s_point_norecap = 0; if (s_mouse_cap) { recap = 1; pad_mouse_capture(0); } }
++            else if (!menu && menu_was && recap) {
++                recap = 0;
++                HWND g = pad_game_hwnd();
++                if (!s_point_norecap && (test || (g && GetForegroundWindow() == g && mouse_ok))) pad_mouse_capture(1);
++            }
++        }
++        if (!menu) { InterlockedExchange(&s_ptr_auth, 0); InterlockedExchange(&s_ptr_inside, 0); }
 +    }
 +    menu_was = menu;
 +    /* uncaptured in a menu, a click counts only if it starts over the game's client area (not the title bar, a
@@ -5506,7 +5575,41 @@ index afdd93d..e7f2928 100644
 +    if (menu) {
 +        const int lmb = (btns & CELL_PAD_CTRL_R1) != 0, rmb = (btns & CELL_PAD_CTRL_L1) != 0;
 +        btns &= (u16)~(CELL_PAD_CTRL_R1 | CELL_PAD_CTRL_L1);
-+        if (lmb) btns |= CELL_PAD_CTRL_CROSS;
++        int cross = lmb;
++        if (pad_point_on() && !s_mouse_cap && s_ptr_inside) {
++            /* Pointing (local): in a pointing-aware menu a left click confirms only on an item. On the selected item it
++             * confirms; on another item it selects it (the click counts as pointing) and confirms once the game has
++             * moved there (within 30 polls); on no item it does nothing. Elsewhere it confirms as before. */
++            static int mode = 0, wait = 0, lmb_prev = 0;   /* 0 idle, 1 confirm while held, 2 dropped, 3 waiting for the
++                                                            * selection, 4 deciding (the hit state lags the arrow by a step
++                                                            * or two: a fast move + click must not be dropped) */
++            static LONG decide_mark;
++            static LONG pulse_mark; static int pulse = 0;
++            const int st = (int)s_hit_state;
++            if (lmb && !lmb_prev) {
++                static int lg = -1;
++                if (lg < 0) { const char* e = getenv("DES_POINT_LOG"); lg = (e && *e && *e != '0') ? 1 : 0; }
++                if (lg) fprintf(stderr, "[pt-click] t=%.2f hit=%d (%s)\n", s_key_t0 ? pad_clock(s_key_t0) : 0.0, st,
++                                st == 2 ? "other item: select, then confirm" : st == 0 ? "no item (yet): deciding" :
++                                st == 1 ? "selected item: confirm" : "not a pointing menu: confirm");
++                if (st == 2) { InterlockedIncrement(&s_ptr_seq); InterlockedExchange(&s_ptr_auth, 1); mode = 3; wait = 30; }
++                else if (st == 0) { mode = 4; decide_mark = s_pad_reports; }
++                else mode = 1;
++            }
++            lmb_prev = lmb;
++            if (mode == 4) {   /* no item under the click yet: look again for up to 3 fresh reports */
++                if (st == 2) { InterlockedIncrement(&s_ptr_seq); InterlockedExchange(&s_ptr_auth, 1); mode = 3; wait = 30; }
++                else if (st == 1 || st < 0) { mode = lmb ? 1 : 0; if (!lmb) { pulse = 1; pulse_mark = s_pad_reports; } }
++                else if ((unsigned)(s_pad_reports - decide_mark) >= 3u) mode = lmb ? 2 : 0;
++            }
++            if (mode == 3) {
++                if (st == 1) { mode = lmb ? 1 : 0; if (!lmb) { pulse = 1; pulse_mark = s_pad_reports; } }
++                else if (--wait <= 0) mode = 0;
++            } else if (!lmb && mode != 4) mode = 0;
++            cross = mode == 1 && lmb;
++            if (pulse) { if ((unsigned)(s_pad_reports - pulse_mark) < 2u) cross = 1; else pulse = 0; }   /* 2 fresh reports */
++        }
++        if (cross) btns |= CELL_PAD_CTRL_CROSS;
 +        if (rmb) btns |= CELL_PAD_CTRL_CIRCLE;
 +        menu_click = (lmb || rmb) && !lr_was;
 +        lr_was = lmb || rmb;
@@ -5553,6 +5656,51 @@ index afdd93d..e7f2928 100644
 +    }
 +    hs->buttons = btns;
 +    hs->connected = 1;
++
++    if (pad_point_on() && menu && !s_mouse_cap) {   /* pointing: where the arrow is in menu units */
++        static struct { double t; int x, y; } tc[16]; static int ntc = -1;
++        if (ntc < 0) { ntc = 0; const char* e = getenv("PAD_TEST_CLIENT");
++            while (e && *e && ntc < 16) { double t; int x, y;
++                if (sscanf(e, "%lf:%d,%d", &t, &x, &y) == 3) { tc[ntc].t = t; tc[ntc].x = x; tc[ntc].y = y; ntc++; }
++                e = strchr(e, ';'); if (e) e++; } }
++        HWND g = pad_game_hwnd();
++        RECT cr; POINT q; int have = 0;
++        if (g && GetClientRect(g, &cr) && cr.right > 0 && cr.bottom > 0) {
++            if (ntc) {   /* TEST: the last scripted point that has started */
++                const double t = pad_clock(s_key_t0);
++                for (int i = 0; i < ntc; i++) if (t >= tc[i].t) { q.x = tc[i].x; q.y = tc[i].y; have = 1; }
++            } else if ((scr || GetForegroundWindow() == g) && GetCursorPos(&q) && ScreenToClient(g, &q))
++                have = 1;
++        }
++        float gx = 0, gy = 0;
++        const int inside = have && ps3_host_client_to_guest(q.x, q.y, cr.right, cr.bottom, &gx, &gy);
++        /* A move = the arrow moved 3+ client pixels in the same client area (a resize, Alt+Enter or a letterbox
++         * change moves the picture under a resting arrow: that is not the player pointing). The published position
++         * always follows the current mapping. */
++        static LONG last_cx = -100000, last_cy = -100000, last_cw, last_ch, epoch = -1;
++        if (epoch != s_menu_epoch) { epoch = s_menu_epoch; last_cx = last_cy = -100000; }   /* a menu opened / refocus */
++        if (cr.right != last_cw || cr.bottom != last_ch) { last_cw = cr.right; last_ch = cr.bottom; last_cx = last_cy = -100000; }
++        const LONG x10 = (LONG)(gx * 10.0f), y10 = (LONG)(gy * 10.0f);
++        if (inside) InterlockedExchange64(&s_ptr_pos, ((LONG64)x10 << 32) | (LONG64)(ULONG)y10);
++        InterlockedExchange(&s_ptr_inside, inside);
++        if (inside && (labs(q.x - last_cx) >= 3 || labs(q.y - last_cy) >= 3)) {
++            const int first = last_cx == -100000;
++            last_cx = q.x; last_cy = q.y;
++            if (!first || ntc) { InterlockedIncrement(&s_ptr_seq); InterlockedExchange(&s_ptr_auth, 1); }
++            static int log = -1;
++            if (log < 0) { const char* e = getenv("DES_POINT_LOG"); log = (e && *e && *e != '0') ? 1 : 0; }
++            if (log) fprintf(stderr, "[pt-ptr] t=%.2f client=(%ld,%ld) of %ldx%ld -> menu (%.1f,%.1f)%s\n",
++                             s_key_t0 ? pad_clock(s_key_t0) : 0.0, (long)q.x, (long)q.y, (long)cr.right,
++                             (long)cr.bottom, gx, gy, first && !ntc ? " (first sample: no authority)" : "");
++        }
++        if (!inside) InterlockedExchange(&s_ptr_auth, 0);   /* in a black bar / outside the window */
++        const u16 dirs = CELL_PAD_CTRL_UP | CELL_PAD_CTRL_DOWN | CELL_PAD_CTRL_LEFT | CELL_PAD_CTRL_RIGHT;
++        const PadHostState* ps = &s_host_state[0];   /* the pad's own state (merged with the keys after this poll) */
++        if ((btns & dirs) || pad_game_down('W') || pad_game_down('A') || pad_game_down('S') || pad_game_down('D') ||
++            (ps->connected && ((ps->buttons & dirs) || pad_stick_moved(ps->analog_lx) || pad_stick_moved(ps->analog_ly) ||
++                               pad_stick_moved(ps->analog_rx) || pad_stick_moved(ps->analog_ry))))
++            InterlockedExchange(&s_ptr_auth, 0);   /* keys, WASD, the pad (or the wheel's d-pad pulses) take over */
++    }
 +
 +    /* Left stick from WASD; a diagonal is scaled so it is not faster than a straight line. */
 +    int lx = (pad_game_down('D') ? 1 : 0) - (pad_game_down('A') ? 1 : 0);
@@ -5630,7 +5778,7 @@ index afdd93d..e7f2928 100644
      static const struct { int vk; u16 btn; } map[] = {
          { VK_UP,     CELL_PAD_CTRL_UP },      { VK_DOWN,  CELL_PAD_CTRL_DOWN },
          { VK_LEFT,   CELL_PAD_CTRL_LEFT },    { VK_RIGHT, CELL_PAD_CTRL_RIGHT },
-@@ -306,7 +732,7 @@ static void pad_poll_keyboard(void)
+@@ -306,7 +880,7 @@ static void pad_poll_keyboard(void)
  
      u16 btns = 0;
      for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
@@ -5639,7 +5787,7 @@ index afdd93d..e7f2928 100644
  
      hs->buttons   = btns;
      hs->connected = 1;
-@@ -317,10 +743,98 @@ static void pad_poll_keyboard(void)
+@@ -317,10 +891,100 @@ static void pad_poll_keyboard(void)
      hs->analog_rx = hs->analog_ry = 128;
      hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
      hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
@@ -5685,6 +5833,8 @@ index afdd93d..e7f2928 100644
 +        was_focused = 0;
 +        pad_mouse_capture(0);
 +        InterlockedExchange(&s_wheel_acc, 0);   /* fix 89 */
++        InterlockedIncrement(&s_menu_epoch);    /* pointing: back in the window = a fresh start, no authority */
++        InterlockedExchange(&s_ptr_auth, 0);
 +        return;
 +    }
 +    s_key_gate = !script && (!was_focused || (GetAsyncKeyState(VK_MENU) & 0x8000) ||
@@ -5740,7 +5890,7 @@ index afdd93d..e7f2928 100644
            fflush(stdout); } }
  }
  #endif
-@@ -684,7 +1198,13 @@ static void pad_shutdown_backend(void)
+@@ -684,7 +1348,13 @@ static void pad_shutdown_backend(void)
  static unsigned long long pad_now_ms(void)
  {
  #ifdef _WIN32
@@ -5755,7 +5905,7 @@ index afdd93d..e7f2928 100644
  #else
      struct timespec ts;
      clock_gettime(CLOCK_MONOTONIC, &ts);
-@@ -706,17 +1226,52 @@ static void pad_poll_backend(void)
+@@ -706,17 +1376,52 @@ static void pad_poll_backend(void)
      for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) s_data_fresh[_i] = 1;
  
  #if PAD_BACKEND_XINPUT
@@ -5810,7 +5960,7 @@ index afdd93d..e7f2928 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -865,6 +1420,7 @@ skip_inject: ;
+@@ -865,6 +1570,7 @@ skip_inject: ;
          len = CELL_PAD_LEN_CHANGE_PRESS_ON;
  
      data->len = len;
@@ -5818,7 +5968,7 @@ index afdd93d..e7f2928 100644
      /* Finalize this call's packet freshness before any injected hold budget
       * advances. len=0 drain reads still build the ordinary payload, but do
       * not consume a PAD_FILE report. See the emission contract below. */
-@@ -875,6 +1431,17 @@ skip_inject: ;
+@@ -875,6 +1581,17 @@ skip_inject: ;
              if (!s_data_fresh[port_no]) data->len = 0;   /* nothing new: end the drain */
              else                        s_data_fresh[port_no] = 0;
          }
@@ -5836,7 +5986,7 @@ index afdd93d..e7f2928 100644
      }
      /* button[0] is reserved and 0 on hardware; button[1] carries the pad mode
       * in its high nibble (0x7) and len/2 in its low one. GH3 drops any packet
-@@ -949,7 +1516,13 @@ skip_inject: ;
+@@ -949,7 +1666,13 @@ skip_inject: ;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
                    static int said[256];
                    if (!said[i]) { said[i] = 1;
@@ -5851,7 +6001,7 @@ index afdd93d..e7f2928 100644
                }
            }
        } }
-@@ -1015,6 +1588,24 @@ skip_inject: ;
+@@ -1015,6 +1738,24 @@ skip_inject: ;
        if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
@@ -5876,7 +6026,7 @@ index afdd93d..e7f2928 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
-@@ -1042,8 +1633,16 @@ skip_inject: ;
+@@ -1042,8 +1783,16 @@ skip_inject: ;
                  fprintf(stderr, "[PADSWEEP] step %d: l=(%u,%u) r=(%u,%u)%c", k,
                          steps[k][0], steps[k][1], steps[k][2], steps[k][3], 10); } }
          } } }
@@ -7508,7 +7658,7 @@ index e55bcc1..5a0e68d 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 713ba33..3e8f9ba 100644
+index 713ba33..4afdc25 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
 @@ -55,7 +55,9 @@ void rsx_live_draw_present_rgba(const uint8_t* r, u32 w, u32 h) { (void)r; (void
@@ -9679,7 +9829,7 @@ index 713ba33..3e8f9ba 100644
  #if defined(YZ_PERF_PROFILE)
      if (stage == 'V') {
          if (result == SHADER_BLOB_INSERTED) {
-@@ -4403,6 +5820,382 @@ static u32 vp_txl_unit_mask(const u8* ucode, u32 instrs)
+@@ -4403,6 +5820,407 @@ static u32 vp_txl_unit_mask(const u8* ucode, u32 instrs)
      return mask;
  }
  
@@ -9756,6 +9906,31 @@ index 713ba33..3e8f9ba 100644
 +/* CPU time the calling thread has used, in microseconds, for the perf log: a late frame whose
 + * thread was busy the whole time was computing, one whose thread was mostly idle was waiting.
 + * QueryThreadCycleTime counts TSC ticks; the TSC rate is measured once (a 20 ms sleep). */
++unsigned ps3_ld_frame_index(void) { return g_ld_frames; }
++/* Where the last present put the guest picture in the back buffer (letterbox, fix 74), for the menu pointer
++ * (Demon's Souls pointing): back buffer ow x oh, picture at dx,dy size dw x dh. One 64-bit word per pair so a
++ * reader on the pad thread never sees half an update. */
++static volatile LONG64 s_pres_out, s_pres_pos, s_pres_size;
++static void ld_pres_note(u32 ow, u32 oh, u32 dx, u32 dy, u32 dw, u32 dh)
++{
++    InterlockedExchange64(&s_pres_out, (LONG64)(((u64)ow << 32) | oh));
++    InterlockedExchange64(&s_pres_pos, (LONG64)(((u64)dx << 32) | dy));
++    InterlockedExchange64(&s_pres_size, (LONG64)(((u64)dw << 32) | dh));
++}
++/* Client pixel (cx, cy) of a client area cw x ch -> menu layout units (1280 x 720, what menu.drb and the dialog
++ * matrices use, whatever the internal resolution). The swap chain may lag the client size (it follows after a few
++ * stable presents) or stay fixed (LD_SWAP_RESIZE=0, DXGI stretches it): scale client -> back buffer first.
++ * 0 = no present yet, or the point is in a black bar / outside the window. */
++int ps3_host_client_to_guest(int cx, int cy, int cw, int ch, float* gx, float* gy)
++{
++    const u64 o = (u64)s_pres_out, p = (u64)s_pres_pos, s = (u64)s_pres_size;
++    const u32 ow = (u32)(o >> 32), oh = (u32)o, dx = (u32)(p >> 32), dy = (u32)p, dw = (u32)(s >> 32), dh = (u32)s;
++    if (!ow || !oh || !dw || !dh || cw <= 0 || ch <= 0) return 0;
++    const double bx = (cx + 0.5) * ow / cw, by = (cy + 0.5) * oh / ch;
++    const double x = (bx - dx) * 1280.0 / dw, y = (by - dy) * 720.0 / dh;
++    *gx = (float)x; *gy = (float)y;
++    return x >= 0 && y >= 0 && x < 1280.0 && y < 720.0;
++}   /* menu pointing logs (Demon's Souls port debug) */
 +unsigned long long ps3_thread_cpu_us(void)
 +{
 +    /* No cycle counter (Wine): thread times come in 10 ms ticks, noise over one frame, and each read is a
@@ -10062,7 +10237,7 @@ index 713ba33..3e8f9ba 100644
  static ID3D12PipelineState* build_pso(
      const char* vs_hlsl, const char* ps_hlsl, const render_state_t* rs,
      const rsx_vertex_layout_plan* masked_layout, int packed_offsets)
-@@ -4446,7 +6239,9 @@ static ID3D12PipelineState* build_pso(
+@@ -4446,7 +6264,9 @@ static ID3D12PipelineState* build_pso(
  #if defined(YZ_PERF_PROFILE)
          g_ld_profile.total.vs_blob_misses++;
  #endif
@@ -10072,7 +10247,7 @@ index 713ba33..3e8f9ba 100644
          if (vs) {
              shader_blob_cache_insert_accounted(
                  &g.vs_blobs, vs_hlsl, vs_length, vs_hash, vs,
-@@ -4456,20 +6251,30 @@ static ID3D12PipelineState* build_pso(
+@@ -4456,20 +6276,30 @@ static ID3D12PipelineState* build_pso(
              g_ld_profile.total.vs_compile_calls++;
              const LONGLONG compile_begin = ld_profile_qpc();
  #endif
@@ -10104,7 +10279,7 @@ index 713ba33..3e8f9ba 100644
          }
      }
      if (FAILED(vs_hr)) {
-@@ -4508,7 +6313,9 @@ static ID3D12PipelineState* build_pso(
+@@ -4508,7 +6338,9 @@ static ID3D12PipelineState* build_pso(
  #if defined(YZ_PERF_PROFILE)
          g_ld_profile.total.ps_blob_misses++;
  #endif
@@ -10114,7 +10289,7 @@ index 713ba33..3e8f9ba 100644
          if (ps) {
              shader_blob_cache_insert_accounted(
                  &g.ps_blobs, ps_hlsl, ps_length, ps_hash, ps,
-@@ -4518,20 +6325,30 @@ static ID3D12PipelineState* build_pso(
+@@ -4518,20 +6350,30 @@ static ID3D12PipelineState* build_pso(
              g_ld_profile.total.ps_compile_calls++;
              const LONGLONG compile_begin = ld_profile_qpc();
  #endif
@@ -10146,7 +10321,7 @@ index 713ba33..3e8f9ba 100644
          }
      }
      if (FAILED(ps_hr)) {
-@@ -4573,16 +6390,17 @@ static ID3D12PipelineState* build_pso(
+@@ -4573,16 +6415,17 @@ static ID3D12PipelineState* build_pso(
      pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
      pd.NumRenderTargets = rs->rt_count ? rs->rt_count : 1;
      for (u32 r = 0; r < pd.NumRenderTargets; r++)
@@ -10166,7 +10341,7 @@ index 713ba33..3e8f9ba 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.create_pso_qpc +=
          (u64)(ld_profile_qpc() - create_begin);
-@@ -4598,37 +6416,306 @@ static ID3D12PipelineState* build_pso(
+@@ -4598,37 +6441,306 @@ static ID3D12PipelineState* build_pso(
                      rs->depth_test, rs->depth_write, rs->depth_func,
                      rs->blend_enable, rs->cull_enable, rs->cull_face);
          if (removed != S_OK)
@@ -10496,7 +10671,7 @@ index 713ba33..3e8f9ba 100644
  static void ld_pso_bail(int* said, const char* reason)
  {
      static int dbg = -1;
-@@ -4641,21 +6728,133 @@ static void ld_pso_bail(int* said, const char* reason)
+@@ -4641,21 +6753,133 @@ static void ld_pso_bail(int* said, const char* reason)
  #define LD_PSO_BAIL(reason) \
      do { static int _said_ = 0; ld_pso_bail(&_said_, (reason)); } while (0)
  
@@ -10633,7 +10808,7 @@ index 713ba33..3e8f9ba 100644
      if (!fp_size) {
          /* No END-bit instruction in 64 KB: the bytes at (location, offset) are
           * not a fragment program. Almost always the LOCATION is wrong, not the
-@@ -4663,6 +6862,20 @@ static ID3D12PipelineState* get_pso(
+@@ -4663,6 +6887,20 @@ static ID3D12PipelineState* get_pso(
           * so report the register the guest actually wrote and the head of what
           * we read, which is what says local-vs-main. */
          static int said = 0;
@@ -10654,7 +10829,7 @@ index 713ba33..3e8f9ba 100644
          if (!said && getenv("LD_PSO_DBG")) {
              said = 1;
              fprintf(stderr,
-@@ -4690,6 +6903,14 @@ static ID3D12PipelineState* get_pso(
+@@ -4690,6 +6928,14 @@ static ID3D12PipelineState* get_pso(
                      fprintf(stderr, "[pso-bail]   first non-zero byte at "
                                      "+0x%X -- the region is populated, the "
                                      "offset is wrong\n", i);
@@ -10669,7 +10844,7 @@ index 713ba33..3e8f9ba 100644
              }
              fflush(stderr);
          }
-@@ -4700,7 +6921,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4700,7 +6946,7 @@ static ID3D12PipelineState* get_pso(
      if (!fp_uc) { LD_PSO_BAIL("fragment program is not fully mapped in guest memory"); return NULL; }
  
      /* Fragment output register mode (fp16 h0 vs fp32 r0) is driven by the
@@ -10678,7 +10853,7 @@ index 713ba33..3e8f9ba 100644
       * AUTO heuristic returned stale fp32 scratch for h0-writing materials);
       * fold the deciding bit into the cache key so a program reused under a
       * different export mode gets its own PSO. Kill-switch RSX_FP_CTRL_AUTO=1
-@@ -4716,7 +6937,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4716,7 +6962,7 @@ static ID3D12PipelineState* get_pso(
              cube_mask |= 1u << unit;
      }
      const u32 vtex_mask = vertex_texture_mask();
@@ -10687,7 +10862,7 @@ index 713ba33..3e8f9ba 100644
      if (txl_mask && !(txl_mask & vtex_mask)) {
          g_ld_vtex_missing_for_txl++;
          static u32 warned = 0;
-@@ -4749,13 +6970,144 @@ static ID3D12PipelineState* get_pso(
+@@ -4749,13 +6995,144 @@ static ID3D12PipelineState* get_pso(
          LD_PSO_BAIL("fragment program constant collection failed");
          return NULL;
      }
@@ -10835,7 +11010,7 @@ index 713ba33..3e8f9ba 100644
      else
          key = fnv1a(fp_uc, fp_size, key);
      if (!key) {
-@@ -4766,6 +7118,55 @@ static ID3D12PipelineState* get_pso(
+@@ -4766,6 +7143,55 @@ static ID3D12PipelineState* get_pso(
      key = fnv1a(&fp_ctrl_key, sizeof(fp_ctrl_key), key);
      key = fnv1a(&cube_mask, sizeof(cube_mask), key);
      key = fnv1a(&vtex_mask, sizeof(vtex_mask), key);
@@ -10891,7 +11066,7 @@ index 713ba33..3e8f9ba 100644
      /* BRB/CLB outcomes are baked into the program (rsx_vp_set_branch_bits). */
      const int vp_branch_bits_used = rsx_vp_uses_branch_bits(vp_uc, vp_instrs * 16);
      const u32 vp_branch_bits = vp_branch_bits_used ? rsx_dsp_reg(&g.rsx, 0x1FF8u) : 0;
-@@ -4811,6 +7212,12 @@ static ID3D12PipelineState* get_pso(
+@@ -4811,6 +7237,12 @@ static ID3D12PipelineState* get_pso(
      }
      key = fnv1a(&unnorm_mask, sizeof(unnorm_mask), key);
      if (unnorm_mask) key = fnv1a(unnorm_dim, sizeof(unnorm_dim), key);
@@ -10904,7 +11079,7 @@ index 713ba33..3e8f9ba 100644
      if (masked_layout) {
          static const u32 masked_layout_tag = 0x314B534Du; /* "MSK1" */
          const u32 payload_stride =
-@@ -4834,8 +7241,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4834,8 +7266,7 @@ static ID3D12PipelineState* get_pso(
  #endif
      g_ld_current_pso.valid = 1;
      g_ld_current_pso.key = key;
@@ -10914,7 +11089,7 @@ index 713ba33..3e8f9ba 100644
      g_ld_current_pso.vp_start = start;
      g_ld_current_pso.vp_instrs = vp_instrs;
      g_ld_current_pso.fp_location = fp_loc;
-@@ -4864,6 +7270,10 @@ static ID3D12PipelineState* get_pso(
+@@ -4864,6 +7295,10 @@ static ID3D12PipelineState* get_pso(
  #if defined(YZ_PERF_PROFILE)
              g_ld_profile.total.pso_hits++;
  #endif
@@ -10925,7 +11100,7 @@ index 713ba33..3e8f9ba 100644
              return g.psos[i].pso;
          }
      }
-@@ -4895,9 +7305,21 @@ static ID3D12PipelineState* get_pso(
+@@ -4895,9 +7330,21 @@ static ID3D12PipelineState* get_pso(
      u32 decompiled_constant_count = 0;
      int fi;
      if (ld_fp_constants_buffered()) {
@@ -10950,7 +11125,7 @@ index 713ba33..3e8f9ba 100644
          if (fi > 0 &&
              decompiled_constant_count != g.fp_constants.count)
              fi = -1;
-@@ -4930,6 +7352,23 @@ static ID3D12PipelineState* get_pso(
+@@ -4930,6 +7377,23 @@ static ID3D12PipelineState* get_pso(
                  unnorm_dim, cube_mask, 0u) < 0)
              fi = -1;
      }
@@ -10974,7 +11149,7 @@ index 713ba33..3e8f9ba 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.decompile_qpc +=
          (u64)(ld_profile_qpc() - decompile_begin);
-@@ -4953,7 +7392,8 @@ static ID3D12PipelineState* get_pso(
+@@ -4953,7 +7417,8 @@ static ID3D12PipelineState* get_pso(
             * only the return still showed nothing for a failing alpha. */
            for (char* d = strstr(ps_hlsl, "discard;"); d; d = strstr(d, "discard;"))
                memcpy(d, "        ", 8);
@@ -10984,7 +11159,7 @@ index 713ba33..3e8f9ba 100644
            if (r) {
                char* semi = strchr(r, ';');
                if (semi) {
-@@ -4977,6 +7417,27 @@ static ID3D12PipelineState* get_pso(
+@@ -4977,6 +7442,27 @@ static ID3D12PipelineState* get_pso(
        char* c0 = fc && vi > 0 && (!fk || fk == live_legacy_pso_key())
                   ? strstr(vs_hlsl, "Out.col0 = o[1];") : NULL;
        if (c0) memcpy(c0, "Out.col0=1+0*_p;", 16); }   /* same length, in place */
@@ -11012,7 +11187,7 @@ index 713ba33..3e8f9ba 100644
      /* LD_HLSL_DUMP=<dir>: files named by the PSO key the draw CSV prints. */
      { static const char* hd = (const char*)-1;
        if (hd == (const char*)-1) hd = getenv("LD_HLSL_DUMP");
-@@ -4986,13 +7447,44 @@ static ID3D12PipelineState* get_pso(
+@@ -4986,13 +7472,44 @@ static ID3D12PipelineState* get_pso(
          f = fopen(fn, "wb"); if (f) { fputs(vi > 0 ? vs_hlsl : "<vp fail>", f); fclose(f); }
          snprintf(fn, sizeof fn, "%s/hlsl_%016llx.ps.txt", hd, (unsigned long long)live_legacy_pso_key());
          f = fopen(fn, "wb"); if (f) { fputs(fi > 0 ? ps_hlsl : "<fp fail>", f); fclose(f); }
@@ -11058,7 +11233,7 @@ index 713ba33..3e8f9ba 100644
      g.n_psos++;
      return pso;
  }
-@@ -5067,6 +7559,11 @@ static int ld_upload_pixel_constants(u32* out_offset)
+@@ -5067,6 +7584,11 @@ static int ld_upload_pixel_constants(u32* out_offset)
   * -----------------------------------------------------------------------*/
  typedef struct { float a[16][4]; } vtx_t;
  typedef struct { u32 first, count; } batch_t;
@@ -11070,7 +11245,7 @@ index 713ba33..3e8f9ba 100644
  
  typedef struct {
      /* INLINE_ARRAY source for this primitive, or NULL. The stream is the
-@@ -5077,8 +7574,8 @@ typedef struct {
+@@ -5077,8 +7599,8 @@ typedef struct {
       * index order, which is what makes the offsets derivable at all (an
       * inline stream carries no per-array offset registers). */
      const u8* inl; u32 inl_bytes, inl_stride; u32 inl_off[16];
@@ -11081,7 +11256,7 @@ index 713ba33..3e8f9ba 100644
      u32     n_packets;
      vtx_t*  verts; u32 n_verts, cap_verts;
      rsx_vertex_ref* refs; u32 n_refs, cap_refs;
-@@ -5251,7 +7748,7 @@ static int fetch_attr(u32 i, u32 base, u32 vertex_id, u32 base_index,
+@@ -5251,7 +7773,7 @@ static int fetch_attr(u32 i, u32 base, u32 vertex_id, u32 base_index,
              break;
          case RSX_VTX_TYPE_SNORM16: {
              const s16 v = (s16)((p[c * 2] << 8) | p[c * 2 + 1]);
@@ -11090,7 +11265,7 @@ index 713ba33..3e8f9ba 100644
              break;
          }
          case RSX_VTX_TYPE_SINT16: {
-@@ -5423,14 +7920,12 @@ static void fetch_batches_hoisted(
+@@ -5423,14 +7945,12 @@ static void fetch_batches_hoisted(
              dc.fetch_ok = 0;
              return;
          }
@@ -11111,7 +11286,7 @@ index 713ba33..3e8f9ba 100644
          }
      } else {
          /*
-@@ -6187,7 +8682,8 @@ static void ld_movie_capture_overlay(void)
+@@ -6187,7 +8707,8 @@ static void ld_movie_capture_overlay(void)
  {
      if (!ld_movie_overlay_ensure()) return;
      const u32 target = current_surface();
@@ -11121,7 +11296,7 @@ index 713ba33..3e8f9ba 100644
          g.movie_overlay_valid = 0;
          return;
      }
-@@ -6314,7 +8810,7 @@ static void sink_draw_arrays(void* u, const rsx_dispatch* r, u32 first, u32 coun
+@@ -6314,7 +8835,7 @@ static void sink_draw_arrays(void* u, const rsx_dispatch* r, u32 first, u32 coun
          return;
      }
      dc.n_packets++;
@@ -11130,7 +11305,7 @@ index 713ba33..3e8f9ba 100644
      dc.arr[dc.n_arr].first = first; dc.arr[dc.n_arr].count = count; dc.n_arr++;
      g_ld_stats.packets_queued++;
  }
-@@ -6338,7 +8834,7 @@ static void sink_inline_array(void* u, const rsx_dispatch* r,
+@@ -6338,7 +8859,7 @@ static void sink_inline_array(void* u, const rsx_dispatch* r,
  
      dc.inl = data; dc.inl_bytes = bytes; dc.inl_stride = stride;
      dc.n_packets++;
@@ -11139,7 +11314,7 @@ index 713ba33..3e8f9ba 100644
      dc.arr[dc.n_arr].first = 0; dc.arr[dc.n_arr].count = bytes / stride;
      dc.n_arr++;
      g_ld_stats.packets_queued++;
-@@ -6352,7 +8848,7 @@ static void sink_draw_index(void* u, const rsx_dispatch* r, u32 first, u32 count
+@@ -6352,7 +8873,7 @@ static void sink_draw_index(void* u, const rsx_dispatch* r, u32 first, u32 count
          return;
      }
      dc.n_packets++;
@@ -11148,7 +11323,7 @@ index 713ba33..3e8f9ba 100644
      dc.idx[dc.n_idx].first = first; dc.idx[dc.n_idx].count = count; dc.n_idx++;
      g_ld_stats.packets_queued++;
  }
-@@ -6438,8 +8934,123 @@ static u64 live_decoded_vertex_hash(u64 attr_hash[16])
+@@ -6438,8 +8959,123 @@ static u64 live_decoded_vertex_hash(u64 attr_hash[16])
  static FILE* s_csv_file;
  static int   s_csv_gate_open = 1;
  
@@ -11272,7 +11447,7 @@ index 713ba33..3e8f9ba 100644
  #if defined(YZ_PERF_CLEAN) && !defined(YZ_PERF_PROFILE)
      (void)prim;
      (void)n_tri;
-@@ -6450,6 +9061,17 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6450,6 +9086,17 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
      static u64 draw = 0;
      /* RSX_DRAW_CSV_FROM=<frame>: skip rows before that frame. Logging every
       * draw from boot slows a 10-minute run to an hour. */
@@ -11290,7 +11465,7 @@ index 713ba33..3e8f9ba 100644
      { static long from = -1;
        if (from < 0) { const char* e = getenv("RSX_DRAW_CSV_FROM"); from = e ? atol(e) : 0; }
        if ((long)g_ld_frames < from) return; }
-@@ -6472,7 +9094,7 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6472,7 +9119,7 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
      }
      if (!inited) {
          inited = 1;
@@ -11299,7 +11474,7 @@ index 713ba33..3e8f9ba 100644
          if (path && path[0]) {
              file = fopen(path, "w");
              s_csv_file = file;
-@@ -6509,11 +9131,16 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6509,11 +9156,16 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
        if (dir == (const char*)-1) { dir = getenv("LD_DRAW_DUMP");
            const char* e = getenv("LD_DRAW_DUMP_EVERY"); every = e ? (u32)atoi(e) : 10; if (!every) every = 10; }
        if (frame != g_ld_frames) { frame = g_ld_frames; idx = 0; }
@@ -11319,7 +11494,7 @@ index 713ba33..3e8f9ba 100644
            ld_dump_surface_ppm(path, &g.surfaces[target]);
        }
        idx++; }
-@@ -6580,6 +9207,9 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6580,6 +9232,9 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
          fprintf(file, "bf=%X/%X/%X/%X eq=%X/%X ", rs.sf_rgb, rs.df_rgb, rs.sf_a, rs.df_a,
                  rs.eq_rgb, rs.eq_a);
      fprintf(file, "at=%u/0x%X/0x%X ", rs.alpha_test_enable, rs.alpha_func, rs.alpha_ref_raw);
@@ -11329,7 +11504,7 @@ index 713ba33..3e8f9ba 100644
      fprintf(file, "sc=%08X/%08X ", rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL), rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL));
      if (rs.stencil_enable)
          fprintf(file, "st=%X/%X/%X/%X/%X/%X ref=%X ", rs.s_func, rs.s_func_mask, rs.s_write_mask, rs.s_fail, rs.s_zfail, rs.s_zpass, rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC + 4));
-@@ -7063,6 +9693,404 @@ static void write_topology_indices(u32 prim, u32* indices)
+@@ -7063,6 +9718,404 @@ static void write_topology_indices(u32 prim, u32* indices)
      }
  }
  
@@ -11734,7 +11909,7 @@ index 713ba33..3e8f9ba 100644
  static void sink_end_impl(void* user, const rsx_dispatch* r)
  {
      (void)user; (void)r;
-@@ -7124,7 +10152,48 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7124,7 +10177,48 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g_ld_profile.total_used_attribute_max = used_layout.count;
      const LONGLONG fetch_pack_begin = ld_profile_qpc();
  #endif
@@ -11784,7 +11959,7 @@ index 713ba33..3e8f9ba 100644
          fetch_batches_hoisted(&used_layout, 1);
      } else if (ld_vertex_hoist_fetch()) {
          rsx_vertex_layout_plan legacy_layout;
-@@ -7144,11 +10213,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7144,11 +10238,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      /* Preserve validated occurrence order while allowing repeated compact
       * vertex references to share one fetched and uploaded payload. */
      int indexed = 0;
@@ -11800,7 +11975,7 @@ index 713ba33..3e8f9ba 100644
          ? topology_index_count(prim)
          : dc.n_source_refs - dc.n_source_refs % 3;
  
-@@ -7162,16 +10233,83 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7162,16 +10258,83 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      const u32 vertex_stride =
          ld_vertex_compact_payload() ? used_layout.stride : VERT_STRIDE;
      const u32 uploaded_vertices = indexed ? dc.n_verts : n_tri;
@@ -11886,7 +12061,7 @@ index 713ba33..3e8f9ba 100644
      if ((u64)g.vb_used + draw_vb_bytes > vb_capacity ||
          (u64)g.ib_used + draw_ib_bytes > INDEX_BUFFER_SIZE) {
          /*
-@@ -7189,17 +10327,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7189,17 +10352,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g.srv_ring_used = 0;
          g.smp_ring_used = 0;
      }
@@ -11919,7 +12094,7 @@ index 713ba33..3e8f9ba 100644
      if (!pso) {
  #if defined(YZ_PERF_PROFILE)
          ld_profile_note_rejected_pso();
-@@ -7352,9 +10503,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7352,9 +10528,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          for (u32 r = 1; r < want; r++) {
              const u32 s = surface_get(msf.color_location[r], msf.color_offset[r],
                                        msf.clip_w, msf.clip_h,
@@ -11930,7 +12105,7 @@ index 713ba33..3e8f9ba 100644
              if (s == LD_INVALID_SURFACE || s == target) break;
              mrt[n_mrt++] = s;
          }
-@@ -7371,6 +10520,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7371,6 +10545,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      const u32 current_zslot = g.depth
          ? zdepth_get(sf.zeta_location, sf.zeta_offset, sf.clip_w, sf.clip_h)
          : 0;
@@ -11944,7 +12119,7 @@ index 713ba33..3e8f9ba 100644
      u32 slots[SRV_TABLE_SIZE], smp_slots[SMP_TABLE_SIZE];
      u32 surf_used[SRV_TABLE_SIZE], n_surf_used = 0;
      u32 zdepth_used[SRV_TABLE_SIZE], n_zdepth_used = 0;
-@@ -7471,13 +10627,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7471,13 +10652,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                      zeta_pref = 1;
                      break;
                  }
@@ -11977,7 +12152,7 @@ index 713ba33..3e8f9ba 100644
                if (sampled < 0 || sf_i->last_draw_generation > best_gen) {
                    sampled = (int)i;
                    best_gen = sf_i->last_draw_generation;
-@@ -7559,6 +10732,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7559,6 +10757,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                    }
                }
            } }
@@ -12004,7 +12179,7 @@ index 713ba33..3e8f9ba 100644
          if (sampled < 0 && LD_DIAG_ENABLED("LD_ALIAS_DBG")) {
              static u32 n_dbg = 0;
              if (PS3_LOG_FIRST(n_dbg, 24)) {
-@@ -7576,6 +10769,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7576,6 +10794,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              slots[u] = surface_feedback_srv(target);
              g_ld_bind_surf++;
          } else if (sampled >= 0) {
@@ -12012,7 +12187,7 @@ index 713ba33..3e8f9ba 100644
              /* LD_ALIAS_DBG also reports the HIT. A texture that aliases a render
               * surface when it should not is exactly as interesting as one that
               * fails to alias when it should, and only the miss was visible --
-@@ -7641,7 +10835,20 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7641,7 +10860,20 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                          }
                          break;
                      }
@@ -12034,7 +12209,7 @@ index 713ba33..3e8f9ba 100644
                  slots[u] = SRV_ZDEPTH_BASE + sampled_depth;
                  g_ld_zdepth_srv_binds++;
                  int seen = 0;
-@@ -7652,6 +10859,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7652,6 +10884,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              } else {
                  slots[u] = texture_srv_slot(&t);
                  if (slots[u] == SRV_WHITE) g_ld_bind_white++; else g_ld_bind_real++;
@@ -12048,7 +12223,7 @@ index 713ba33..3e8f9ba 100644
              }
          }
      }
-@@ -7742,12 +10956,15 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7742,12 +10981,15 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          descriptor_signature =
              fnv1a(vtex_slots, sizeof(vtex_slots), descriptor_signature);
  
@@ -12069,7 +12244,7 @@ index 713ba33..3e8f9ba 100644
      float xf[8] = {1, 1, 1, 0, 0, 0, 0, 0};
      if (vp.scale[0] != 0.0f || vp.translate[0] != 0.0f) {
          xf[0] = vp.scale[0] / (Wv * 0.5f);
-@@ -7780,8 +10997,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7780,8 +11022,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      D3D12_VIEWPORT dvp = {0, 0, W, H, 0.0f, 1.0f};
      D3D12_RECT sc = {
          0, 0,
@@ -12080,7 +12255,7 @@ index 713ba33..3e8f9ba 100644
      };
      /* Guest scissor, intersected with the surface rect. The nv40 reset value
       * is a full-window 4096x4096; never-written regs read 0 here, so an
-@@ -7794,7 +11011,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7794,7 +11036,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          const u32 sh = rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL);
          const u32 sv = rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL);
          /* The scissor is in pixels too: scale it to the sample grid. */
@@ -12089,7 +12264,7 @@ index 713ba33..3e8f9ba 100644
          const LONG sx = (LONG)(sh & 0xFFFFu) * ax, sw = (LONG)(sh >> 16) * ax;
          const LONG sy = (LONG)(sv & 0xFFFFu) * ay, svh = (LONG)(sv >> 16) * ay;
          const int written = g.rsx.seen[M_SCISSOR_HORIZONTAL >> 2] != 0 ||
-@@ -7815,7 +11032,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7815,7 +11057,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g.list, rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC_REF) & 0xFFu);
  
      D3D12_VERTEX_BUFFER_VIEW vbv;
@@ -12099,7 +12274,7 @@ index 713ba33..3e8f9ba 100644
      vbv.StrideInBytes = vertex_stride;
      vbv.SizeInBytes = (u32)draw_vb_bytes;
      if (vertex_stride)
-@@ -7855,15 +11073,19 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7855,15 +11098,19 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      }
      if (indexed) {
          D3D12_INDEX_BUFFER_VIEW ibv;
@@ -12121,7 +12296,7 @@ index 713ba33..3e8f9ba 100644
      }
      ld_surface_note_write(target, LD_SURFACE_WRITE_DRAW);
      for (u32 r = 1; r < n_mrt; r++)
-@@ -7899,6 +11121,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7899,6 +11146,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          bar.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
          g.list->lpVtbl->ResourceBarrier(g.list, 1, &bar);
      }
@@ -12131,7 +12306,7 @@ index 713ba33..3e8f9ba 100644
      /* A guest-side failure can occur before the next flip even though useful
       * orphanage draws have already reached internal world targets.  Preserve
       * a few progressively later surface snapshots directly from the draw
-@@ -7937,8 +11162,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7937,8 +11187,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              fflush(stderr);
          }
      }
@@ -12144,7 +12319,7 @@ index 713ba33..3e8f9ba 100644
      ld_profile_note_ring_highwater();
  }
  
-@@ -8217,7 +11444,143 @@ static int make_depth_snapshot_pipeline(void)
+@@ -8217,7 +11469,143 @@ static int make_depth_snapshot_pipeline(void)
          g.dev, &pipeline, &IID_ID3D12PipelineState,
          (void**)&g.depth_snapshot_pso);
      shader->lpVtbl->Release(shader);
@@ -12289,7 +12464,7 @@ index 713ba33..3e8f9ba 100644
  }
  
  int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
-@@ -8367,7 +11730,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8367,7 +11755,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      DXGI_SWAP_CHAIN_DESC1 scd = {0};
      scd.Width = width; scd.Height = height; scd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
      scd.SampleDesc.Count = 1; scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -12298,7 +12473,7 @@ index 713ba33..3e8f9ba 100644
      IDXGISwapChain1* sc1 = NULL;
      if (FAILED(factory->lpVtbl->CreateSwapChainForHwnd(factory, (IUnknown*)g.queue,
              (HWND)hwnd, &scd, NULL, NULL, &sc1))) {
-@@ -8375,15 +11738,28 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8375,15 +11763,28 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      }
      sc1->lpVtbl->QueryInterface(sc1, &IID_IDXGISwapChain3, (void**)&g.swap);
      sc1->lpVtbl->Release(sc1);
@@ -12329,7 +12504,7 @@ index 713ba33..3e8f9ba 100644
          g.swap->lpVtbl->GetBuffer(g.swap, i, &IID_ID3D12Resource, (void**)&g.backbuf[i]);
          g.dev->lpVtbl->CreateRenderTargetView(g.dev, g.backbuf[i], NULL, rtv_handle(i));
      }
-@@ -8471,7 +11847,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8471,7 +11872,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
          D3D12_HEAP_PROPERTIES dhp = {0}; dhp.Type = D3D12_HEAP_TYPE_DEFAULT;
          D3D12_RESOURCE_DESC drd = {0};
          drd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -12338,7 +12513,7 @@ index 713ba33..3e8f9ba 100644
          drd.MipLevels = 1; drd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT; drd.SampleDesc.Count = 1;
          drd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
          D3D12_CLEAR_VALUE dcv = {0}; dcv.Format = drd.Format; dcv.DepthStencil.Depth = 1.0f;
-@@ -8505,6 +11881,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8505,6 +11906,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      sink.flip = sink_flip;
      rsx_dispatch_init(&g.rsx, &sink);
  
@@ -12352,7 +12527,7 @@ index 713ba33..3e8f9ba 100644
      g.ready = 1;
      g.enabled = 1;
      return 0;
-@@ -8590,7 +11973,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8590,7 +11998,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
                          return;
                      }
                  }
@@ -12361,7 +12536,7 @@ index 713ba33..3e8f9ba 100644
                  ReleaseSRWLockExclusive(&g_ld_access_lock);
                  return;
              }
-@@ -8598,7 +11981,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8598,7 +12006,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
              MemoryBarrier();
              if (!g_ld_movie_mode && !g_ld_host_waiting) {
                  if (g.ready)
@@ -12370,7 +12545,7 @@ index 713ba33..3e8f9ba 100644
                  InterlockedDecrement(&g_ld_guest_active);
                  return;
              }
-@@ -8612,7 +11995,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8612,7 +12020,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
              g_ld_movie_track_rsx = getenv("RSX_MOVIE_TRACK") ? 1 : 0;
          if (!g_ld_movie_track_rsx) return;
      }
@@ -12379,7 +12554,7 @@ index 713ba33..3e8f9ba 100644
  }
  
  void rsx_live_draw_set_movie_mode(int on)
-@@ -8738,6 +12121,9 @@ static u32 g_ld_last_frame_draws = 0;
+@@ -8738,6 +12146,9 @@ static u32 g_ld_last_frame_draws = 0;
   * "presenting fresh content" from "flipping a static image" -- the dead
   * journal-consumer limp state renders ~0 draws/frame while flips tick). */
  u32 rsx_live_draw_get_last_draws(void) { return g_ld_last_frame_draws; }
@@ -12389,7 +12564,7 @@ index 713ba33..3e8f9ba 100644
  
  double rsx_live_draw_get_present_fps(void)
  {
-@@ -8929,12 +12315,137 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
+@@ -8929,12 +12340,137 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
   * through here while recording). */
  static FILE* g_ld_record_to;
  
@@ -12529,7 +12704,7 @@ index 713ba33..3e8f9ba 100644
      if (!width || !height) return UINT64_MAX;
      const int fp16 = surface->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
      const u32 texel = fp16 ? 8u : 4u;
-@@ -9025,6 +12536,183 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+@@ -9025,6 +12561,183 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
      return nonblack;
  }
  
@@ -12713,7 +12888,7 @@ index 713ba33..3e8f9ba 100644
  #if !defined(YZ_PERF_CLEAN)
  static void ld_parity_capture_surface(
      const char* directory, const char* phase, u32 serial,
-@@ -9199,6 +12887,76 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
+@@ -9199,6 +12912,76 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
      fflush(stderr);
  }
  
@@ -12790,7 +12965,19 @@ index 713ba33..3e8f9ba 100644
  void rsx_live_draw_present(u32 buffer_id)
  {
      if (!g.ready) return;
-@@ -9332,6 +13090,7 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9300,9 +13083,9 @@ void rsx_live_draw_present(u32 buffer_id)
+         char path[MAX_PATH * 2];
+         snprintf(path, sizeof(path), "%s\\frame_%06u.ppm", dump_dir, dump_n - 1u);
+         const u64 nb = ld_dump_surface_ppm(path, &g.surfaces[target]);
+-        fprintf(stderr, "[frame-dump] %s %ux%u nonblack=%llu\n", path,
++        fprintf(stderr, "[frame-dump] %s %ux%u nonblack=%llu ldf=%u\n", path,
+                 g.surfaces[target].w, g.surfaces[target].h,
+-                (unsigned long long)(nb == UINT64_MAX ? 0 : nb));
++                (unsigned long long)(nb == UINT64_MAX ? 0 : nb), (unsigned)g_ld_frames);
+         fflush(stderr);
+     }
+     /* LD_RECORD=<out.mp4> (boot_main's --record): every presented frame, as
+@@ -9332,6 +13115,7 @@ void rsx_live_draw_present(u32 buffer_id)
            g_ld_record_to = NULL;
            fflush(rec);
        } }
@@ -12798,7 +12985,7 @@ index 713ba33..3e8f9ba 100644
      const u32 current = current_surface();
      surface_t* presented_surface = &g.surfaces[target];
      /* LD_PRESENT_DBG=1: is this surface actually finished? A surface whose last
-@@ -9399,10 +13158,85 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9399,10 +13183,87 @@ void rsx_live_draw_present(u32 buffer_id)
            ld_trace_target("present", target, buffer_id);
            last_present_target = target;
        } }
@@ -12838,6 +13025,7 @@ index 713ba33..3e8f9ba 100644
 +        if (!dw) dw = 1;
 +        if (!dh) dh = 1;
 +        const u32 dx = (ow - dw) / 2u, dy = (oh - dh) / 2u;
++        ld_pres_note(ow, oh, dx, dy, dw, dh);
 +        D3D12_RESOURCE_BARRIER pb = {0};
 +        pb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 +        pb.Transition.pResource = bb;
@@ -12880,11 +13068,12 @@ index 713ba33..3e8f9ba 100644
 +        goto ld_present_copied;
 +    }
 +
++    ld_pres_note(g_ld_out_w, g_ld_out_h, 0, 0, g_ld_out_w, g_ld_out_h);
 +    {
      D3D12_RESOURCE_BARRIER bar[2] = {0};
      bar[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
      bar[0].Transition.pResource = srcimg;
-@@ -9423,10 +13257,90 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9423,10 +13284,90 @@ void rsx_live_draw_present(u32 buffer_id)
      bar[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
@@ -12977,7 +13166,7 @@ index 713ba33..3e8f9ba 100644
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames + 1u);
          else {
-@@ -9475,6 +13389,17 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9475,6 +13416,17 @@ void rsx_live_draw_present(u32 buffer_id)
        g_ld_last_frame_draws = (u32)(g_ld_stats.packets_seen - packets_at_last_frame);
        packets_at_last_frame = g_ld_stats.packets_seen; }
      g_ld_frames++;
@@ -12995,7 +13184,7 @@ index 713ba33..3e8f9ba 100644
  #if defined(YZ_PERF_PROFILE)
      ld_profile_present(g_ld_frames);
  #endif
-@@ -10498,10 +14423,17 @@ void rsx_live_draw_shutdown(void)
+@@ -10498,10 +14450,17 @@ void rsx_live_draw_shutdown(void)
                  (unsigned long long)g_ld_shader_disk_writes[1],
                  (unsigned long long)g_ld_shader_disk_rejects);
      }
@@ -13013,7 +13202,7 @@ index 713ba33..3e8f9ba 100644
      for (u32 i = 0; i < g.n_vtex; i++) if (g.vtex[i].tex) g.vtex[i].tex->lpVtbl->Release(g.vtex[i].tex);
      for (u32 i = 0; i < g.n_surfaces; i++) if (g.surfaces[i].tex) g.surfaces[i].tex->lpVtbl->Release(g.surfaces[i].tex);
      for (u32 i = 0; i < g.n_zdepths; i++) {
-@@ -10510,6 +14442,8 @@ void rsx_live_draw_shutdown(void)
+@@ -10510,6 +14469,8 @@ void rsx_live_draw_shutdown(void)
          if (g.zdepths[i].snapshot)
              g.zdepths[i].snapshot->lpVtbl->Release(
                  g.zdepths[i].snapshot);
@@ -13022,7 +13211,7 @@ index 713ba33..3e8f9ba 100644
      }
      if (g.movie_upload) g.movie_upload->lpVtbl->Release(g.movie_upload);
      if (g.movie_overlay_readback) g.movie_overlay_readback->lpVtbl->Release(g.movie_overlay_readback);
-@@ -10520,6 +14454,8 @@ void rsx_live_draw_shutdown(void)
+@@ -10520,6 +14481,8 @@ void rsx_live_draw_shutdown(void)
      if (g.ps_cb) g.ps_cb->lpVtbl->Release(g.ps_cb);
      if (g.depth_snapshot_pso)
          g.depth_snapshot_pso->lpVtbl->Release(g.depth_snapshot_pso);

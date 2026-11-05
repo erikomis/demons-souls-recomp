@@ -2109,6 +2109,45 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       BUTTON" on the next frames; L3 on the pad -> START again; a key -> ENTER again. In game unchanged.
     - Agent review (2 lenses + adversarial verify): the walk matches func_005C2848; the two findings (a same-address
       reload, a walk during the load's copy) were judged impractical, and hardened anyway as above.
+93. **Pointing in menus: the item under the mouse arrow is selected, a click confirms it (2026-11-04, asked for: "look
+    into pointing now"; tried with a real mouse before release: "it works!"):**
+    - Stage 0 (logging, kept behind DES_POINT_LOG=1): every menu item is a Null shape (cursor%d_%d, cursor_button0_%d,
+      list_cursor%d_0, tab_cursor0_%d, button%d_%d) that the dialog draw loop (func_00F5F878, child draw at 0x00F6054C;
+      func_00F5EAC0 for the alternate path) draws right after putting its world matrix at drawer+0x30 (Class01865C80):
+      the GetRect output on the draw's stack (r1+0x19C / r1+0x174) through that matrix = its rectangle in 1280x720 menu
+      units, at any internal resolution. Checked against frame dumps in 18 menus (title, profile select, Start tabs,
+      inventory, item popup, equipment grid, R03 boxes, System, Options, Maiden talk / level-up, blacksmith Forge /
+      Repair, archstone warp list + its confirm). Child name = **(child+0x1C), dialog names UTF-16BE (dlg+0xD4 variant).
+      Focus: exactly one dialog asks the input gate func_00F55A18 with dlg+0xA0 bit 31 set (a list under a popup still
+      draws and still calls the gate, with the bit clear). Key ids: down 0x81 (+0x79, also repeats), up 0x80 (+0x78),
+      right 0x83 (+0x7A), left 0x82 (+0x7B), confirm 0x88, back 0x89, Start tab open / close 0x9D / 0x9E.
+    - cellPad.c: while a menu is open a captured mouse is released (Windows arrow) and captured again on close (not after
+      Esc). The arrow's place in menu units comes from ps3_host_client_to_guest (rsx_live_draw.c: the present records its
+      letterbox, both branches) -- checked with the window resized to 1684x721. "Pointer authority": the arrow moved 3+
+      client pixels in an unchanged client area; cleared by arrows / wheel / WASD / pad d-pad or sticks / leaving the
+      picture / menu close / focus loss, and each menu opening starts without it, so a resting mouse never fights keys
+      or pad. The click rule: the game publishes once per step what the arrow is over in the focused dialog; a left
+      click on the selected item confirms, on another item selects it and confirms once the game has moved there, on no
+      item does nothing (after waiting up to 3 reports for the state, which lags a fast move); a dialog without pointing
+      support keeps the fix 89 click = confirm anywhere. A pointing-aware dialog with focus counts as a menu even with
+      menu mask 0 (title, profile select).
+    - PORT PATCH (ppu_recomp_086.cpp): the item table (filled by the draw hook, swapped per game step by des_pt_step from
+      the ppu_recomp_011.cpp step hook; 8-step guard after a menu mask change for open / slide animations) and per-class
+      steps that move the selection the game's own way, so its sound, help text and highlight follow:
+      - Start tabs (048 func_0079BBF8 entry): param 0x4B via sound + func_0079B2C0(this, right, 0) steps;
+      - R03 boxes (049 func_007BEA58 entry): +0x110 via vtable +0x8C / +0x90 (r4 = 0);
+      - from the input gate (only the dialog with input): Listbox family (vf34 == 0x00781658 or SoulStatusList:
+        +0x100 row of +0xF4 visible / +0x104 count / +0x108 top, vf33(up, 1) + vf35) = talk choices, level-up list,
+        inventory, equipment lists, shops; ButtonGroup family (equipment grid, item popup, gestures: +0xF4 / +0xF8,
+        vf33(1) + func_00F889E0 snap with UTF-16 names in free stack space); profile select +0xF8; warp list +0xFC;
+        level-up confirm +0xF4 (OK only if byte +0x104); title +0xF8 (LOAD GAME only if byte +0xFE; func_007DAC50;
+        its buttons belong to the EzMenuDialog beside it); System menu +0xFC via func_008AC558.
+    - Tests (sandbox, scripted pointer PAD_TEST_CLIENT / PAD_TEST_POINT): each family hovered and clicked, keys / pad
+      taking over, empty rows and disabled buttons ignored, title hover choosing LOAD GAME with the scripted move removed.
+      Agent review (2 lenses + verify) -> pad / WASD clears, alt-tab, resize under the arrow, torn x / y, r4, Esc
+      fixed; a list under the item popup moving with the arrow (found by a test) fixed by the input-bit check.
+    - On by default; DES_POINT=0 = the fix 89 menu mouse only. Not covered (keys / wheel / click as before): Options rows
+      (row and values in menu params), key config, the number spinner's value, face edit.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

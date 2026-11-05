@@ -191,11 +191,16 @@ camera once you press a key or mouse button, and the controller takes it back wh
 | Alt+Enter / F11 | borderless fullscreen on/off (`set DES_FULLSCREEN=1` starts in it) |
 | F9 | god mode on/off (no death, HP/MP/stamina stay full) |
 
-**In menus** (title screen, Start menu, inventory, shops, level-up, ...) the mouse works as menu controls: **left
-click = confirm**, **right click = back**, the **wheel** moves the cursor up and down, and the mouse's side buttons
-or **PageUp / PageDown** are L1 / R1. A click in a menu needs no capturing click first. Outside menus the mouse
-buttons attack and block as before. `set PAD_MENU_MOUSE=0` turns this off. (Pointing at an item is not supported
-yet but is currently being worked on.)
+**In menus** (title screen, Start menu, inventory, shops, level-up, ...) the mouse is a pointer: the Windows arrow
+appears, **moving it over an item selects it** (with the game's own cursor sound and help text), **left click on an
+item confirms it** (on another item it selects it first, on empty space it does nothing), **right click = back**,
+the **wheel** moves the cursor up and down, and the mouse's side buttons or **PageUp / PageDown** are L1 / R1. Keys
+and the controller take over as soon as you use them; the mouse only takes over again once it moves. When the menu
+closes the mouse goes back to the camera. Pointing works in the title, profile select, Start menu tabs, inventory,
+equipment, item commands, shops, talk choices, level-up, the archstone list, the System menu and yes / no boxes; the
+Options rows still use keys / wheel (a click there confirms as before). `set DES_POINT=0` turns pointing off (the
+mouse then only clicks / scrolls in menus), `set PAD_MENU_MOUSE=0` turns the mouse in menus off altogether. Outside
+menus the mouse buttons attack and block as before.
 
 **Button icons follow what you play with:** while the keyboard / mouse is what you used last, the game's button
 icons (key guides, "Pick up" prompts, the HUD's equipment boxes, the Start menu tabs) show the keys and mouse

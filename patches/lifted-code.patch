@@ -257,8 +257,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
---- a/recompiled/ppu_recomp_011.cpp	2026-11-04 08:23:56.789630100 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-11-04 08:23:56.803643400 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-11-04 21:56:33.541827100 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-04 21:56:33.560854100 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -274,7 +274,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,347 @@
+@@ -38897,8 +38899,348 @@
          return;
  }
  
@@ -284,6 +284,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +extern "C" void ps3_perf_note(const char* fmt, ...);   /* rsx_live_draw.c (DES_PERF) */
 +extern "C" int ps3_host_pad_debug(int* rx, int* ry, int* polls, int* mdx, int* mdy);   /* cellPad.c */
 +extern "C" void ps3_host_menu_state(unsigned mask);   /* cellPad.c, fix 89 */
++extern "C" void des_pt_step(unsigned mask);   /* 086, menu pointing: swap the item table each step */
 +extern "C" int texpack_kbm_want(void);   /* rsx_tex_pack.c: keyboard / mouse button icons shown (fix 91) */
 +extern "C" unsigned long long ps3_thread_cpu_us(void);   /* rsx_live_draw.c */
 +extern "C" void ps3_perf_step_begin(void);               /* rsx_live_draw.c (DES_PERF_STACKS) */
@@ -382,7 +383,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +          func_00720F80(ctx); DRAIN_TRAMPOLINE(ctx);
 +          mask = (uint32_t)ctx->gpr[3];
 +          *ctx = save; }
-+      ps3_host_menu_state(mask); }
++      ps3_host_menu_state(mask); des_pt_step(mask); }
 +    /* Title text with the keyboard / mouse icons (PORT PATCH, NOTES fix 92): "PRESS START BUTTON" is FMG 77
 +     * ("menu other") id 30000, which the title's T00_text shape looks up once and then hands to the font renderer
 +     * on every draw straight from the message manager's heap copy (MSG MAN = *0x01B485D8, FMG of category c at
@@ -1577,9 +1578,17 @@ diff -ruN a/recompiled/ppu_recomp_045.cpp b/recompiled/ppu_recomp_045.cpp
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
 diff -ruN a/recompiled/ppu_recomp_046.cpp b/recompiled/ppu_recomp_046.cpp
---- a/recompiled/ppu_recomp_046.cpp	2026-10-31 08:09:11.791250300 -0700
-+++ b/recompiled/ppu_recomp_046.cpp	2026-10-31 08:09:17.688291800 -0700
-@@ -242,12 +242,14 @@
+--- a/recompiled/ppu_recomp_046.cpp	2026-11-04 21:56:33.715345000 -0700
++++ b/recompiled/ppu_recomp_046.cpp	2026-11-04 21:56:33.734372300 -0700
+@@ -219,6 +219,7 @@
+ #endif
+ 
+ #include "ppu_vmx.h"   /* exact VMX semantics (runtime/ppu/ppu_vmx.h) */
++extern "C" void des_pt_sound(uint32_t id);   /* 086, pointing stage 0 */
+ 
+ /* VM base pointer (defined by game project) */
+ extern "C" uint8_t* vm_base;
+@@ -242,12 +243,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
   * Converts cross-fragment fallthrough chains into iterative loops. */
@@ -1594,6 +1603,14 @@ diff -ruN a/recompiled/ppu_recomp_046.cpp b/recompiled/ppu_recomp_046.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -29206,6 +29209,7 @@
+ 
+ void func_0072D970(ppu_context* ctx) {
+     PPU_MM_SNAP
++        des_pt_sound((uint32_t)ctx->gpr[3]);   /* PORT DEBUG */
+         uint64_t _cs_30 = ctx->gpr[30];
+         vm_write64(ctx->gpr[1] + -0x10, ctx->gpr[30]);
+         ctx->gpr[30] = vm_read32(ctx->gpr[2] + -0x72E8);
 diff -ruN a/recompiled/ppu_recomp_047.cpp b/recompiled/ppu_recomp_047.cpp
 --- a/recompiled/ppu_recomp_047.cpp	2026-10-31 08:09:11.832209500 -0700
 +++ b/recompiled/ppu_recomp_047.cpp	2026-10-31 08:09:17.771395700 -0700
@@ -1613,9 +1630,17 @@ diff -ruN a/recompiled/ppu_recomp_047.cpp b/recompiled/ppu_recomp_047.cpp
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
 diff -ruN a/recompiled/ppu_recomp_048.cpp b/recompiled/ppu_recomp_048.cpp
---- a/recompiled/ppu_recomp_048.cpp	2026-10-31 08:09:11.869443900 -0700
-+++ b/recompiled/ppu_recomp_048.cpp	2026-10-31 08:09:17.866687500 -0700
-@@ -242,12 +242,14 @@
+--- a/recompiled/ppu_recomp_048.cpp	2026-11-04 21:56:33.873005200 -0700
++++ b/recompiled/ppu_recomp_048.cpp	2026-11-04 21:56:33.892027400 -0700
+@@ -219,6 +219,7 @@
+ #endif
+ 
+ #include "ppu_vmx.h"   /* exact VMX semantics (runtime/ppu/ppu_vmx.h) */
++extern "C" void des_pt_apply_starttab(ppu_context* ctx);   /* 086, menu pointing */
+ 
+ /* VM base pointer (defined by game project) */
+ extern "C" uint8_t* vm_base;
+@@ -242,12 +243,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
   * Converts cross-fragment fallthrough chains into iterative loops. */
@@ -1630,10 +1655,26 @@ diff -ruN a/recompiled/ppu_recomp_048.cpp b/recompiled/ppu_recomp_048.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -38394,6 +38397,7 @@
+ 
+ void func_0079BBF8(ppu_context* ctx) {
+     PPU_MM_SNAP
++        des_pt_apply_starttab(ctx);   /* PORT PATCH: menu pointing (DES_POINT) */
+         uint64_t _cs_19 = ctx->gpr[19];
+         uint64_t _cs_20 = ctx->gpr[20];
+         uint64_t _cs_21 = ctx->gpr[21];
 diff -ruN a/recompiled/ppu_recomp_049.cpp b/recompiled/ppu_recomp_049.cpp
---- a/recompiled/ppu_recomp_049.cpp	2026-10-31 08:09:11.907341400 -0700
-+++ b/recompiled/ppu_recomp_049.cpp	2026-10-31 08:09:17.919581400 -0700
-@@ -242,12 +242,14 @@
+--- a/recompiled/ppu_recomp_049.cpp	2026-11-04 21:56:34.025464100 -0700
++++ b/recompiled/ppu_recomp_049.cpp	2026-11-04 21:56:34.043444600 -0700
+@@ -219,6 +219,7 @@
+ #endif
+ 
+ #include "ppu_vmx.h"   /* exact VMX semantics (runtime/ppu/ppu_vmx.h) */
++extern "C" void des_pt_apply_r03(ppu_context* ctx);   /* 086, menu pointing */
+ 
+ /* VM base pointer (defined by game project) */
+ extern "C" uint8_t* vm_base;
+@@ -242,12 +243,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
   * Converts cross-fragment fallthrough chains into iterative loops. */
@@ -1648,6 +1689,14 @@ diff -ruN a/recompiled/ppu_recomp_049.cpp b/recompiled/ppu_recomp_049.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -15044,6 +15047,7 @@
+ 
+ void func_007BEA58(ppu_context* ctx) {
+     PPU_MM_SNAP
++        des_pt_apply_r03(ctx);   /* PORT PATCH: menu pointing (DES_POINT) */
+         uint64_t _cs_15 = ctx->gpr[15];
+         uint64_t _cs_16 = ctx->gpr[16];
+         uint64_t _cs_17 = ctx->gpr[17];
 diff -ruN a/recompiled/ppu_recomp_050.cpp b/recompiled/ppu_recomp_050.cpp
 --- a/recompiled/ppu_recomp_050.cpp	2026-10-31 08:09:11.946464800 -0700
 +++ b/recompiled/ppu_recomp_050.cpp	2026-10-31 08:09:17.966244200 -0700
@@ -2352,9 +2401,498 @@ diff -ruN a/recompiled/ppu_recomp_085.cpp b/recompiled/ppu_recomp_085.cpp
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
 diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
---- a/recompiled/ppu_recomp_086.cpp	2026-10-31 08:09:13.480319400 -0700
-+++ b/recompiled/ppu_recomp_086.cpp	2026-10-31 08:09:19.629756100 -0700
-@@ -242,12 +242,14 @@
+--- a/recompiled/ppu_recomp_086.cpp	2026-11-04 21:56:34.178403200 -0700
++++ b/recompiled/ppu_recomp_086.cpp	2026-11-04 21:56:34.192914600 -0700
+@@ -220,6 +220,488 @@
+ 
+ #include "ppu_vmx.h"   /* exact VMX semantics (runtime/ppu/ppu_vmx.h) */
+ 
++/* ---- Menu pointing, stage 0 (PORT DEBUG, logging only): DES_POINT_LOG=1 ---------------------------------------
++ * [pt-rect]  every DES_POINT_EVERY (30) renderer frames: each menu item (child shape named cursor* / list_cursor* /
++ *            tab_cursor* / button* / icon_cursor*) as it is drawn -- its local rect (GetRect output on the draw's
++ *            stack), the inner shape's int16 rect, and the rect through the drawer's world matrix (drawer+0x30)
++ * [pt-in]    the same frames: every dialog that asks func_00F55A18 for a menu key (with its input bit); and always
++ *            when a key comes back pressed
++ * [pt-snap]  func_00F889E0 (the game moving "cursor" onto a shape), when the target changes for that dialog
++ * [pt-snd]   func_0072D970 sound ids
++ * Guest reads only; nothing changes. */
++extern "C" unsigned ps3_ld_frame_index(void);   /* rsx_live_draw.c */
++extern "C" __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId(void);
++static int des_pt_mode = -1, des_pt_every = 30;
++extern "C" int des_pt_on(void)
++{
++    if (des_pt_mode < 0) {
++        const char* e = getenv("DES_POINT_LOG");
++        des_pt_mode = (e && *e && *e != '0') ? 1 : 0;
++        const char* v = getenv("DES_POINT_EVERY");
++        if (v && atoi(v) > 0) des_pt_every = atoi(v);
++    }
++    return des_pt_mode;
++}
++static void des_pt_str(uint32_t p, char* out, int n)
++{
++    int i = 0;
++    if (p && p < 0xF0000000u) {
++        const int wide = vm_read8(p) == 0 && vm_read8(p + 1) != 0;   /* the game's names are mostly UTF-16BE */
++        for (; i < n - 1; i++) {
++            const unsigned ch = wide ? vm_read16(p + 2 * i) : vm_read8(p + i);
++            if (!ch) break;
++            out[i] = (ch >= 32 && ch < 127) ? (char)ch : '?';
++        }
++    }
++    out[i] = 0;
++}
++extern "C" void des_pt_dlg_name(uint32_t dlg, char* out, int n)   /* func_00F504F8 */
++{
++    out[0] = 0;
++    if (!dlg || vm_read32(dlg + 0xDC) != 3) return;
++    const uint32_t s = vm_read32(dlg + 0xD8) + 8;
++    const uint32_t cap = vm_read32(s + 0x18);
++    des_pt_str(cap > 7 ? vm_read32(s + 4) : s + 4, out, n);
++}
++static float des_pt_f(uint32_t a) { const uint32_t u = vm_read32(a); float f; memcpy(&f, &u, 4); return f; }
++static int des_pt_frame_hit(void) { return (ps3_ld_frame_index() % (unsigned)des_pt_every) == 0; }
++static void des_pt_record(uint32_t dlg, uint32_t child, uint32_t drawer, uint32_t rect);
++static void des_pt_rect(uint32_t dlg, uint32_t child, uint32_t drawer, uint32_t rect, int site)
++{
++    des_pt_record(dlg, child, drawer, rect);
++    if (!des_pt_on()) return;
++    if (!des_pt_frame_hit() || !child || !drawer) return;
++    char cn[48];
++    { const uint32_t h = vm_read32(child + 0x1C); des_pt_str(h ? vm_read32(h) : 0, cn, sizeof cn); }   /* char** */
++    if (strncmp(cn, "cursor", 6) && strncmp(cn, "list_cursor", 11) && strncmp(cn, "tab_cursor", 10) &&
++        strncmp(cn, "button", 6) && strncmp(cn, "icon_cursor", 11)) return;
++    char dn[40];
++    des_pt_dlg_name(dlg, dn, sizeof dn);
++    const uint32_t dvt = vm_read32(drawer);
++    float m[16];
++    for (int k = 0; k < 16; k++) m[k] = des_pt_f(drawer + 0x30 + 4 * k);
++    const float l = des_pt_f(rect), t = des_pt_f(rect + 4), r = des_pt_f(rect + 8), b = des_pt_f(rect + 12);
++    float sx[2], sy[2];
++    const float xs[2] = { l, r }, ys[2] = { t, b };
++    for (int k = 0; k < 2; k++) {
++        const float x = xs[k], y = ys[k];
++        float w = x * m[3] + y * m[7] + m[15];
++        if (w > -1e-6f && w < 1e-6f) w = 1.0f;
++        sx[k] = (x * m[0] + y * m[4] + m[12]) / w;
++        sy[k] = (x * m[1] + y * m[5] + m[13]) / w;
++    }
++    const uint32_t sh = vm_read32(child + 0x14);
++    const int16_t s0 = sh ? (int16_t)vm_read16(sh + 0x2C) : 0, s1 = sh ? (int16_t)vm_read16(sh + 0x2E) : 0,
++                  s2 = sh ? (int16_t)vm_read16(sh + 0x30) : 0, s3 = sh ? (int16_t)vm_read16(sh + 0x32) : 0;
++    fprintf(stderr, "[pt-rect] f=%u s=%d tid=%lu dlg=%08X vt=%08X dn=%s act=%u in=%d par=%08X ch=%08X cn=%s id=%u fl=%08X "
++            "drw=%08X loc=(%.1f,%.1f,%.1f,%.1f) s16=(%d,%d,%d,%d) m=(%.3f,%.3f,%.3f,%.3f,%.1f,%.1f) scr=(%.1f,%.1f,%.1f,%.1f)\n",
++            ps3_ld_frame_index(), site, GetCurrentThreadId(), dlg, dlg ? vm_read32(dlg) : 0, dn, dlg ? vm_read8(dlg + 0x94) : 0,
++            dlg ? ((int32_t)vm_read32(dlg + 0xA0) < 0) : 0, dlg ? vm_read32(dlg + 0x30) : 0, child, cn,
++            vm_read32(child + 8), vm_read32(child + 0x18), dvt, l, t, r, b, s0, s1, s2, s3,
++            m[0], m[1], m[4], m[5], m[12], m[13], sx[0], sy[0], sx[1], sy[1]);
++}
++static void des_pt_input(uint32_t dlg, uint32_t id, uint32_t res)
++{
++    if (!des_pt_on()) return;
++    static uint32_t seen_f = 0xFFFFFFFFu, seen[96]; static int nseen;
++    const unsigned f = ps3_ld_frame_index();
++    int log = res != 0;
++    if (!log && des_pt_frame_hit()) {
++        if (f != seen_f) { seen_f = f; nseen = 0; }
++        const uint32_t key = dlg ^ (id << 24) ^ (id >> 8);
++        int dup = 0;
++        for (int k = 0; k < nseen && !dup; k++) dup = seen[k] == key;
++        if (!dup && nseen < 96) { seen[nseen++] = key; log = 1; }
++    }
++    if (!log) return;
++    char dn[40];
++    des_pt_dlg_name(dlg, dn, sizeof dn);
++    fprintf(stderr, "[pt-in] f=%u tid=%lu dlg=%08X vt=%08X dn=%s id=0x%X in=%d act=%u res=%u\n", f, GetCurrentThreadId(), dlg,
++            vm_read32(dlg), dn, id, (int32_t)vm_read32(dlg + 0xA0) < 0, vm_read8(dlg + 0x94), res);
++}
++extern "C" void des_pt_snap(uint32_t scene, uint32_t dname, uint32_t curname, uint32_t target)
++{
++    if (!des_pt_on()) return;
++    char d[40], c[24], t[48];
++    des_pt_str(dname, d, sizeof d); des_pt_str(curname, c, sizeof c); des_pt_str(target, t, sizeof t);
++    static struct { char d[40], c[24], t[48]; } last[48]; static int nlast;
++    int k = 0;
++    for (; k < nlast; k++) if (!strcmp(last[k].d, d) && !strcmp(last[k].c, c)) break;
++    if (k < nlast && !strcmp(last[k].t, t)) return;
++    if (k == nlast) { if (nlast < 48) nlast++; else k = 47; }
++    strcpy(last[k].d, d); strcpy(last[k].c, c); strcpy(last[k].t, t);
++    fprintf(stderr, "[pt-snap] f=%u tid=%lu scene=%08X dlg=%s shape=%s -> %s\n", ps3_ld_frame_index(), GetCurrentThreadId(),
++            scene, d, c, t);
++}
++extern "C" void des_pt_sound(uint32_t id)
++{
++    if (des_pt_on()) fprintf(stderr, "[pt-snd] f=%u tid=%lu id=0x%X\n", ps3_ld_frame_index(), GetCurrentThreadId(), id);
++}
++
++/* ---- Menu pointing (PORT PATCH, NOTES fix 93; on by default, DES_POINT=0 off) ------------------------------
++ * Every drawn menu item (the Null shapes cursor%d_%d / cursor_button0_%d / list_cursor%d_0 / tab_cursor0_%d /
++ * button%d_%d, see des_pt_rect) goes into a table with its screen rectangle in menu units (1280x720) and its owning
++ * dialog. Two tables: the one being filled this game step and the last complete one (swapped by des_pt_step from
++ * the per-step hook, ppu_recomp_011.cpp). A class's own input handler then asks des_pt_hit(this, kind) for the item
++ * under the mouse arrow (cellPad.c ps3_host_pointer: only while the mouse has "authority" -- it moved since the last
++ * key / pad direction) and moves its selection there with the game's own step functions, so the cursor sound, the
++ * help text and the highlight are the game's. Each move is applied once per pointer move (seq), and not in the first
++ * 8 steps after the menu mask changed (open / slide animations). */
++extern "C" int ps3_host_pointer(float* x, float* y, unsigned* seq);   /* cellPad.c */
++extern "C" int ps3_host_pointer_pos(float* x, float* y);            /* cellPad.c: position, authority or not */
++extern "C" void ps3_host_point_hit(int state);                      /* cellPad.c: what a click would hit */
++void func_007E40A8(ppu_context* ctx);   /* DsMenuDlgSoulStatusUp: snap "cursor" onto cursor_button{+0xF4} */
++void func_00F504F8(ppu_context* ctx);   /* EzMenuDialog: its name (UTF-16) */
++void func_00F889E0(ppu_context* ctx);   /* scene, dialog name, shape, target: put the shape onto the target's rect */
++void func_007DAC50(ppu_context* ctx);   /* DsMenuDlgTitle: refresh after the selection (+0xF8) changed */
++void func_008AC558(ppu_context* ctx);   /* DsMenuDlgSystem: step the selection (+0xFC) one row, with its sound */
++static int des_pt_hit_pending = -1;     /* this step's hit state for the click rule (-1 = no pointing-aware dialog) */
++static unsigned des_pt_step_no;
++extern "C" void ps3_indirect_call(ppu_context* ctx);
++extern "C" PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*);
++extern "C" void ds_toc_check(void*);
++#define DES_PT_DRAIN(ctx) do { while (g_trampoline_fn) { void (*_tf)(void*) = g_trampoline_fn; g_trampoline_fn = 0; _tf((void*)(ctx)); } ds_toc_check((void*)(ctx)); } while (0)   /* = DRAIN_TRAMPOLINE, defined further down */
++void func_0079B2C0(ppu_context* ctx);   /* DsMenuDlgStartTab vf35 helper: step the tab (r4 = right, r5 = wrap) */
++void func_0072D970(ppu_context* ctx);   /* menu sound (r3 = id; 0 = cursor) */
++enum { DES_PK_CURSOR = 1, DES_PK_BUTTON0 = 2, DES_PK_LIST = 3, DES_PK_TAB = 4, DES_PK_BUTTON = 5 };
++typedef struct { uint32_t dlg, vt; uint8_t kind, row, col, pad; float l, t, r, b; } des_pt_ent;
++static des_pt_ent des_pt_tab[2][512];
++static int des_pt_n[2], des_pt_fill;               /* des_pt_tab[des_pt_fill] is being filled */
++static int des_pt_mode2 = -1;
++static unsigned des_pt_steps_since_mask = 1000;
++static int des_pt_point(void)
++{
++    if (des_pt_mode2 < 0) { const char* e = getenv("DES_POINT"); des_pt_mode2 = (e && *e == '0') ? 0 : 1; }   /* DES_POINT=0 off */
++    return des_pt_mode2;
++}
++extern "C" void des_pt_step(unsigned mask)
++{
++    static unsigned last_mask;
++    if (!des_pt_point()) return;
++    if (mask != last_mask) { last_mask = mask; des_pt_steps_since_mask = 0; }
++    else if (des_pt_steps_since_mask < 1000) des_pt_steps_since_mask++;
++    des_pt_fill ^= 1;
++    des_pt_n[des_pt_fill] = 0;
++    des_pt_step_no++;
++    ps3_host_point_hit(des_pt_hit_pending);   /* last step's focused dialog: what a click lands on */
++    des_pt_hit_pending = -1;
++}
++static int des_pt_parse(const char* cn, uint8_t* kind, uint8_t* row, uint8_t* col)
++{
++    int a = 0, b = 0;
++    if (sscanf(cn, "cursor_button0_%d", &a) == 1) { *kind = DES_PK_BUTTON0; *row = 0; *col = (uint8_t)a; return 1; }
++    if (!strncmp(cn, "cursor_button", 13) && sscanf(cn + 13, "%d", &a) == 1) { *kind = DES_PK_BUTTON0; *row = 0; *col = (uint8_t)a; return 1; }
++    if (sscanf(cn, "list_cursor%d_%d", &a, &b) == 2) { *kind = DES_PK_LIST; *row = (uint8_t)a; *col = (uint8_t)b; return 1; }
++    if (sscanf(cn, "tab_cursor%d_%d", &a, &b) == 2) { *kind = DES_PK_TAB; *row = (uint8_t)a; *col = (uint8_t)b; return 1; }
++    if (sscanf(cn, "cursor%d_%d", &a, &b) == 2) { *kind = DES_PK_CURSOR; *row = (uint8_t)a; *col = (uint8_t)b; return 1; }
++    if (sscanf(cn, "button%d_%d", &a, &b) == 2) { *kind = DES_PK_BUTTON; *row = (uint8_t)a; *col = (uint8_t)b; return 1; }
++    return 0;
++}
++static void des_pt_record(uint32_t dlg, uint32_t child, uint32_t drawer, uint32_t rect)
++{
++    if (!des_pt_point() || !dlg || !child || !drawer || vm_read32(drawer) != 0x01865C80u) return;
++    if (!(vm_read32(child + 0x18) & 0x40000000u)) return;   /* hidden */
++    const uint32_t h = vm_read32(child + 0x1C);
++    const uint32_t np = h ? vm_read32(h) : 0;
++    if (!np || np >= 0xF0000000u) return;
++    char cn[32]; int i = 0;
++    const int wide = vm_read8(np) == 0 && vm_read8(np + 1) != 0;
++    for (; i < 31; i++) { const unsigned ch = wide ? vm_read16(np + 2 * i) : vm_read8(np + i); if (!ch) break; cn[i] = (char)ch; }
++    cn[i] = 0;
++    uint8_t kind, row, col;
++    if (!des_pt_parse(cn, &kind, &row, &col)) return;
++    float m[16];
++    for (int k = 0; k < 16; k++) { const uint32_t u = vm_read32(drawer + 0x30 + 4 * k); memcpy(&m[k], &u, 4); }
++    float lt[4];
++    for (int k = 0; k < 4; k++) { const uint32_t u = vm_read32(rect + 4 * k); memcpy(&lt[k], &u, 4); }
++    const int n = des_pt_n[des_pt_fill];
++    if (n >= 512) return;
++    des_pt_ent* e = &des_pt_tab[des_pt_fill][n];
++    e->dlg = dlg; e->vt = vm_read32(dlg); e->kind = kind; e->row = row; e->col = col;
++    e->l = lt[0] * m[0] + lt[1] * m[4] + m[12]; e->t = lt[0] * m[1] + lt[1] * m[5] + m[13];
++    e->r = lt[2] * m[0] + lt[3] * m[4] + m[12]; e->b = lt[2] * m[1] + lt[3] * m[5] + m[13];
++    des_pt_n[des_pt_fill] = n + 1;
++}
++/* The item of `kind` in dialog dlg under the arrow, from the last complete table (last drawn wins). 1 = hit; *seq
++ * = the pointer's move counter (apply once per move). */
++static int des_pt_find_at(uint32_t dlg, unsigned kinds, float x, float y, int* row, int* col)
++{
++    const int t = des_pt_fill ^ 1;
++    int hit = 0;
++    for (int i = 0; i < des_pt_n[t]; i++) {
++        const des_pt_ent* e = &des_pt_tab[t][i];
++        if (e->dlg != dlg || !((1u << e->kind) & kinds)) continue;
++        if (x >= e->l && x < e->r && y >= e->t && y < e->b) { *row = e->row; *col = e->col; hit = 1; }
++    }
++    return hit;
++}
++static int des_pt_find_vt(uint32_t vt, unsigned kinds, int* row, int* col)
++{
++    float x, y;
++    if (!des_pt_point() || des_pt_steps_since_mask < 8 || !ps3_host_pointer_pos(&x, &y)) return 0;
++    const int t = des_pt_fill ^ 1;
++    int hit = 0;
++    for (int i = 0; i < des_pt_n[t]; i++) {
++        const des_pt_ent* e = &des_pt_tab[t][i];
++        if (e->vt != vt || !((1u << e->kind) & kinds)) continue;
++        if (x >= e->l && x < e->r && y >= e->t && y < e->b) { *row = e->row; *col = e->col; hit = 1; }
++    }
++    return hit;
++}
++/* the item under the arrow, authority or not (for the click rule's hit state) */
++static int des_pt_find(uint32_t dlg, unsigned kinds, int* row, int* col)
++{
++    float x, y;
++    if (!des_pt_point() || des_pt_steps_since_mask < 8 || !ps3_host_pointer_pos(&x, &y)) return 0;
++    return des_pt_find_at(dlg, kinds, x, y, row, col);
++}
++static int des_pt_hit(uint32_t dlg, int kind, int* row, int* col, unsigned* seq)
++{
++    if (!des_pt_point() || des_pt_steps_since_mask < 8) return 0;
++    float x, y;
++    if (!ps3_host_pointer(&x, &y, seq)) return 0;
++    return des_pt_find_at(dlg, 1u << kind, x, y, row, col);
++}
++#define DES_PK(k) (1u << (k))
++static void des_pt_call(ppu_context* ctx, void (*fn)(ppu_context*), uint64_t r3, uint64_t r4, uint64_t r5)
++{
++    ppu_context save = *ctx;
++    ctx->gpr[1] -= 0x400; ctx->lr = 0x0001B8D0;
++    ctx->gpr[3] = r3; ctx->gpr[4] = r4; ctx->gpr[5] = r5;
++    fn(ctx); DES_PT_DRAIN(ctx);
++    *ctx = save;
++}
++static void des_pt_call_vslot45(ppu_context* ctx, uint32_t obj, uint32_t slot_off, uint64_t r4, uint64_t r5);
++static void des_pt_call_vslot(ppu_context* ctx, uint32_t obj, uint32_t slot_off)   /* obj->vtable[slot](obj) */
++{
++    ppu_context save = *ctx;
++    ctx->gpr[1] -= 0x400; ctx->lr = 0x0001B8D0;
++    const uint32_t opd = vm_read32(vm_read32(obj) + slot_off);
++    ctx->gpr[3] = obj; ctx->gpr[4] = 0; ctx->gpr[5] = 0;   /* General vf35 / vf36: r4 = wrap (0: clamp, as a repeat) */
++    ctx->ctr = vm_read32(opd);
++    ctx->gpr[2] = vm_read32(opd + 4);
++    ps3_indirect_call(ctx); DES_PT_DRAIN(ctx);
++    *ctx = save;
++}
++static void des_pt_log_apply(const char* what, uint32_t dlg, int from, int to)
++{
++    if (des_pt_on()) fprintf(stderr, "[pt-apply] f=%u %s dlg=%08X %d -> %d\n", ps3_ld_frame_index(), what, dlg, from, to);
++}
++/* R00 Start menu tab bar (DsMenuDlgStartTab vf35 = its input handler, entered only while it has focus): the tab is
++ * menu parameter 0x4B (0..4), shapes cursor0_N; the game's own step = sound 0 + helper(this, right, no wrap). */
++extern "C" void des_pt_apply_starttab(ppu_context* ctx)
++{
++    const uint32_t self = (uint32_t)ctx->gpr[3];
++    int row, col; unsigned seq;
++    static unsigned done_seq = 0xFFFFFFFFu;
++    const uint32_t mm = vm_read32(0x01B4B114);
++    if (!des_pt_point() || !mm) return;
++    const int cur = (int)vm_read32(mm + 0x14 + 0x4B * 4);
++    { int r0, c0; const int over = des_pt_find(self, DES_PK(DES_PK_CURSOR), &r0, &c0) && r0 == 0 && c0 <= 4;
++      des_pt_hit_pending = over ? (c0 == cur ? 1 : 2) : 0; }
++    if (!des_pt_hit(self, DES_PK_CURSOR, &row, &col, &seq) || row != 0 || col > 4 || seq == done_seq) return;
++    done_seq = seq;
++    if (cur == col || cur < 0 || cur > 4) return;
++    des_pt_log_apply("starttab", self, cur, col);
++    des_pt_call(ctx, func_0072D970, 0, 0, 0);
++    for (int k = cur; k != col; k += col > cur ? 1 : -1)
++        des_pt_call(ctx, func_0079B2C0, self, col > cur ? 1 : 0, 0);
++}
++
++static void des_pt_call_vslot45(ppu_context* ctx, uint32_t obj, uint32_t slot_off, uint64_t r4, uint64_t r5)
++{
++    ppu_context save = *ctx;
++    ctx->gpr[1] -= 0x400; ctx->lr = 0x0001B8D0;
++    const uint32_t opd = vm_read32(vm_read32(obj) + slot_off);
++    ctx->gpr[3] = obj; ctx->gpr[4] = r4; ctx->gpr[5] = r5;
++    ctx->ctr = vm_read32(opd);
++    ctx->gpr[2] = vm_read32(opd + 4);
++    ps3_indirect_call(ctx); DES_PT_DRAIN(ctx);
++    *ctx = save;
++}
++/* One pointing step for a focused dialog with a simple "index field" selection: publish the hit state; on a new
++ * pointer move over another item return 1 with *want (the caller then writes the field the game's own way). */
++static int des_pt_index(uint32_t self, unsigned kinds, int use_col, int cur, int count, int* want, unsigned* done_seq)
++{
++    int r, c; unsigned seq;
++    const int over = des_pt_find(self, kinds, &r, &c);
++    const int k = use_col ? c : r;
++    const int valid = over && k >= 0 && k < count;
++    des_pt_hit_pending = valid ? (k == cur ? 1 : 2) : 0;
++    if (!valid || k == cur) return 0;
++    float x, y;
++    if (!ps3_host_pointer(&x, &y, &seq) || seq == *done_seq) return 0;
++    *done_seq = seq; *want = k;
++    return 1;
++}
++/* The input gate func_00F55A18(dlg, id) is called by a dialog's input handler only while it has focus: the place for
++ * a per-class pointing step (once per dialog per game step). Start tab / R03 have their own hooks (048 / 049). */
++extern "C" void des_pt_apply_gate(ppu_context* ctx)
++{
++    static int busy;
++    static uint32_t last_self; static unsigned last_step = 0xFFFFFFFFu;
++    if (busy || !des_pt_point()) return;
++    const uint32_t self = (uint32_t)ctx->gpr[3];
++    if (!self || (int32_t)vm_read32(self + 0xA0) >= 0) return;   /* only the dialog with input (a list under a popup also asks) */
++    if (self == last_self && des_pt_step_no == last_step) return;
++    last_self = self; last_step = des_pt_step_no;
++    const uint32_t vt = vm_read32(self);
++    if (vt == 0x018692C0u || vt == 0x01869FB8u || vt == 0x0186A0C8u) return;
++    busy = 1;
++    const uint32_t vf34 = vm_read32(vm_read32(vt + 0x88));
++    if (vf34 == 0x00781658u || vt == 0x0186AA58u) {
++        /* DsMenuDlgListbox family (talk choices, level-up list, inventory, equipment lists, shops): visible rows +0xF4,
++         * count +0x104, view top +0x108, row in the view +0x100; the game's own post-move = vf33 (+0x84, (this, up,
++         * changed): sound / blink / detail refresh per class) + vf35 (+0x8C, snap the cursor). Rows are list_cursor%d_0
++         * or cursor%d_0; a row past the end of the list is no item. */
++        static unsigned done = 0xFFFFFFFFu;
++        const int vis = (int)vm_read32(self + 0xF4), cnt = (int)vm_read32(self + 0x104), top = (int)vm_read32(self + 0x108);
++        const int row = (int)vm_read32(self + 0x100);
++        int want;
++        if (vis > 0 && vis <= 32 && cnt >= 0 && cnt <= 4096 && top >= 0 && top <= cnt && row >= 0 && row < vis) {
++            const int rows = (cnt - top) < vis ? (cnt - top) : vis;
++            if (des_pt_index(self, DES_PK(DES_PK_LIST) | DES_PK(DES_PK_CURSOR), 0, row, rows, &want, &done)) {
++                des_pt_log_apply("listbox", self, row, want);
++                vm_write32(self + 0x100, (uint32_t)want);
++                des_pt_call_vslot45(ctx, self, 0x84, want < row ? 1 : 0, 1);
++                des_pt_call_vslot45(ctx, self, 0x8C, 0, 0);
++            }
++        }
++    } else if (vf34 == 0x00776C98u || vm_read32(vm_read32(vt + 0x8C)) == 0x00777C90u) {
++        /* DsMenuDlgButtonGroup family (I02-00 equipment grid, I01-01 item command popup, gestures): row +0xF4, column
++         * +0xF8 of rows +0xFC x columns +0x100, cells button%d_%d / cursor%d_%d. The game's own post-move = vf33 (+0x84,
++         * (this, changed): sound + blink); its vf17 snaps "cursor" onto cursor{row}_{col} only after a key move, so
++         * the snap is done here the same way (func_00F889E0 with UTF-16 names built in free stack space below the
++         * handler's, as vf17 builds them on its own stack). */
++        static unsigned done = 0xFFFFFFFFu;
++        const int r0 = (int)vm_read32(self + 0xF4), c0 = (int)vm_read32(self + 0xF8);
++        const int rows = (int)vm_read32(self + 0xFC), cols = (int)vm_read32(self + 0x100);
++        if (rows > 0 && rows <= 32 && cols > 0 && cols <= 32 && r0 >= 0 && r0 < rows && c0 >= 0 && c0 < cols) {
++            int r, c; unsigned seq;
++            const int over = des_pt_find(self, DES_PK(DES_PK_CURSOR) | DES_PK(DES_PK_BUTTON), &r, &c) && r < rows && c < cols;
++            des_pt_hit_pending = over ? ((r == r0 && c == c0) ? 1 : 2) : 0;
++            float x, y;
++            if (over && (r != r0 || c != c0) && ps3_host_pointer(&x, &y, &seq) && seq != done) {
++                done = seq;
++                des_pt_log_apply("buttongroup", self, r0 * 100 + c0, r * 100 + c);
++                vm_write32(self + 0xF4, (uint32_t)r); vm_write32(self + 0xF8, (uint32_t)c);
++                des_pt_call_vslot45(ctx, self, 0x84, 1, 0);
++                const uint32_t sp = (uint32_t)ctx->gpr[1];
++                const uint32_t s_cur = sp - 0x380, s_tgt = sp - 0x360;
++                char tgt[24]; snprintf(tgt, sizeof tgt, "cursor%d_%d", r, c);
++                const char* cur = "cursor";
++                for (int i = 0; i < 8; i++) vm_write16(s_cur + 2 * i, (uint16_t)(i < 6 ? cur[i] : 0));
++                for (int i = 0; i < 24; i++) { vm_write16(s_tgt + 2 * i, (uint16_t)(unsigned char)tgt[i]); if (!tgt[i]) break; }
++                ppu_context save = *ctx;   /* scene = vf16(this), name = func_00F504F8(this) */
++                ctx->gpr[1] -= 0x400; ctx->lr = 0x0001B8D0; ctx->gpr[3] = self;
++                { const uint32_t opd = vm_read32(vt + 0x40); ctx->ctr = vm_read32(opd); ctx->gpr[2] = vm_read32(opd + 4);
++                  ps3_indirect_call(ctx); DES_PT_DRAIN(ctx); }
++                const uint32_t scene = (uint32_t)ctx->gpr[3];
++                *ctx = save;
++                ctx->gpr[1] -= 0x400; ctx->lr = 0x0001B8D0; ctx->gpr[3] = self;
++                func_00F504F8(ctx); DES_PT_DRAIN(ctx);
++                const uint32_t dname = (uint32_t)ctx->gpr[3];
++                *ctx = save;
++                ctx->gpr[1] -= 0x400; ctx->lr = 0x0001B8D0;
++                ctx->gpr[3] = scene; ctx->gpr[4] = dname; ctx->gpr[5] = s_cur; ctx->gpr[6] = s_tgt;
++                func_00F889E0(ctx); DES_PT_DRAIN(ctx);
++                *ctx = save;
++            }
++        }
++    } else if (vt == 0x0186A968u) {
++        /* T00-01 title NEW GAME / LOAD GAME (DsMenuDlgTitle): +0xF8 (0 / 1; LOAD GAME only if byte +0xFE), buttons drawn
++         * by the generic EzMenuDialog beside it (cursor0_0 / cursor1_0); the game's own step: write, sound 0,
++         * func_007DAC50(this). */
++        static unsigned done = 0xFFFFFFFFu;
++        const int cur = (int)vm_read32(self + 0xF8), n = vm_read8(self + 0xFE) ? 2 : 1;
++        int r, c; unsigned seq; float x, y;
++        if (cur >= 0 && cur < 2) {
++            const int over = des_pt_find_vt(0x01883208u, DES_PK(DES_PK_CURSOR), &r, &c) && c == 0 && r < n;
++            des_pt_hit_pending = over ? (r == cur ? 1 : 2) : 0;
++            if (over && r != cur && ps3_host_pointer(&x, &y, &seq) && seq != done) {
++                done = seq;
++                des_pt_log_apply("title", self, cur, r);
++                vm_write32(self + 0xF8, (uint32_t)r);
++                des_pt_call(ctx, func_0072D970, 0, 0, 0);
++                des_pt_call(ctx, func_007DAC50, self, 0, 0);
++            }
++        }
++    } else if (vt == 0x0186EF60u) {
++        /* System menu (Options / Load Profile / Quit Game): +0xFC (0..2), rows cursor%d_0; the game's own step is
++         * func_008AC558(this, dir) (its sound inside); the direction value is learnt from the first step. */
++        static unsigned done = 0xFFFFFFFFu;
++        static int down_arg = -1;
++        const int cur = (int)vm_read32(self + 0xFC);
++        int want;
++        if (cur >= 0 && cur < 3 && des_pt_index(self, DES_PK(DES_PK_CURSOR), 0, cur, 3, &want, &done)) {
++            des_pt_log_apply("system", self, cur, want);
++            for (int guard = 0; guard < 6; guard++) {
++                const int now = (int)vm_read32(self + 0xFC);
++                if (now == want || now < 0 || now > 2) break;
++                const int arg = down_arg < 0 ? 1 : (want > now ? down_arg : !down_arg);
++                des_pt_call(ctx, func_008AC558, self, (uint64_t)arg, 0);
++                const int nxt = (int)vm_read32(self + 0xFC);
++                if (down_arg < 0 && nxt != now) down_arg = (nxt == now + 1 || (now == 2 && nxt == 0)) ? arg : !arg;
++                if (nxt == now && down_arg >= 0) break;   /* no step possible (a hidden row) */
++            }
++        }
++    } else if (vt == 0x0186BE58u) {   /* T01 profile select: +0xF8 (0..3), rows cursor%d_0, snapped every frame */
++        static unsigned done = 0xFFFFFFFFu;
++        const int cur = (int)vm_read32(self + 0xF8);
++        int want;
++        if (cur >= 0 && cur < 4 && des_pt_index(self, DES_PK(DES_PK_CURSOR), 0, cur, 4, &want, &done)) {
++            des_pt_log_apply("profile", self, cur, want);
++            vm_write32(self + 0xF8, (uint32_t)want);
++            des_pt_call(ctx, func_0072D970, 0, 0, 0);
++        }
++    } else if (vt == 0x0186EA48u) {   /* F09 warp list: +0xFC (< menu param 0xD8), rows cursor0_%d */
++        static unsigned done = 0xFFFFFFFFu;
++        const uint32_t mm = vm_read32(0x01B4B114);
++        const int cur = (int)vm_read32(self + 0xFC), n = mm ? (int)vm_read32(mm + 0x14 + 0xD8 * 4) : 0;
++        int want;
++        if (n > 0 && n <= 16 && cur >= 0 && cur < n && des_pt_index(self, DES_PK(DES_PK_CURSOR), 1, cur, n, &want, &done)) {
++            des_pt_log_apply("warp", self, cur, want);
++            vm_write32(self + 0xFC, (uint32_t)want);
++            des_pt_call(ctx, func_0072D970, 0, 0, 0);
++        }
++    } else if (vt == 0x0186AD48u) {   /* C01 level-up confirm: +0xF4 (0 OK only if byte +0x104), cursor_button0/1 */
++        static unsigned done = 0xFFFFFFFFu;
++        const int cur = (int)vm_read32(self + 0xF4);
++        int want;
++        if ((cur == 0 || cur == 1) && des_pt_index(self, DES_PK(DES_PK_BUTTON0), 1, cur, 2, &want, &done) &&
++            (want == 1 || vm_read8(self + 0x104))) {
++            des_pt_log_apply("soulup", self, cur, want);
++            vm_write32(self + 0xF4, (uint32_t)want);
++            des_pt_call(ctx, func_0072D970, 0, 0, 0);
++            des_pt_call(ctx, func_007E40A8, self, 0, 0);
++        }
++    }
++    busy = 0;
++}
++/* R03 message / yes-no boxes (DsMenuDlgGeneral / InGameGeneral input func_007BEA58): the selected button is +0x110
++ * (1-based), shapes cursor_button0_{k-1}; the game's own steps are vf35 (+0x8C, right) and vf36 (+0x90, left), each
++ * with its sound and cursor blink. Only in the idle state (+0xF8 == 0). */
++extern "C" void des_pt_apply_r03(ppu_context* ctx)
++{
++    const uint32_t self = (uint32_t)ctx->gpr[3];
++    int row, col; unsigned seq;
++    static unsigned done_seq = 0xFFFFFFFFu;
++    if (!des_pt_point() || vm_read32(self + 0xF8) != 0) return;
++    { int r0, c0; const int over = des_pt_find(self, DES_PK(DES_PK_BUTTON0), &r0, &c0);
++      des_pt_hit_pending = over ? (c0 + 1 == (int)vm_read32(self + 0x110) ? 1 : 2) : 0; }
++    if (!des_pt_hit(self, DES_PK_BUTTON0, &row, &col, &seq) || seq == done_seq) return;
++    done_seq = seq;
++    const int cur = (int)vm_read32(self + 0x110), want = col + 1;
++    if (cur == want || cur < 1 || want > 4) return;
++    des_pt_log_apply("r03", self, cur, want);
++    for (int k = cur, guard = 0; k != want && guard < 4; guard++) {
++        des_pt_call_vslot(ctx, self, want > cur ? 0x8C : 0x90);
++        const int now = (int)vm_read32(self + 0x110);
++        if (now == k) break;   /* did not move (no button there) */
++        k = now;
++    }
++}
++
+ /* VM base pointer (defined by game project) */
+ extern "C" uint8_t* vm_base;
+ 
+@@ -242,12 +724,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
   * Converts cross-fragment fallthrough chains into iterative loops. */
@@ -2369,10 +2907,75 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -35812,6 +36296,8 @@
+ 
+ void func_00F55A18(ppu_context* ctx) {
+     PPU_MM_SNAP
++        const uint32_t _pt_dlg = (uint32_t)ctx->gpr[3], _pt_id = (uint32_t)ctx->gpr[4];   /* PORT DEBUG pointing stage 0 */
++        des_pt_apply_gate(ctx);   /* PORT PATCH: menu pointing (DES_POINT) */
+         uint64_t _cs_30 = ctx->gpr[30];
+         uint64_t _cs_31 = ctx->gpr[31];
+         vm_write64(ctx->gpr[1] + -0xA0, ctx->gpr[1]); ctx->gpr[1] += -0xA0;
+@@ -35828,6 +36314,7 @@
+         ctx->gpr[0] = (int64_t)(int32_t)(0);
+ loc_00F55A44:
+         ctx->gpr[3] = (int64_t)(int32_t)ctx->gpr[0];
++        des_pt_input(_pt_dlg, _pt_id, (uint32_t)ctx->gpr[3]);   /* PORT DEBUG pointing stage 0 */
+         ctx->gpr[0] = vm_read64(ctx->gpr[1] + 0xB0);
+         ctx->gpr[30] = _cs_30;
+         ctx->gpr[31] = _cs_31;
+@@ -35883,6 +36370,7 @@
+         ctx->gpr[0] = ctx->gpr[9] - ctx->gpr[0];
+         ctx->gpr[0] = ppc_rlw64(ctx->gpr[0], 1, 31, 31, 0, 0);
+         ctx->gpr[3] = (int64_t)(int32_t)ctx->gpr[0];
++        des_pt_input(_pt_dlg, _pt_id, (uint32_t)ctx->gpr[3]);   /* PORT DEBUG pointing stage 0 */
+         ctx->gpr[0] = vm_read64(ctx->gpr[1] + 0xB0);
+         ctx->gpr[1] = ctx->gpr[1] + (int64_t)(0xA0);
+         ctx->lr = ctx->gpr[0];
+@@ -46931,6 +47419,7 @@
+         vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);
+         ctx->ctr = ctx->gpr[0];
+         ctx->gpr[2] = vm_read32(ctx->gpr[11] + 0x4);
++        des_pt_rect((uint32_t)ctx->gpr[15], (uint32_t)ctx->gpr[31], (uint32_t)ctx->gpr[19], (uint32_t)ctx->gpr[1] + 0x174, 3);   /* PORT DEBUG pointing stage 0 */
+         ctx->lr = 0x00F5F754; ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx);
+         ctx->gpr[2] = vm_read64(ctx->gpr[1] + 0x28);
+ loc_00F5F758:
+@@ -47000,6 +47489,7 @@
+         vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);
+         ctx->ctr = ctx->gpr[0];
+         ctx->gpr[2] = vm_read32(ctx->gpr[9] + 0x4);
++        des_pt_rect((uint32_t)ctx->gpr[15], (uint32_t)ctx->gpr[31], (uint32_t)ctx->gpr[19], (uint32_t)ctx->gpr[1] + 0x174, 4);   /* PORT DEBUG pointing stage 0 */
+         ctx->lr = 0x00F5F85C; ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx);
+         ctx->gpr[2] = vm_read64(ctx->gpr[1] + 0x28);
+         ctx->gpr[3] = ctx->gpr[29] | ctx->gpr[29];
+@@ -47874,6 +48364,7 @@
+         vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);
+         ctx->ctr = ctx->gpr[0];
+         ctx->gpr[2] = vm_read32(ctx->gpr[11] + 0x4);
++        des_pt_rect((uint32_t)ctx->gpr[21], (uint32_t)ctx->gpr[28], (uint32_t)ctx->gpr[31], (uint32_t)ctx->gpr[1] + 0x19C, 1);   /* PORT DEBUG pointing stage 0 */
+         ctx->lr = 0x00F6054C; ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx);
+         ctx->gpr[2] = vm_read64(ctx->gpr[1] + 0x28);
+ loc_00F60550:
+@@ -48268,6 +48759,7 @@
+         vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);
+         ctx->ctr = ctx->gpr[0];
+         ctx->gpr[2] = vm_read32(ctx->gpr[9] + 0x4);
++        des_pt_rect((uint32_t)ctx->gpr[21], (uint32_t)ctx->gpr[28], (uint32_t)ctx->gpr[31], (uint32_t)ctx->gpr[1] + 0x19C, 2);   /* PORT DEBUG pointing stage 0 */
+         ctx->lr = 0x00F60B4C; ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx);
+         ctx->gpr[2] = vm_read64(ctx->gpr[1] + 0x28);
+         ctx->gpr[3] = ctx->gpr[29] | ctx->gpr[29];
 diff -ruN a/recompiled/ppu_recomp_087.cpp b/recompiled/ppu_recomp_087.cpp
---- a/recompiled/ppu_recomp_087.cpp	2026-10-31 08:09:13.526678500 -0700
-+++ b/recompiled/ppu_recomp_087.cpp	2026-10-31 08:09:19.673255000 -0700
-@@ -242,12 +242,14 @@
+--- a/recompiled/ppu_recomp_087.cpp	2026-11-04 21:56:34.331310600 -0700
++++ b/recompiled/ppu_recomp_087.cpp	2026-11-04 21:56:34.350832900 -0700
+@@ -219,6 +219,7 @@
+ #endif
+ 
+ #include "ppu_vmx.h"   /* exact VMX semantics (runtime/ppu/ppu_vmx.h) */
++extern "C" void des_pt_snap(uint32_t scene, uint32_t dname, uint32_t curname, uint32_t target);   /* 086, pointing stage 0 */
+ 
+ /* VM base pointer (defined by game project) */
+ extern "C" uint8_t* vm_base;
+@@ -242,12 +243,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
   * Converts cross-fragment fallthrough chains into iterative loops. */
@@ -2387,6 +2990,14 @@ diff -ruN a/recompiled/ppu_recomp_087.cpp b/recompiled/ppu_recomp_087.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -36405,6 +36408,7 @@
+ 
+ void func_00F889E0(ppu_context* ctx) {
+     PPU_MM_SNAP
++        des_pt_snap((uint32_t)ctx->gpr[3], (uint32_t)ctx->gpr[4], (uint32_t)ctx->gpr[5], (uint32_t)ctx->gpr[6]);   /* PORT DEBUG */
+         uint64_t _cs_25 = ctx->gpr[25];
+         uint64_t _cs_26 = ctx->gpr[26];
+         uint64_t _cs_27 = ctx->gpr[27];
 diff -ruN a/recompiled/ppu_recomp_088.cpp b/recompiled/ppu_recomp_088.cpp
 --- a/recompiled/ppu_recomp_088.cpp	2026-10-31 08:09:13.568314200 -0700
 +++ b/recompiled/ppu_recomp_088.cpp	2026-10-31 08:09:19.719861200 -0700
