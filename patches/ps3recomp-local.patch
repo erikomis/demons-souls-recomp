@@ -7658,7 +7658,7 @@ index e55bcc1..5a0e68d 100644
  #ifdef __cplusplus
  }
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 713ba33..4afdc25 100644
+index 713ba33..2085d77 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
 @@ -55,7 +55,9 @@ void rsx_live_draw_present_rgba(const uint8_t* r, u32 w, u32 h) { (void)r; (void
@@ -9524,9 +9524,12 @@ index 713ba33..4afdc25 100644
      snapshot_rd.DepthOrArraySize = 1;
      snapshot_rd.MipLevels = 1;
      snapshot_rd.Format = DXGI_FORMAT_R32_FLOAT;
-@@ -3895,8 +5114,8 @@ static int zdepth_snapshot(u32 slot)
+@@ -3894,9 +5113,11 @@ static int zdepth_snapshot(u32 slot)
+         g.list, 0, source_table);
      g.list->lpVtbl->SetComputeRootDescriptorTable(
          g.list, 1, destination_table);
++    const u32 zsnap_size[2] = {z->snapshot_w * z->sc, z->snapshot_h * z->sc};
++    g.list->lpVtbl->SetComputeRoot32BitConstants(g.list, 2, 2, zsnap_size, 0);
      g.list->lpVtbl->Dispatch(
 -        g.list, (z->snapshot_w + 7u) / 8u,
 -        (z->snapshot_h + 7u) / 8u, 1);
@@ -9535,7 +9538,7 @@ index 713ba33..4afdc25 100644
  
      D3D12_RESOURCE_BARRIER uav_done = {0};
      uav_done.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-@@ -3923,9 +5142,86 @@ static int zdepth_snapshot(u32 slot)
+@@ -3923,9 +5144,88 @@ static int zdepth_snapshot(u32 slot)
      z->snapshot_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
      z->snapshot_valid = 1;
      z->had_write = 0;
@@ -9608,6 +9611,8 @@ index 713ba33..4afdc25 100644
 +    g.list->lpVtbl->SetComputeRootSignature(g.list, g.depth_snapshot_rootsig);
 +    g.list->lpVtbl->SetComputeRootDescriptorTable(g.list, 0, src_table);
 +    g.list->lpVtbl->SetComputeRootDescriptorTable(g.list, 1, dst_table);
++    const u32 zsnap_size[2] = {z->argb_w * z->sc, z->argb_h * z->sc};
++    g.list->lpVtbl->SetComputeRoot32BitConstants(g.list, 2, 2, zsnap_size, 0);
 +    g.list->lpVtbl->Dispatch(g.list, (z->argb_w * z->sc + 7u) / 8u, (z->argb_h * z->sc + 7u) / 8u, 1);
 +    for (int k = 0; k < 2; k++) {
 +        const D3D12_RESOURCE_STATES s = b[k].Transition.StateBefore;
@@ -9622,7 +9627,7 @@ index 713ba33..4afdc25 100644
  /* ---------------------------------------------------------------------------
   * PSO cache (VP+FP+render-state keyed)
   * -----------------------------------------------------------------------*/
-@@ -4004,6 +5300,14 @@ static int shader_disk_cache_prepare(void)
+@@ -4004,6 +5304,14 @@ static int shader_disk_cache_prepare(void)
          return 0;
  
      g_ld_shader_disk_ready = 1;
@@ -9637,7 +9642,7 @@ index 713ba33..4afdc25 100644
      fprintf(stderr, "[shader-disk-cache] enabled dir='%s' version=%u\n",
              g_ld_shader_disk_dir, SHADER_DISK_CACHE_VERSION);
      return 1;
-@@ -4031,7 +5335,7 @@ static ID3DBlob* shader_disk_cache_load(
+@@ -4031,7 +5339,7 @@ static ID3DBlob* shader_disk_cache_load(
  
      FILE* file = fopen(path, "rb");
      if (!file) {
@@ -9646,7 +9651,7 @@ index 713ba33..4afdc25 100644
          shader_disk_cache_progress(value);
          return NULL;
      }
-@@ -4066,16 +5370,72 @@ static ID3DBlob* shader_disk_cache_load(
+@@ -4066,16 +5374,72 @@ static ID3DBlob* shader_disk_cache_load(
              blob->lpVtbl->Release(blob);
          DeleteFileA(path);
          g_ld_shader_disk_rejects++;
@@ -9721,7 +9726,7 @@ index 713ba33..4afdc25 100644
  static void shader_disk_cache_store(
      u32 stage, const char* source, u32 source_length, u64 hash,
      ID3DBlob* blob)
-@@ -4090,8 +5450,8 @@ static void shader_disk_cache_store(
+@@ -4090,8 +5454,8 @@ static void shader_disk_cache_store(
      if (!shader_disk_cache_path(path, stage, hash, source_length))
          return;
      const int temporary_length = snprintf(
@@ -9732,7 +9737,7 @@ index 713ba33..4afdc25 100644
      if (temporary_length <= 0 || temporary_length >= sizeof(temporary))
          return;
  
-@@ -4121,7 +5481,7 @@ static void shader_disk_cache_store(
+@@ -4121,7 +5485,7 @@ static void shader_disk_cache_store(
      }
  
      const u32 stage_index = shader_disk_cache_stage_index(stage);
@@ -9741,7 +9746,7 @@ index 713ba33..4afdc25 100644
      shader_disk_cache_progress(value);
  }
  
-@@ -4149,7 +5509,7 @@ static u64 ld_hash_structural_render_state(
+@@ -4149,7 +5513,7 @@ static u64 ld_hash_structural_render_state(
      LD_HASH_RENDER_FIELD(cull_face);
      LD_HASH_RENDER_FIELD(front_face);
      LD_HASH_RENDER_FIELD(color_mask);
@@ -9750,7 +9755,7 @@ index 713ba33..4afdc25 100644
      LD_HASH_RENDER_FIELD(rt_count);
      LD_HASH_RENDER_FIELD(stencil_enable);
      LD_HASH_RENDER_FIELD(stencil_two_sided);
-@@ -4174,9 +5534,62 @@ static u64 ld_hash_structural_render_state(
+@@ -4174,9 +5538,62 @@ static u64 ld_hash_structural_render_state(
   * variant that references it.  The source bytes are retained for collision-
   * safe equality; the 64-bit hash is only an index accelerator.
   */
@@ -9813,7 +9818,7 @@ index 713ba33..4afdc25 100644
  {
      if (post_boundary_hit)
          *post_boundary_hit = 0;
-@@ -4234,9 +5647,13 @@ static void shader_blob_cache_insert_accounted(
+@@ -4234,9 +5651,13 @@ static void shader_blob_cache_insert_accounted(
      shader_blob_cache_t* cache, const char* source, u32 source_length,
      u64 hash, ID3DBlob* blob, u32 stage, int hash_seen)
  {
@@ -9829,7 +9834,7 @@ index 713ba33..4afdc25 100644
  #if defined(YZ_PERF_PROFILE)
      if (stage == 'V') {
          if (result == SHADER_BLOB_INSERTED) {
-@@ -4403,6 +5820,407 @@ static u32 vp_txl_unit_mask(const u8* ucode, u32 instrs)
+@@ -4403,6 +5824,407 @@ static u32 vp_txl_unit_mask(const u8* ucode, u32 instrs)
      return mask;
  }
  
@@ -10237,7 +10242,7 @@ index 713ba33..4afdc25 100644
  static ID3D12PipelineState* build_pso(
      const char* vs_hlsl, const char* ps_hlsl, const render_state_t* rs,
      const rsx_vertex_layout_plan* masked_layout, int packed_offsets)
-@@ -4446,7 +6264,9 @@ static ID3D12PipelineState* build_pso(
+@@ -4446,7 +6268,9 @@ static ID3D12PipelineState* build_pso(
  #if defined(YZ_PERF_PROFILE)
          g_ld_profile.total.vs_blob_misses++;
  #endif
@@ -10247,7 +10252,7 @@ index 713ba33..4afdc25 100644
          if (vs) {
              shader_blob_cache_insert_accounted(
                  &g.vs_blobs, vs_hlsl, vs_length, vs_hash, vs,
-@@ -4456,20 +6276,30 @@ static ID3D12PipelineState* build_pso(
+@@ -4456,20 +6280,30 @@ static ID3D12PipelineState* build_pso(
              g_ld_profile.total.vs_compile_calls++;
              const LONGLONG compile_begin = ld_profile_qpc();
  #endif
@@ -10279,7 +10284,7 @@ index 713ba33..4afdc25 100644
          }
      }
      if (FAILED(vs_hr)) {
-@@ -4508,7 +6338,9 @@ static ID3D12PipelineState* build_pso(
+@@ -4508,7 +6342,9 @@ static ID3D12PipelineState* build_pso(
  #if defined(YZ_PERF_PROFILE)
          g_ld_profile.total.ps_blob_misses++;
  #endif
@@ -10289,7 +10294,7 @@ index 713ba33..4afdc25 100644
          if (ps) {
              shader_blob_cache_insert_accounted(
                  &g.ps_blobs, ps_hlsl, ps_length, ps_hash, ps,
-@@ -4518,20 +6350,30 @@ static ID3D12PipelineState* build_pso(
+@@ -4518,20 +6354,30 @@ static ID3D12PipelineState* build_pso(
              g_ld_profile.total.ps_compile_calls++;
              const LONGLONG compile_begin = ld_profile_qpc();
  #endif
@@ -10321,7 +10326,7 @@ index 713ba33..4afdc25 100644
          }
      }
      if (FAILED(ps_hr)) {
-@@ -4573,16 +6415,17 @@ static ID3D12PipelineState* build_pso(
+@@ -4573,16 +6419,17 @@ static ID3D12PipelineState* build_pso(
      pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
      pd.NumRenderTargets = rs->rt_count ? rs->rt_count : 1;
      for (u32 r = 0; r < pd.NumRenderTargets; r++)
@@ -10341,7 +10346,7 @@ index 713ba33..4afdc25 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.create_pso_qpc +=
          (u64)(ld_profile_qpc() - create_begin);
-@@ -4598,37 +6441,306 @@ static ID3D12PipelineState* build_pso(
+@@ -4598,37 +6445,306 @@ static ID3D12PipelineState* build_pso(
                      rs->depth_test, rs->depth_write, rs->depth_func,
                      rs->blend_enable, rs->cull_enable, rs->cull_face);
          if (removed != S_OK)
@@ -10671,7 +10676,7 @@ index 713ba33..4afdc25 100644
  static void ld_pso_bail(int* said, const char* reason)
  {
      static int dbg = -1;
-@@ -4641,21 +6753,133 @@ static void ld_pso_bail(int* said, const char* reason)
+@@ -4641,21 +6757,133 @@ static void ld_pso_bail(int* said, const char* reason)
  #define LD_PSO_BAIL(reason) \
      do { static int _said_ = 0; ld_pso_bail(&_said_, (reason)); } while (0)
  
@@ -10808,7 +10813,7 @@ index 713ba33..4afdc25 100644
      if (!fp_size) {
          /* No END-bit instruction in 64 KB: the bytes at (location, offset) are
           * not a fragment program. Almost always the LOCATION is wrong, not the
-@@ -4663,6 +6887,20 @@ static ID3D12PipelineState* get_pso(
+@@ -4663,6 +6891,20 @@ static ID3D12PipelineState* get_pso(
           * so report the register the guest actually wrote and the head of what
           * we read, which is what says local-vs-main. */
          static int said = 0;
@@ -10829,7 +10834,7 @@ index 713ba33..4afdc25 100644
          if (!said && getenv("LD_PSO_DBG")) {
              said = 1;
              fprintf(stderr,
-@@ -4690,6 +6928,14 @@ static ID3D12PipelineState* get_pso(
+@@ -4690,6 +6932,14 @@ static ID3D12PipelineState* get_pso(
                      fprintf(stderr, "[pso-bail]   first non-zero byte at "
                                      "+0x%X -- the region is populated, the "
                                      "offset is wrong\n", i);
@@ -10844,7 +10849,7 @@ index 713ba33..4afdc25 100644
              }
              fflush(stderr);
          }
-@@ -4700,7 +6946,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4700,7 +6950,7 @@ static ID3D12PipelineState* get_pso(
      if (!fp_uc) { LD_PSO_BAIL("fragment program is not fully mapped in guest memory"); return NULL; }
  
      /* Fragment output register mode (fp16 h0 vs fp32 r0) is driven by the
@@ -10853,7 +10858,7 @@ index 713ba33..4afdc25 100644
       * AUTO heuristic returned stale fp32 scratch for h0-writing materials);
       * fold the deciding bit into the cache key so a program reused under a
       * different export mode gets its own PSO. Kill-switch RSX_FP_CTRL_AUTO=1
-@@ -4716,7 +6962,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4716,7 +6966,7 @@ static ID3D12PipelineState* get_pso(
              cube_mask |= 1u << unit;
      }
      const u32 vtex_mask = vertex_texture_mask();
@@ -10862,7 +10867,7 @@ index 713ba33..4afdc25 100644
      if (txl_mask && !(txl_mask & vtex_mask)) {
          g_ld_vtex_missing_for_txl++;
          static u32 warned = 0;
-@@ -4749,13 +6995,144 @@ static ID3D12PipelineState* get_pso(
+@@ -4749,13 +6999,144 @@ static ID3D12PipelineState* get_pso(
          LD_PSO_BAIL("fragment program constant collection failed");
          return NULL;
      }
@@ -11010,7 +11015,7 @@ index 713ba33..4afdc25 100644
      else
          key = fnv1a(fp_uc, fp_size, key);
      if (!key) {
-@@ -4766,6 +7143,55 @@ static ID3D12PipelineState* get_pso(
+@@ -4766,6 +7147,55 @@ static ID3D12PipelineState* get_pso(
      key = fnv1a(&fp_ctrl_key, sizeof(fp_ctrl_key), key);
      key = fnv1a(&cube_mask, sizeof(cube_mask), key);
      key = fnv1a(&vtex_mask, sizeof(vtex_mask), key);
@@ -11066,7 +11071,7 @@ index 713ba33..4afdc25 100644
      /* BRB/CLB outcomes are baked into the program (rsx_vp_set_branch_bits). */
      const int vp_branch_bits_used = rsx_vp_uses_branch_bits(vp_uc, vp_instrs * 16);
      const u32 vp_branch_bits = vp_branch_bits_used ? rsx_dsp_reg(&g.rsx, 0x1FF8u) : 0;
-@@ -4811,6 +7237,12 @@ static ID3D12PipelineState* get_pso(
+@@ -4811,6 +7241,12 @@ static ID3D12PipelineState* get_pso(
      }
      key = fnv1a(&unnorm_mask, sizeof(unnorm_mask), key);
      if (unnorm_mask) key = fnv1a(unnorm_dim, sizeof(unnorm_dim), key);
@@ -11079,7 +11084,7 @@ index 713ba33..4afdc25 100644
      if (masked_layout) {
          static const u32 masked_layout_tag = 0x314B534Du; /* "MSK1" */
          const u32 payload_stride =
-@@ -4834,8 +7266,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4834,8 +7270,7 @@ static ID3D12PipelineState* get_pso(
  #endif
      g_ld_current_pso.valid = 1;
      g_ld_current_pso.key = key;
@@ -11089,7 +11094,7 @@ index 713ba33..4afdc25 100644
      g_ld_current_pso.vp_start = start;
      g_ld_current_pso.vp_instrs = vp_instrs;
      g_ld_current_pso.fp_location = fp_loc;
-@@ -4864,6 +7295,10 @@ static ID3D12PipelineState* get_pso(
+@@ -4864,6 +7299,10 @@ static ID3D12PipelineState* get_pso(
  #if defined(YZ_PERF_PROFILE)
              g_ld_profile.total.pso_hits++;
  #endif
@@ -11100,7 +11105,7 @@ index 713ba33..4afdc25 100644
              return g.psos[i].pso;
          }
      }
-@@ -4895,9 +7330,21 @@ static ID3D12PipelineState* get_pso(
+@@ -4895,9 +7334,21 @@ static ID3D12PipelineState* get_pso(
      u32 decompiled_constant_count = 0;
      int fi;
      if (ld_fp_constants_buffered()) {
@@ -11125,7 +11130,7 @@ index 713ba33..4afdc25 100644
          if (fi > 0 &&
              decompiled_constant_count != g.fp_constants.count)
              fi = -1;
-@@ -4930,6 +7377,23 @@ static ID3D12PipelineState* get_pso(
+@@ -4930,6 +7381,23 @@ static ID3D12PipelineState* get_pso(
                  unnorm_dim, cube_mask, 0u) < 0)
              fi = -1;
      }
@@ -11149,7 +11154,7 @@ index 713ba33..4afdc25 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.decompile_qpc +=
          (u64)(ld_profile_qpc() - decompile_begin);
-@@ -4953,7 +7417,8 @@ static ID3D12PipelineState* get_pso(
+@@ -4953,7 +7421,8 @@ static ID3D12PipelineState* get_pso(
             * only the return still showed nothing for a failing alpha. */
            for (char* d = strstr(ps_hlsl, "discard;"); d; d = strstr(d, "discard;"))
                memcpy(d, "        ", 8);
@@ -11159,7 +11164,7 @@ index 713ba33..4afdc25 100644
            if (r) {
                char* semi = strchr(r, ';');
                if (semi) {
-@@ -4977,6 +7442,27 @@ static ID3D12PipelineState* get_pso(
+@@ -4977,6 +7446,27 @@ static ID3D12PipelineState* get_pso(
        char* c0 = fc && vi > 0 && (!fk || fk == live_legacy_pso_key())
                   ? strstr(vs_hlsl, "Out.col0 = o[1];") : NULL;
        if (c0) memcpy(c0, "Out.col0=1+0*_p;", 16); }   /* same length, in place */
@@ -11187,7 +11192,7 @@ index 713ba33..4afdc25 100644
      /* LD_HLSL_DUMP=<dir>: files named by the PSO key the draw CSV prints. */
      { static const char* hd = (const char*)-1;
        if (hd == (const char*)-1) hd = getenv("LD_HLSL_DUMP");
-@@ -4986,13 +7472,44 @@ static ID3D12PipelineState* get_pso(
+@@ -4986,13 +7476,44 @@ static ID3D12PipelineState* get_pso(
          f = fopen(fn, "wb"); if (f) { fputs(vi > 0 ? vs_hlsl : "<vp fail>", f); fclose(f); }
          snprintf(fn, sizeof fn, "%s/hlsl_%016llx.ps.txt", hd, (unsigned long long)live_legacy_pso_key());
          f = fopen(fn, "wb"); if (f) { fputs(fi > 0 ? ps_hlsl : "<fp fail>", f); fclose(f); }
@@ -11233,7 +11238,7 @@ index 713ba33..4afdc25 100644
      g.n_psos++;
      return pso;
  }
-@@ -5067,6 +7584,11 @@ static int ld_upload_pixel_constants(u32* out_offset)
+@@ -5067,6 +7588,11 @@ static int ld_upload_pixel_constants(u32* out_offset)
   * -----------------------------------------------------------------------*/
  typedef struct { float a[16][4]; } vtx_t;
  typedef struct { u32 first, count; } batch_t;
@@ -11245,7 +11250,7 @@ index 713ba33..4afdc25 100644
  
  typedef struct {
      /* INLINE_ARRAY source for this primitive, or NULL. The stream is the
-@@ -5077,8 +7599,8 @@ typedef struct {
+@@ -5077,8 +7603,8 @@ typedef struct {
       * index order, which is what makes the offsets derivable at all (an
       * inline stream carries no per-array offset registers). */
      const u8* inl; u32 inl_bytes, inl_stride; u32 inl_off[16];
@@ -11256,7 +11261,7 @@ index 713ba33..4afdc25 100644
      u32     n_packets;
      vtx_t*  verts; u32 n_verts, cap_verts;
      rsx_vertex_ref* refs; u32 n_refs, cap_refs;
-@@ -5251,7 +7773,7 @@ static int fetch_attr(u32 i, u32 base, u32 vertex_id, u32 base_index,
+@@ -5251,7 +7777,7 @@ static int fetch_attr(u32 i, u32 base, u32 vertex_id, u32 base_index,
              break;
          case RSX_VTX_TYPE_SNORM16: {
              const s16 v = (s16)((p[c * 2] << 8) | p[c * 2 + 1]);
@@ -11265,7 +11270,7 @@ index 713ba33..4afdc25 100644
              break;
          }
          case RSX_VTX_TYPE_SINT16: {
-@@ -5423,14 +7945,12 @@ static void fetch_batches_hoisted(
+@@ -5423,14 +7949,12 @@ static void fetch_batches_hoisted(
              dc.fetch_ok = 0;
              return;
          }
@@ -11286,7 +11291,7 @@ index 713ba33..4afdc25 100644
          }
      } else {
          /*
-@@ -6187,7 +8707,8 @@ static void ld_movie_capture_overlay(void)
+@@ -6187,7 +8711,8 @@ static void ld_movie_capture_overlay(void)
  {
      if (!ld_movie_overlay_ensure()) return;
      const u32 target = current_surface();
@@ -11296,7 +11301,7 @@ index 713ba33..4afdc25 100644
          g.movie_overlay_valid = 0;
          return;
      }
-@@ -6314,7 +8835,7 @@ static void sink_draw_arrays(void* u, const rsx_dispatch* r, u32 first, u32 coun
+@@ -6314,7 +8839,7 @@ static void sink_draw_arrays(void* u, const rsx_dispatch* r, u32 first, u32 coun
          return;
      }
      dc.n_packets++;
@@ -11305,7 +11310,7 @@ index 713ba33..4afdc25 100644
      dc.arr[dc.n_arr].first = first; dc.arr[dc.n_arr].count = count; dc.n_arr++;
      g_ld_stats.packets_queued++;
  }
-@@ -6338,7 +8859,7 @@ static void sink_inline_array(void* u, const rsx_dispatch* r,
+@@ -6338,7 +8863,7 @@ static void sink_inline_array(void* u, const rsx_dispatch* r,
  
      dc.inl = data; dc.inl_bytes = bytes; dc.inl_stride = stride;
      dc.n_packets++;
@@ -11314,7 +11319,7 @@ index 713ba33..4afdc25 100644
      dc.arr[dc.n_arr].first = 0; dc.arr[dc.n_arr].count = bytes / stride;
      dc.n_arr++;
      g_ld_stats.packets_queued++;
-@@ -6352,7 +8873,7 @@ static void sink_draw_index(void* u, const rsx_dispatch* r, u32 first, u32 count
+@@ -6352,7 +8877,7 @@ static void sink_draw_index(void* u, const rsx_dispatch* r, u32 first, u32 count
          return;
      }
      dc.n_packets++;
@@ -11323,7 +11328,7 @@ index 713ba33..4afdc25 100644
      dc.idx[dc.n_idx].first = first; dc.idx[dc.n_idx].count = count; dc.n_idx++;
      g_ld_stats.packets_queued++;
  }
-@@ -6438,8 +8959,123 @@ static u64 live_decoded_vertex_hash(u64 attr_hash[16])
+@@ -6438,8 +8963,123 @@ static u64 live_decoded_vertex_hash(u64 attr_hash[16])
  static FILE* s_csv_file;
  static int   s_csv_gate_open = 1;
  
@@ -11447,7 +11452,7 @@ index 713ba33..4afdc25 100644
  #if defined(YZ_PERF_CLEAN) && !defined(YZ_PERF_PROFILE)
      (void)prim;
      (void)n_tri;
-@@ -6450,6 +9086,17 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6450,6 +9090,17 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
      static u64 draw = 0;
      /* RSX_DRAW_CSV_FROM=<frame>: skip rows before that frame. Logging every
       * draw from boot slows a 10-minute run to an hour. */
@@ -11465,7 +11470,7 @@ index 713ba33..4afdc25 100644
      { static long from = -1;
        if (from < 0) { const char* e = getenv("RSX_DRAW_CSV_FROM"); from = e ? atol(e) : 0; }
        if ((long)g_ld_frames < from) return; }
-@@ -6472,7 +9119,7 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6472,7 +9123,7 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
      }
      if (!inited) {
          inited = 1;
@@ -11474,7 +11479,7 @@ index 713ba33..4afdc25 100644
          if (path && path[0]) {
              file = fopen(path, "w");
              s_csv_file = file;
-@@ -6509,11 +9156,16 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6509,11 +9160,16 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
        if (dir == (const char*)-1) { dir = getenv("LD_DRAW_DUMP");
            const char* e = getenv("LD_DRAW_DUMP_EVERY"); every = e ? (u32)atoi(e) : 10; if (!every) every = 10; }
        if (frame != g_ld_frames) { frame = g_ld_frames; idx = 0; }
@@ -11494,7 +11499,7 @@ index 713ba33..4afdc25 100644
            ld_dump_surface_ppm(path, &g.surfaces[target]);
        }
        idx++; }
-@@ -6580,6 +9232,9 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6580,6 +9236,9 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
          fprintf(file, "bf=%X/%X/%X/%X eq=%X/%X ", rs.sf_rgb, rs.df_rgb, rs.sf_a, rs.df_a,
                  rs.eq_rgb, rs.eq_a);
      fprintf(file, "at=%u/0x%X/0x%X ", rs.alpha_test_enable, rs.alpha_func, rs.alpha_ref_raw);
@@ -11504,7 +11509,7 @@ index 713ba33..4afdc25 100644
      fprintf(file, "sc=%08X/%08X ", rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL), rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL));
      if (rs.stencil_enable)
          fprintf(file, "st=%X/%X/%X/%X/%X/%X ref=%X ", rs.s_func, rs.s_func_mask, rs.s_write_mask, rs.s_fail, rs.s_zfail, rs.s_zpass, rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC + 4));
-@@ -7063,6 +9718,404 @@ static void write_topology_indices(u32 prim, u32* indices)
+@@ -7063,6 +9722,404 @@ static void write_topology_indices(u32 prim, u32* indices)
      }
  }
  
@@ -11909,7 +11914,7 @@ index 713ba33..4afdc25 100644
  static void sink_end_impl(void* user, const rsx_dispatch* r)
  {
      (void)user; (void)r;
-@@ -7124,7 +10177,48 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7124,7 +10181,48 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g_ld_profile.total_used_attribute_max = used_layout.count;
      const LONGLONG fetch_pack_begin = ld_profile_qpc();
  #endif
@@ -11959,7 +11964,7 @@ index 713ba33..4afdc25 100644
          fetch_batches_hoisted(&used_layout, 1);
      } else if (ld_vertex_hoist_fetch()) {
          rsx_vertex_layout_plan legacy_layout;
-@@ -7144,11 +10238,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7144,11 +10242,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      /* Preserve validated occurrence order while allowing repeated compact
       * vertex references to share one fetched and uploaded payload. */
      int indexed = 0;
@@ -11975,7 +11980,7 @@ index 713ba33..4afdc25 100644
          ? topology_index_count(prim)
          : dc.n_source_refs - dc.n_source_refs % 3;
  
-@@ -7162,16 +10258,83 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7162,16 +10262,83 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      const u32 vertex_stride =
          ld_vertex_compact_payload() ? used_layout.stride : VERT_STRIDE;
      const u32 uploaded_vertices = indexed ? dc.n_verts : n_tri;
@@ -12061,7 +12066,7 @@ index 713ba33..4afdc25 100644
      if ((u64)g.vb_used + draw_vb_bytes > vb_capacity ||
          (u64)g.ib_used + draw_ib_bytes > INDEX_BUFFER_SIZE) {
          /*
-@@ -7189,17 +10352,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7189,17 +10356,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g.srv_ring_used = 0;
          g.smp_ring_used = 0;
      }
@@ -12094,7 +12099,7 @@ index 713ba33..4afdc25 100644
      if (!pso) {
  #if defined(YZ_PERF_PROFILE)
          ld_profile_note_rejected_pso();
-@@ -7352,9 +10528,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7352,9 +10532,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          for (u32 r = 1; r < want; r++) {
              const u32 s = surface_get(msf.color_location[r], msf.color_offset[r],
                                        msf.clip_w, msf.clip_h,
@@ -12105,7 +12110,7 @@ index 713ba33..4afdc25 100644
              if (s == LD_INVALID_SURFACE || s == target) break;
              mrt[n_mrt++] = s;
          }
-@@ -7371,6 +10545,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7371,6 +10549,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      const u32 current_zslot = g.depth
          ? zdepth_get(sf.zeta_location, sf.zeta_offset, sf.clip_w, sf.clip_h)
          : 0;
@@ -12119,7 +12124,7 @@ index 713ba33..4afdc25 100644
      u32 slots[SRV_TABLE_SIZE], smp_slots[SMP_TABLE_SIZE];
      u32 surf_used[SRV_TABLE_SIZE], n_surf_used = 0;
      u32 zdepth_used[SRV_TABLE_SIZE], n_zdepth_used = 0;
-@@ -7471,13 +10652,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7471,13 +10656,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                      zeta_pref = 1;
                      break;
                  }
@@ -12152,7 +12157,7 @@ index 713ba33..4afdc25 100644
                if (sampled < 0 || sf_i->last_draw_generation > best_gen) {
                    sampled = (int)i;
                    best_gen = sf_i->last_draw_generation;
-@@ -7559,6 +10757,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7559,6 +10761,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                    }
                }
            } }
@@ -12179,7 +12184,7 @@ index 713ba33..4afdc25 100644
          if (sampled < 0 && LD_DIAG_ENABLED("LD_ALIAS_DBG")) {
              static u32 n_dbg = 0;
              if (PS3_LOG_FIRST(n_dbg, 24)) {
-@@ -7576,6 +10794,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7576,6 +10798,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              slots[u] = surface_feedback_srv(target);
              g_ld_bind_surf++;
          } else if (sampled >= 0) {
@@ -12187,7 +12192,7 @@ index 713ba33..4afdc25 100644
              /* LD_ALIAS_DBG also reports the HIT. A texture that aliases a render
               * surface when it should not is exactly as interesting as one that
               * fails to alias when it should, and only the miss was visible --
-@@ -7641,7 +10860,20 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7641,7 +10864,20 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                          }
                          break;
                      }
@@ -12209,7 +12214,7 @@ index 713ba33..4afdc25 100644
                  slots[u] = SRV_ZDEPTH_BASE + sampled_depth;
                  g_ld_zdepth_srv_binds++;
                  int seen = 0;
-@@ -7652,6 +10884,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7652,6 +10888,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              } else {
                  slots[u] = texture_srv_slot(&t);
                  if (slots[u] == SRV_WHITE) g_ld_bind_white++; else g_ld_bind_real++;
@@ -12223,7 +12228,7 @@ index 713ba33..4afdc25 100644
              }
          }
      }
-@@ -7742,12 +10981,15 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7742,12 +10985,15 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          descriptor_signature =
              fnv1a(vtex_slots, sizeof(vtex_slots), descriptor_signature);
  
@@ -12244,7 +12249,7 @@ index 713ba33..4afdc25 100644
      float xf[8] = {1, 1, 1, 0, 0, 0, 0, 0};
      if (vp.scale[0] != 0.0f || vp.translate[0] != 0.0f) {
          xf[0] = vp.scale[0] / (Wv * 0.5f);
-@@ -7780,8 +11022,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7780,8 +11026,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      D3D12_VIEWPORT dvp = {0, 0, W, H, 0.0f, 1.0f};
      D3D12_RECT sc = {
          0, 0,
@@ -12255,7 +12260,7 @@ index 713ba33..4afdc25 100644
      };
      /* Guest scissor, intersected with the surface rect. The nv40 reset value
       * is a full-window 4096x4096; never-written regs read 0 here, so an
-@@ -7794,7 +11036,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7794,7 +11040,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          const u32 sh = rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL);
          const u32 sv = rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL);
          /* The scissor is in pixels too: scale it to the sample grid. */
@@ -12264,7 +12269,7 @@ index 713ba33..4afdc25 100644
          const LONG sx = (LONG)(sh & 0xFFFFu) * ax, sw = (LONG)(sh >> 16) * ax;
          const LONG sy = (LONG)(sv & 0xFFFFu) * ay, svh = (LONG)(sv >> 16) * ay;
          const int written = g.rsx.seen[M_SCISSOR_HORIZONTAL >> 2] != 0 ||
-@@ -7815,7 +11057,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7815,7 +11061,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g.list, rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC_REF) & 0xFFu);
  
      D3D12_VERTEX_BUFFER_VIEW vbv;
@@ -12274,7 +12279,7 @@ index 713ba33..4afdc25 100644
      vbv.StrideInBytes = vertex_stride;
      vbv.SizeInBytes = (u32)draw_vb_bytes;
      if (vertex_stride)
-@@ -7855,15 +11098,19 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7855,15 +11102,19 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      }
      if (indexed) {
          D3D12_INDEX_BUFFER_VIEW ibv;
@@ -12296,7 +12301,7 @@ index 713ba33..4afdc25 100644
      }
      ld_surface_note_write(target, LD_SURFACE_WRITE_DRAW);
      for (u32 r = 1; r < n_mrt; r++)
-@@ -7899,6 +11146,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7899,6 +11150,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          bar.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
          g.list->lpVtbl->ResourceBarrier(g.list, 1, &bar);
      }
@@ -12306,7 +12311,7 @@ index 713ba33..4afdc25 100644
      /* A guest-side failure can occur before the next flip even though useful
       * orphanage draws have already reached internal world targets.  Preserve
       * a few progressively later surface snapshots directly from the draw
-@@ -7937,8 +11187,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7937,8 +11191,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              fflush(stderr);
          }
      }
@@ -12319,7 +12324,45 @@ index 713ba33..4afdc25 100644
      ld_profile_note_ring_highwater();
  }
  
-@@ -8217,7 +11469,143 @@ static int make_depth_snapshot_pipeline(void)
+@@ -8134,10 +11390,10 @@ static int make_depth_snapshot_pipeline(void)
+     static const char source[] =
+         "Texture2D<float> depth_source : register(t0);\n"
+         "RWTexture2D<float> depth_destination : register(u0);\n"
++        "cbuffer zsnap_size : register(b0) { uint2 size; };\n"
+         "[numthreads(8, 8, 1)]\n"
+         "void main(uint3 id : SV_DispatchThreadID) {\n"
+-        "    uint width, height;\n"
+-        "    depth_destination.GetDimensions(width, height);\n"
++        "    uint width = size.x, height = size.y;\n"
+         "    if (id.x < width && id.y < height)\n"
+         "        depth_destination[id.xy] = "
+         "depth_source.Load(int3(id.xy, 0));\n"
+@@ -8167,7 +11423,7 @@ static int make_depth_snapshot_pipeline(void)
+     ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+     ranges[1].NumDescriptors = 1;
+     ranges[1].BaseShaderRegister = 0;
+-    D3D12_ROOT_PARAMETER parameters[2] = {0};
++    D3D12_ROOT_PARAMETER parameters[3] = {0};
+     for (u32 i = 0; i < 2; ++i) {
+         parameters[i].ParameterType =
+             D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+@@ -8175,8 +11431,14 @@ static int make_depth_snapshot_pipeline(void)
+         parameters[i].DescriptorTable.pDescriptorRanges = &ranges[i];
+         parameters[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+     }
++    /* The output size as 2 root constants (b0): Wine's HLSL compiler (vkd3d, 9.0 and 11.0)
++     * has no methods on RWTexture2D, so GetDimensions there failed the whole live-draw init. */
++    parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
++    parameters[2].Constants.ShaderRegister = 0;
++    parameters[2].Constants.Num32BitValues = 2;
++    parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+     D3D12_ROOT_SIGNATURE_DESC description = {0};
+-    description.NumParameters = 2;
++    description.NumParameters = 3;
+     description.pParameters = parameters;
+     ID3DBlob* serialized = NULL;
+     ID3DBlob* signature_errors = NULL;
+@@ -8217,7 +11479,143 @@ static int make_depth_snapshot_pipeline(void)
          g.dev, &pipeline, &IID_ID3D12PipelineState,
          (void**)&g.depth_snapshot_pso);
      shader->lpVtbl->Release(shader);
@@ -12330,10 +12373,10 @@ index 713ba33..4afdc25 100644
 +    static const char argb_source[] =
 +        "Texture2D<float> depth_source : register(t0);\n"
 +        "RWTexture2D<unorm float4> depth_argb : register(u0);\n"
++        "cbuffer zsnap_size : register(b0) { uint2 size; };\n"
 +        "[numthreads(8, 8, 1)]\n"
 +        "void main(uint3 id : SV_DispatchThreadID) {\n"
-+        "    uint width, height;\n"
-+        "    depth_argb.GetDimensions(width, height);\n"
++        "    uint width = size.x, height = size.y;\n"
 +        "    if (id.x >= width || id.y >= height) return;\n"
 +        "    uint d = (uint)(saturate(depth_source.Load(int3(id.xy, 0))) * 16777215.0 + 0.5);\n"
 +        "    depth_argb[id.xy] = float4((float)((d >> 8) & 255u), (float)(d & 255u), 0.0,\n"
@@ -12464,7 +12507,7 @@ index 713ba33..4afdc25 100644
  }
  
  int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
-@@ -8367,7 +11755,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8367,7 +11765,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      DXGI_SWAP_CHAIN_DESC1 scd = {0};
      scd.Width = width; scd.Height = height; scd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
      scd.SampleDesc.Count = 1; scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -12473,7 +12516,7 @@ index 713ba33..4afdc25 100644
      IDXGISwapChain1* sc1 = NULL;
      if (FAILED(factory->lpVtbl->CreateSwapChainForHwnd(factory, (IUnknown*)g.queue,
              (HWND)hwnd, &scd, NULL, NULL, &sc1))) {
-@@ -8375,15 +11763,28 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8375,15 +11773,28 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      }
      sc1->lpVtbl->QueryInterface(sc1, &IID_IDXGISwapChain3, (void**)&g.swap);
      sc1->lpVtbl->Release(sc1);
@@ -12504,7 +12547,7 @@ index 713ba33..4afdc25 100644
          g.swap->lpVtbl->GetBuffer(g.swap, i, &IID_ID3D12Resource, (void**)&g.backbuf[i]);
          g.dev->lpVtbl->CreateRenderTargetView(g.dev, g.backbuf[i], NULL, rtv_handle(i));
      }
-@@ -8471,7 +11872,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8471,7 +11882,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
          D3D12_HEAP_PROPERTIES dhp = {0}; dhp.Type = D3D12_HEAP_TYPE_DEFAULT;
          D3D12_RESOURCE_DESC drd = {0};
          drd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -12513,7 +12556,7 @@ index 713ba33..4afdc25 100644
          drd.MipLevels = 1; drd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT; drd.SampleDesc.Count = 1;
          drd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
          D3D12_CLEAR_VALUE dcv = {0}; dcv.Format = drd.Format; dcv.DepthStencil.Depth = 1.0f;
-@@ -8505,6 +11906,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8505,6 +11916,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      sink.flip = sink_flip;
      rsx_dispatch_init(&g.rsx, &sink);
  
@@ -12527,7 +12570,7 @@ index 713ba33..4afdc25 100644
      g.ready = 1;
      g.enabled = 1;
      return 0;
-@@ -8590,7 +11998,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8590,7 +12008,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
                          return;
                      }
                  }
@@ -12536,7 +12579,7 @@ index 713ba33..4afdc25 100644
                  ReleaseSRWLockExclusive(&g_ld_access_lock);
                  return;
              }
-@@ -8598,7 +12006,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8598,7 +12016,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
              MemoryBarrier();
              if (!g_ld_movie_mode && !g_ld_host_waiting) {
                  if (g.ready)
@@ -12545,7 +12588,7 @@ index 713ba33..4afdc25 100644
                  InterlockedDecrement(&g_ld_guest_active);
                  return;
              }
-@@ -8612,7 +12020,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8612,7 +12030,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
              g_ld_movie_track_rsx = getenv("RSX_MOVIE_TRACK") ? 1 : 0;
          if (!g_ld_movie_track_rsx) return;
      }
@@ -12554,7 +12597,7 @@ index 713ba33..4afdc25 100644
  }
  
  void rsx_live_draw_set_movie_mode(int on)
-@@ -8738,6 +12146,9 @@ static u32 g_ld_last_frame_draws = 0;
+@@ -8738,6 +12156,9 @@ static u32 g_ld_last_frame_draws = 0;
   * "presenting fresh content" from "flipping a static image" -- the dead
   * journal-consumer limp state renders ~0 draws/frame while flips tick). */
  u32 rsx_live_draw_get_last_draws(void) { return g_ld_last_frame_draws; }
@@ -12564,7 +12607,7 @@ index 713ba33..4afdc25 100644
  
  double rsx_live_draw_get_present_fps(void)
  {
-@@ -8929,12 +12340,137 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
+@@ -8929,12 +12350,137 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
   * through here while recording). */
  static FILE* g_ld_record_to;
  
@@ -12704,7 +12747,7 @@ index 713ba33..4afdc25 100644
      if (!width || !height) return UINT64_MAX;
      const int fp16 = surface->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
      const u32 texel = fp16 ? 8u : 4u;
-@@ -9025,6 +12561,183 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+@@ -9025,6 +12571,183 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
      return nonblack;
  }
  
@@ -12888,7 +12931,7 @@ index 713ba33..4afdc25 100644
  #if !defined(YZ_PERF_CLEAN)
  static void ld_parity_capture_surface(
      const char* directory, const char* phase, u32 serial,
-@@ -9199,6 +12912,76 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
+@@ -9199,6 +12922,76 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
      fflush(stderr);
  }
  
@@ -12965,7 +13008,7 @@ index 713ba33..4afdc25 100644
  void rsx_live_draw_present(u32 buffer_id)
  {
      if (!g.ready) return;
-@@ -9300,9 +13083,9 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9300,9 +13093,9 @@ void rsx_live_draw_present(u32 buffer_id)
          char path[MAX_PATH * 2];
          snprintf(path, sizeof(path), "%s\\frame_%06u.ppm", dump_dir, dump_n - 1u);
          const u64 nb = ld_dump_surface_ppm(path, &g.surfaces[target]);
@@ -12977,7 +13020,7 @@ index 713ba33..4afdc25 100644
          fflush(stderr);
      }
      /* LD_RECORD=<out.mp4> (boot_main's --record): every presented frame, as
-@@ -9332,6 +13115,7 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9332,6 +13125,7 @@ void rsx_live_draw_present(u32 buffer_id)
            g_ld_record_to = NULL;
            fflush(rec);
        } }
@@ -12985,7 +13028,7 @@ index 713ba33..4afdc25 100644
      const u32 current = current_surface();
      surface_t* presented_surface = &g.surfaces[target];
      /* LD_PRESENT_DBG=1: is this surface actually finished? A surface whose last
-@@ -9399,10 +13183,87 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9399,10 +13193,87 @@ void rsx_live_draw_present(u32 buffer_id)
            ld_trace_target("present", target, buffer_id);
            last_present_target = target;
        } }
@@ -13073,7 +13116,7 @@ index 713ba33..4afdc25 100644
      D3D12_RESOURCE_BARRIER bar[2] = {0};
      bar[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
      bar[0].Transition.pResource = srcimg;
-@@ -9423,10 +13284,90 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9423,10 +13294,90 @@ void rsx_live_draw_present(u32 buffer_id)
      bar[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
@@ -13166,7 +13209,7 @@ index 713ba33..4afdc25 100644
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames + 1u);
          else {
-@@ -9475,6 +13416,17 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9475,6 +13426,17 @@ void rsx_live_draw_present(u32 buffer_id)
        g_ld_last_frame_draws = (u32)(g_ld_stats.packets_seen - packets_at_last_frame);
        packets_at_last_frame = g_ld_stats.packets_seen; }
      g_ld_frames++;
@@ -13184,7 +13227,7 @@ index 713ba33..4afdc25 100644
  #if defined(YZ_PERF_PROFILE)
      ld_profile_present(g_ld_frames);
  #endif
-@@ -10498,10 +14450,17 @@ void rsx_live_draw_shutdown(void)
+@@ -10498,10 +14460,17 @@ void rsx_live_draw_shutdown(void)
                  (unsigned long long)g_ld_shader_disk_writes[1],
                  (unsigned long long)g_ld_shader_disk_rejects);
      }
@@ -13202,7 +13245,7 @@ index 713ba33..4afdc25 100644
      for (u32 i = 0; i < g.n_vtex; i++) if (g.vtex[i].tex) g.vtex[i].tex->lpVtbl->Release(g.vtex[i].tex);
      for (u32 i = 0; i < g.n_surfaces; i++) if (g.surfaces[i].tex) g.surfaces[i].tex->lpVtbl->Release(g.surfaces[i].tex);
      for (u32 i = 0; i < g.n_zdepths; i++) {
-@@ -10510,6 +14469,8 @@ void rsx_live_draw_shutdown(void)
+@@ -10510,6 +14479,8 @@ void rsx_live_draw_shutdown(void)
          if (g.zdepths[i].snapshot)
              g.zdepths[i].snapshot->lpVtbl->Release(
                  g.zdepths[i].snapshot);
@@ -13211,7 +13254,7 @@ index 713ba33..4afdc25 100644
      }
      if (g.movie_upload) g.movie_upload->lpVtbl->Release(g.movie_upload);
      if (g.movie_overlay_readback) g.movie_overlay_readback->lpVtbl->Release(g.movie_overlay_readback);
-@@ -10520,6 +14481,8 @@ void rsx_live_draw_shutdown(void)
+@@ -10520,6 +14491,8 @@ void rsx_live_draw_shutdown(void)
      if (g.ps_cb) g.ps_cb->lpVtbl->Release(g.ps_cb);
      if (g.depth_snapshot_pso)
          g.depth_snapshot_pso->lpVtbl->Release(g.depth_snapshot_pso);

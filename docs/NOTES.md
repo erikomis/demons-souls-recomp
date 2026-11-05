@@ -2148,6 +2148,17 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       fixed; a list under the item popup moving with the arrow (found by a test) fixed by the input-bit check.
     - On by default; DES_POINT=0 = the fix 89 menu mouse only. Not covered (keys / wheel / click as before): Options rows
       (row and values in menu params), key config, the number spinner's value, face edit.
+94. **Black screen under Wine / Proton without Microsoft's shader compiler: the depth snapshot shaders no longer
+    call RWTexture2D.GetDimensions (2026-11-05, found on Ubuntu 24.04 with Wine 9.0 and WineHQ 11.0):**
+    - Log: `[zetatrack] depth snapshot shader compile failed ... E5002: Type 'RWTexture2D<float>' does not have
+      methods` (Wine 9.0; Wine 11.0: `E5005: Method 'GetDimensions' is not defined on type 'RWTexture2D<float>'`),
+      then `[rsx] live-draw init FAILED -- falling back to the D3D12 backend`: the fallback backend draws a black
+      window (title bar `draws: 19`). Wine's d3dcompiler is vkd3d-shader's HLSL compiler, which has no methods on
+      RWTexture2D; with Microsoft's d3dcompiler_47 in the prefix (`play.sh --ms-d3dcompiler`) it compiled.
+    - rsx_live_draw.c: depth_snapshot_compute and depth_argb_compute read their output size from 2 root constants
+      (cbuffer b0, root parameter 2 of the depth snapshot root signature, set before each Dispatch from
+      snapshot_w / argb_w * sc) instead of GetDimensions. Same result on Windows (Nexus frame dump matches the
+      fix 93 one).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
