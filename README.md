@@ -9,6 +9,9 @@ It is not an emulator: the game's code runs as a normal x64 program.
 > need your own copy of the game, dumped from your own disc. The setup reads your disc image and
 > builds everything on your PC.
 
+**Community Discord:** [discord.gg/gTvrZZ75G](https://discord.gg/gTvrZZ75G) (questions, help with setup,
+bug reports and screenshots). Bug reports with a REPORT.bat zip are still best as a GitHub issue.
+
 ## Status
 
 **The entire game seems playable.** It runs with sound and music at 60 fps (or 50 on a 100 Hz
