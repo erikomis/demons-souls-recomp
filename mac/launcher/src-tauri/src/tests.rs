@@ -12,7 +12,7 @@ fn all_features() -> Features {
 }
 
 fn env_of(s: &Settings, input: &InputEnv, features: &Features) -> BTreeMap<String, String> {
-    launch_env(s, input, features).into_iter().collect()
+    launch_env(s, None, input, features).into_iter().collect()
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn launch_env_maps_the_settings() {
         ..Default::default()
     };
     let input = InputEnv { path: Some("/data/input.toml".into()), has_mouse_section: false };
-    let v = launch_env(&st, &input, &all_features());
+    let v = launch_env(&st, None, &input, &all_features());
     let e: BTreeMap<String, String> = v.iter().cloned().collect();
     for (k, want) in [
         ("DES_MOVIES", "0"),
@@ -353,4 +353,63 @@ fn reveal_never_opens_an_app_bundle() {
     assert!(!select);
     assert!(crate::reveal_target(std::path::Path::new("relative/path")).is_err());
     std::fs::remove_dir_all(&tmp).unwrap();
+}
+
+#[test]
+fn window_picture_and_mods_reach_the_environment() {
+    let port = tmp("icon");
+    let icon = port.join("game/PS3_GAME/ICON0.PNG");
+    fs::create_dir_all(icon.parent().unwrap()).unwrap();
+    fs::write(&icon, b"png").unwrap();
+    let st = Settings {
+        window_mode: "borderless".into(),
+        display: "DELL U2720Q".into(),
+        vsync: false,
+        res_scale: "1.5".into(),
+        upscale: "metalfx".into(),
+        vignette: 0.3,
+        grain: 0.1,
+        lut_path: "/x/lut.png".into(),
+        lut_preset: "film".into(),
+        lut_strength: 0.5,
+        mods: vec!["HD UI".into(), "a,b".into(), "Warm".into()],
+        mods_dump: true,
+        ..Default::default()
+    };
+    let e: BTreeMap<String, String> = launch_env(&st, Some(&port), &InputEnv::default(), &all_features()).into_iter().collect();
+    for (k, v) in [
+        ("PS3_WINDOW_MODE", "borderless"),
+        ("PS3_DISPLAY", "DELL U2720Q"),
+        ("PS3_VSYNC", "0"),
+        ("PS3_RES_SCALE", "1.5"),
+        ("PS3_UPSCALE", "metalfx"),
+        ("PS3_VIGNETTE", "0.30"),
+        ("PS3_GRAIN", "0.10"),
+        ("PS3_LUT", "/x/lut.png"),
+        ("PS3_LUT_PRESET", "film"),
+        ("PS3_LUT_STRENGTH", "0.50"),
+        ("PS3_MODS", "HD UI,Warm"),
+    ] {
+        assert_eq!(e.get(k).map(String::as_str), Some(v), "{k}");
+    }
+    assert_eq!(e["PS3_WINDOW_ICON"], s(&icon), "the file: play.sh sets no PS3_VFS_ROOT for \"game\"");
+    assert!(e["PS3_MODS_DIR"].ends_with("demons-souls-recomp/mods"));
+    assert!(e["PS3_MODS_DUMP"].ends_with("demons-souls-recomp/texture-dump"));
+    assert!(!e.contains_key("PS3_WINDOW_SIZE"), "the size stays DES_SIZE");
+    // the defaults pass nothing but the icon, and nothing without the game files
+    let e: BTreeMap<String, String> = launch_env(&Settings::default(), Some(&port), &InputEnv::default(), &all_features()).into_iter().collect();
+    assert_eq!(e.keys().map(String::as_str).collect::<Vec<_>>(), ["PS3_WINDOW_ICON"]);
+    assert!(env_of(&Settings::default(), &InputEnv::default(), &all_features()).is_empty());
+    // values that change nothing stay out
+    let st = Settings { res_scale: "1".into(), window_mode: "windowed".into(), lut_strength: 0.5, lut_preset: "sepia".into(), ..Default::default() };
+    assert!(env_of(&st, &InputEnv::default(), &all_features()).is_empty());
+    assert_eq!(res_scale_value("3.1").as_deref(), Some("3"));
+    assert_eq!(res_scale_value("5"), None);
+    fs::remove_dir_all(&port).unwrap();
+}
+
+#[test]
+fn screen_names() {
+    assert_eq!(parse_screens("[\"Built-in Retina Display\",\"DELL U2720Q\"]\n"), vec!["Built-in Retina Display", "DELL U2720Q"]);
+    assert!(parse_screens("oops").is_empty());
 }

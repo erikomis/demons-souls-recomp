@@ -14,6 +14,7 @@
 mod app_icon;
 mod input_map;
 mod install;
+mod mods;
 mod play_shortcut;
 mod report;
 mod saves;
@@ -76,8 +77,22 @@ pub struct Settings {
     pub char_name: String,
     /// DES_SKIP_INTRO=1: the logos and the opening movie are skipped, straight to PRESS START.
     pub skip_intro: bool,
-    /// DES_SIZE: "<w>x<h>"; empty = play.sh's 1280x720.
+    /// DES_SIZE: "<w>x<h>"; empty = play.sh's 1280x720 (the window host's --size).
     pub window_size: String,
+    /// PS3_WINDOW_MODE: "windowed" (the default), "fullscreen" (macOS's own) or "borderless".
+    pub window_mode: String,
+    /// PS3_DISPLAY: the screen's name (or its 1-based number); empty = the main screen.
+    pub display: String,
+    /// PS3_VSYNC=0 when off.
+    pub vsync: bool,
+    /// PS3_RES_SCALE: the internal resolution as a multiple of 1280x720: "" (native), "1.5"
+    /// (1080p), "2" (1440p), "3" (4K).
+    pub res_scale: String,
+    /// PS3_UPSCALE: "" (a plain scale) or "metalfx" (macOS 13+).
+    pub upscale: String,
+    /// PS3_WINDOW_ICON=<game/PS3_GAME/ICON0.PNG>: the game's own window shows the player's icon
+    /// in the Dock instead of a generic one.
+    pub game_window_icon: bool,
     /// The player's own ICON0.PNG in the Dock instead of the placeholder.
     pub game_icon: bool,
     /// PS3_AA: "" (off), "fxaa" or "smaa".
@@ -93,6 +108,19 @@ pub struct Settings {
     pub vibrance: f32,
     /// PS3_CONTRAST: 0.5 .. 1 (off) .. 1.5.
     pub contrast: f32,
+    /// PS3_VIGNETTE and PS3_GRAIN: 0 (off) .. 1.
+    pub vignette: f32,
+    pub grain: f32,
+    /// PS3_LUT: the player's colour LUT (ReShade's PNG strip), and how much of it
+    /// (PS3_LUT_STRENGTH, 0..1).
+    pub lut_path: String,
+    pub lut_strength: f32,
+    /// PS3_LUT_PRESET: a built-in LUT ("warm", "cool", "film", "vivid"; empty = none).
+    pub lut_preset: String,
+    /// PS3_MODS: the texture packs in use (folders in <data>/mods, PS3_MODS_DIR), first wins.
+    pub mods: Vec<String>,
+    /// PS3_MODS_DUMP=<data>/texture-dump: the game writes every texture it uploads there.
+    pub mods_dump: bool,
     /// PS3_INPUT_MODE: "both" (the default), "controller" or "keyboard".
     pub input_mode: String,
     /// PS3_MOUSE, PS3_MOUSE_SENS, PS3_MOUSE_INVERT_Y, PS3_MOUSE_INVERT_X, PS3_MOUSE_DEADZONE
@@ -146,6 +174,12 @@ impl Default for Settings {
             char_name: String::new(),
             skip_intro: false,
             window_size: String::new(),
+            window_mode: "windowed".into(),
+            display: String::new(),
+            vsync: true,
+            res_scale: String::new(),
+            upscale: String::new(),
+            game_window_icon: true,
             game_icon: false,
             aa: String::new(),
             sharpen: 0.0,
@@ -154,6 +188,13 @@ impl Default for Settings {
             gamma: 1.0,
             vibrance: 0.0,
             contrast: 1.0,
+            vignette: 0.0,
+            grain: 0.0,
+            lut_path: String::new(),
+            lut_strength: 1.0,
+            lut_preset: String::new(),
+            mods: Vec::new(),
+            mods_dump: false,
             input_mode: "both".into(),
             mouse: true,
             mouse_sens: 1.0,
@@ -231,6 +272,16 @@ fn input_env(port: Option<&Path>) -> InputEnv {
     }
     let base = base_input_map(port).and_then(|p| fs::read_to_string(p).ok());
     InputEnv { path: None, has_mouse_section: base.is_some_and(|t| input_map::parse(&t).has_mouse_section) }
+}
+
+/// Where texture packs live (PS3_MODS_DIR): <data>/mods.
+fn mods_dir() -> PathBuf {
+    data_root().join("mods")
+}
+
+/// Where "Dump the game's textures" makes the game write them (PS3_MODS_DUMP).
+fn mods_dump_dir() -> PathBuf {
+    data_root().join("texture-dump")
 }
 
 fn rpcs3_dir() -> PathBuf {
@@ -715,6 +766,18 @@ fn valid_window_size(v: &str) -> bool {
     matches!((it.next(), it.next()), (Some(Some(w)), Some(Some(h))) if (320..=8192).contains(&w) && (180..=8192).contains(&h))
 }
 
+/// PS3_RES_SCALE for the `res_scale` setting: a multiple above 1 and up to 4 (the runtime's
+/// range, in quarter steps), or None for native (also for anything unparsable).
+fn res_scale_value(v: &str) -> Option<String> {
+    let x: f32 = v.trim().parse().ok()?;
+    (x > 1.0 && x <= 4.0).then(|| format!("{}", (x * 4.0).round() / 4.0))
+}
+
+/// The built-in LUTs the runtime has.
+fn valid_lut_preset(v: &str) -> Option<&'static str> {
+    ["warm", "cool", "film", "vivid"].into_iter().find(|p| *p == v.trim())
+}
+
 /// The character name for DES_NAME: 1 to 16 printable characters (the game's own limit), no
 /// control characters; None when empty or not usable.
 fn valid_name(v: &str) -> Option<String> {
@@ -725,8 +788,8 @@ fn valid_name(v: &str) -> Option<String> {
 /// The environment Play gives mac/play.sh, on top of the launcher's own. Only what the build or
 /// play.sh reads (`features` for the build's), and only what differs from play.sh's and the
 /// runtime's defaults; the extra variables last (they win). `input`: the controls file, when the
-/// Controls page has written one.
-fn launch_env(s: &Settings, input: &InputEnv, features: &Features) -> Vec<(String, String)> {
+/// Controls page has written one. `port`: the port folder (the game's ICON0.PNG for its window).
+fn launch_env(s: &Settings, port: Option<&Path>, input: &InputEnv, features: &Features) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
     // mac/play.sh's own settings
     if s.fps == "30" {
@@ -781,6 +844,55 @@ fn launch_env(s: &Settings, input: &InputEnv, features: &Features) -> Vec<(Strin
     }
     if (s.contrast - 1.0).abs() >= 0.005 && s.contrast > 0.0 {
         set("PS3_CONTRAST", format!("{:.2}", s.contrast.clamp(0.5, 1.5)));
+    }
+    if s.vignette >= 0.005 {
+        set("PS3_VIGNETTE", format!("{:.2}", s.vignette.min(1.0)));
+    }
+    if s.grain >= 0.005 {
+        set("PS3_GRAIN", format!("{:.2}", s.grain.min(1.0)));
+    }
+    let lut = s.lut_path.trim();
+    let preset = valid_lut_preset(&s.lut_preset);
+    if !lut.is_empty() {
+        set("PS3_LUT", lut.to_string());
+    }
+    if let Some(p) = preset {
+        set("PS3_LUT_PRESET", p.into());
+    }
+    if (preset.is_some() || !lut.is_empty()) && s.lut_strength < 0.995 {
+        set("PS3_LUT_STRENGTH", format!("{:.2}", s.lut_strength.clamp(0.0, 1.0)));
+    }
+    // the internal resolution and how it reaches the window
+    if let Some(k) = res_scale_value(&s.res_scale) {
+        set("PS3_RES_SCALE", k);
+    }
+    if s.upscale == "metalfx" {
+        set("PS3_UPSCALE", "metalfx".into());
+    }
+    // the window (its size is DES_SIZE above, mac/play.sh's --size)
+    if matches!(s.window_mode.as_str(), "fullscreen" | "borderless") {
+        set("PS3_WINDOW_MODE", s.window_mode.clone());
+    }
+    let display = s.display.trim();
+    if !display.is_empty() && !display.contains(['\n', '\r']) {
+        set("PS3_DISPLAY", display.to_string());
+    }
+    if !s.vsync {
+        set("PS3_VSYNC", "0".into());
+    }
+    // play.sh sets no PS3_VFS_ROOT, so the runtime's "game" would not find the icon: the file
+    if s.game_window_icon {
+        if let Some(icon) = port.map(|p| game_root(p).join("PS3_GAME/ICON0.PNG")).filter(|p| p.is_file()) {
+            set("PS3_WINDOW_ICON", self::s(&icon));
+        }
+    }
+    // texture packs: the folder and the enabled ones, first wins; the dump
+    if let Some(list) = mods::env_list(&s.mods) {
+        set("PS3_MODS_DIR", self::s(&mods_dir()));
+        set("PS3_MODS", list);
+    }
+    if s.mods_dump {
+        set("PS3_MODS_DUMP", self::s(&mods_dump_dir()));
     }
     // Input: the controls file, then the mouse and rumble settings. The variables win over the
     // file's [mouse]; when the file the game reads has one, every mouse setting is passed so the
@@ -853,7 +965,7 @@ fn launch_preview(state: State<'_, AppState>, settings: Settings) -> Result<Stri
     let root = port_root(&settings).ok_or("no port folder yet (Advanced > Install / rebuild)")?;
     let b = resolve_builds(&root);
     let features = feature_set(&b, &state.features);
-    let env = launch_env(&settings, &input_env(Some(&root)), &features);
+    let env = launch_env(&settings, Some(&root), &input_env(Some(&root)), &features);
     let mut out = vec![format!("cd {} &&", shell_quote(&s(&root)))];
     out.extend(env.into_iter().map(|(k, v)| format!("{k}={}", shell_quote(&v))));
     out.extend(launch_argv(&settings, &b).unwrap_or_else(|e| vec![format!("# {e}")]).iter().map(|a| shell_quote(a)));
@@ -921,7 +1033,7 @@ fn start_game(app: AppHandle, state: State<'_, AppState>, diagnostic: Option<boo
     };
 
     let argv = launch_argv(&s, &b)?;
-    let mut env = launch_env(&s, &input_env(Some(&root)), &features);
+    let mut env = launch_env(&s, Some(&root), &input_env(Some(&root)), &features);
     if let Some(d) = &report_dir {
         // after the extra variables: the report's paths win
         env.extend(report::env(d, features.contains("RSX_ENGINE_PASS_DUMP_TRIGGER")));
@@ -1086,6 +1198,20 @@ const FEATURE_MARKERS: &[&str] = &[
     "PS3_DISPLAY_GAMMA",
     "PS3_VIBRANCE",
     "PS3_CONTRAST",
+    "PS3_VIGNETTE",
+    "PS3_GRAIN",
+    "PS3_LUT",
+    "PS3_LUT_STRENGTH",
+    "PS3_LUT_PRESET",
+    "PS3_RES_SCALE",
+    "PS3_UPSCALE",
+    "PS3_WINDOW_MODE",
+    "PS3_DISPLAY",
+    "PS3_VSYNC",
+    "PS3_WINDOW_ICON",
+    "PS3_MODS",
+    "PS3_MODS_DIR",
+    "PS3_MODS_DUMP",
     // the value PS3_AA compares against when the build has SMAA
     "smaa",
     "PS3_INPUT_MAP",
@@ -1260,6 +1386,48 @@ fn reset_input_map() -> Result<(), String> {
         fs::rename(&p, p.with_extension("toml.bak")).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// The names in the JSON array the screen probe prints.
+fn parse_screens(json: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(json.trim()).unwrap_or_default()
+}
+
+/// The screens in the system's order (NSScreen.screens: the first has the menu bar), by the names
+/// PS3_DISPLAY matches.
+#[tauri::command]
+async fn list_screens() -> Vec<String> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        command_stdout(Command::new("/usr/bin/osascript").args([
+            "-l",
+            "JavaScript",
+            "-e",
+            "ObjC.import('AppKit'); JSON.stringify($.NSScreen.screens.js.map(s => s.localizedName.js))",
+        ]))
+        .map(|s| parse_screens(&s))
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModsView {
+    dir: String,
+    dump_dir: String,
+    packs: Vec<mods::ModPack>,
+}
+
+/// The texture packs in <data>/mods (the folder is created, so "Open the mods folder" always has
+/// somewhere to go).
+#[tauri::command]
+fn list_mods() -> ModsView {
+    let dir = mods_dir();
+    ModsView { packs: mods::list(&dir), dir: s(&dir), dump_dir: s(&mods_dump_dir()) }
 }
 
 #[tauri::command]
@@ -2509,6 +2677,8 @@ pub fn run() {
             get_input_map,
             save_input_map,
             reset_input_map,
+            list_screens,
+            list_mods,
             get_status,
             find_port_dirs,
             builds_at,

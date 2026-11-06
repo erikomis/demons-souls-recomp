@@ -83,11 +83,21 @@ checkout works today.
   blocks Play, the install card, a bar when Updates has news. Cards: quick settings (frame rate,
   window size, fps counter, keep the Mac awake), the last save, the status (state, game files,
   movies, port folder) with the log, Updates, **Play shortcut on the Desktop** and **Add to Steam**.
-- **Graphics / Gráficos**: window size (`DES_SIZE`, the window host's `--size`; the picture stays
-  1280×720 at 16:9 inside it), the Dock / Finder icon from the player's ICON0.PNG; image quality: a
-  profile, anti-aliasing (`PS3_AA` off / fxaa / smaa), sharpening (`PS3_SHARPEN`), anisotropic
-  filtering (`PS3_ANISO`, off by default), a gamma override (`PS3_DISPLAY_GAMMA`); filters: vibrance
-  (`PS3_VIBRANCE`) and contrast (`PS3_CONTRAST`).
+- **Graphics / Gráficos**: the window: display mode (`PS3_WINDOW_MODE` fullscreen / borderless;
+  windowed passes nothing), window size (`DES_SIZE`, mac/play.sh's `--size`; `PS3_WINDOW_SIZE` is not
+  passed, the size stays play.sh's), screen (`PS3_DISPLAY`, by the names `NSScreen` gives), vsync
+  (`PS3_VSYNC=0` when off), the game window's Dock icon (`PS3_WINDOW_ICON=<port>/game/PS3_GAME/ICON0.PNG`,
+  on by default; the file is passed because play.sh sets no `PS3_VFS_ROOT` for the runtime's `game`),
+  and the launcher's own Dock / Finder icon from the player's ICON0.PNG. Image quality: a profile,
+  internal resolution (`PS3_RES_SCALE` 1.5 / 2 / 3, labelled experimental), MetalFX upscaling
+  (`PS3_UPSCALE=metalfx`), anti-aliasing (`PS3_AA` off / fxaa / smaa), sharpening (`PS3_SHARPEN`),
+  anisotropic filtering (`PS3_ANISO`, off by default), a gamma override (`PS3_DISPLAY_GAMMA`).
+  Filters: vibrance, contrast, vignette, grain (`PS3_VIBRANCE`, `PS3_CONTRAST`, `PS3_VIGNETTE`,
+  `PS3_GRAIN`), a colour LUT file (`PS3_LUT`, ReShade's PNG strip), a built-in preset
+  (`PS3_LUT_PRESET` warm / cool / film / vivid) and their strength (`PS3_LUT_STRENGTH`). **Mods /
+  texture packs**: the folders in `<data>/mods`, ticked and ordered (`PS3_MODS_DIR`, `PS3_MODS`, the
+  first wins), the folder opened from the page, and **Dump the game's textures**
+  (`PS3_MODS_DUMP=<data>/texture-dump`).
 - **Performance / Desempenho**: the frame rate (`DES_FPS`: 60, mac/play.sh's default, or the
   console's 30), the fps counter (`PS3RECOMP_METAL_FPS=1`), keep the Mac awake (`caffeinate -i`), and
   the translated shaders on disk (`PS3RECOMP_MSL_CACHE`, mac/play.sh's `cache/msl`: size and
@@ -129,7 +139,7 @@ cd <port> && [caffeinate -i] /bin/sh mac/play.sh   # play.sh's own lines in <dat
 ```
 
 with only the settings that differ from mac/play.sh's defaults in the environment (with the defaults,
-nothing at all: a test checks this), then the extra variables. mac/play.sh sets everything else
+only the game window's icon, `PS3_WINDOW_ICON`; tests check this), then the extra variables. mac/play.sh sets everything else
 (`PS3_HDD0_ROOT`, `PS3_INPUT_MAP` = `mac/input.toml` unless the launcher passes its copy,
 `PS3RECOMP_MSL_CACHE`, the FFmpeg it finds, the 60/30 fps switches) and starts
 `port/build_mac/DemonsSoulsRecomp_window --title … --size … -- port/build_mac/DemonsSoulsRecomp
@@ -168,10 +178,9 @@ warning lines; **Create .zip** packs the folder (frames as PNG, the home folder'
 
 - **Disc mounting** (hdiutil, mount on Play, eject): the port reads the files extracted into `game/`,
   so the image is only needed once, by the install.
-- **Window mode, screen, vsync, MetalFX, internal resolution, aspect, tone curve, clarity, LUTs,
-  vignette, grain, texture packs and dumps, volume and output device**: the Mac runtime has none of
-  them (the port's D3D12 renderer, where resolution scale, texture packs and frame pacing live, is
-  Windows only). **Frame rates other than 60 and 30**: they need that renderer's present pacing.
+- **Aspect (21:9 / 32:9), the tone curve (shadows / midtones / highlights), clarity, volume and the
+  audio output device**: the Mac runtime does not have them. **Frame rates other than 60 and 30**:
+  they need the Windows renderer's present pacing.
 - **The draw-engine, vertex-cache, frame-clock, vblank, QoS and shader-async switches** of the
   Resistance 2 and PES launchers: that toolkit's, not this one's.
 - **The Option File profiles, the Data Pack and the savedata keys** (PES), **the play folder and its
