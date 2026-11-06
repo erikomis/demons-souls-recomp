@@ -50,10 +50,12 @@ takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
   01.00). SETUP opens that page for you when it needs the key.
 - **Nothing else to install.** SETUP downloads what it needs into the folder (`deps\`), with no
   installer and no administrator rights: a portable **Python** and **Git** when you have none,
-  **[RPCS3](https://rpcs3.net)** (used once to decrypt the game's `EBOOT.BIN`), and, without Visual
+  the PS3's decryption keys for the game's `EBOOT.BIN` (one small file from **[RPCS3](https://rpcs3.net)**'s
+  public source code, checked against its SHA-256; the keys go to a private file in `%LOCALAPPDATA%`), and, without Visual
   Studio, a portable compiler (**LLVM** + Microsoft's C runtime and Windows SDK, about 1.3 GB, fetched
   by [xwin](https://github.com/Jake-Shadle/xwin); Microsoft's license applies). The Python, Git, LLVM,
-  RPCS3 and xwin downloads are checked against pinned or published checksums. Already have Python 3.10+, Git, RPCS3
+  key file and xwin downloads are checked against pinned or published checksums. If the key download fails, SETUP
+  falls back to RPCS3 itself (a ~40 MB download that decrypts the EBOOT once). Already have Python 3.10+, Git, RPCS3
   (`SETUP.bat --rpcs3 path\to\rpcs3.exe`) or **Visual Studio 2022** with *Desktop development with
   C++* + **LLVM** 17 or newer? Then those are used instead. RPCS3 needs the Microsoft Visual C++
   runtime, which most PCs already have; SETUP offers Microsoft's installer if yours does not. (Installed
@@ -88,9 +90,9 @@ Python, Git, Visual Studio, RPCS3 or Visual C++ runtime) and on a normal gaming 
    - **the disc key**, only for an encrypted image without a `.dkey` file: SETUP opens
      [Redump's page](http://redump.org/disc/16199/) in your browser; copy the long code on its
      "Disc Key" line and paste it with **Ctrl+V**;
-   - whether it may **download** RPCS3, a portable Python / Git and the portable compiler (say yes);
-   - the **Microsoft Visual C++ runtime** for RPCS3, if your PC has none: Windows asks you to allow
-     Microsoft's installer;
+   - whether it may **download** the key file, a portable Python / Git and the portable compiler (say yes);
+   - the **Microsoft Visual C++ runtime**, if your PC has none and the compiler or the RPCS3 fallback needs
+     it: Windows asks you to allow Microsoft's installer;
    - **xwin** asks you to accept Microsoft's license for the C runtime / Windows SDK it downloads.
 4. Wait for **All done**, then press **PLAY** in the launcher.
 
@@ -99,7 +101,7 @@ SETUP.bat then:
 | step | what happens | time* |
 |---|---|---|
 | 1 | extracts all game files from the image (and decrypts them) into `game/` | 2–5 min |
-| 2 | decrypts `EBOOT.BIN` → `EBOOT.elf` with RPCS3 and checks it is the tested version | < 1 min |
+| 2 | decrypts `EBOOT.BIN` → `EBOOT.elf` (with the keys from RPCS3's source; RPCS3 itself if that fails) and checks it is the tested version | seconds |
 | 3 | downloads ps3recomp at the tested commit and applies this port's runtime patch | < 1 min |
 | 4 | recompiles the game: ~94,000 PPU functions + 12 SPU programs → C/C++ in `port/` | 2–4 min |
 | 5 | applies this port's edits to the recompiled code (`patches/lifted-code.patch`) | seconds |
@@ -335,7 +337,9 @@ Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs)
   optimised. For now the game goes straight into offline play
   without the "Cannot connect (009)" and "Offline Mode" boxes (`set DES_AUTO_OFFLINE=0` shows them again).
 
-- **"RPCS3 did not write EBOOT.elf"**: close any open RPCS3 window and run SETUP.bat again, or decrypt
+- **"could not get the keys … using RPCS3 instead"**: the key file could not be downloaded (no internet, a
+  firewall, GitHub down). SETUP then uses RPCS3 instead, as below; or run SETUP.bat again later.
+- **"RPCS3 did not write EBOOT.elf"** (only when SETUP fell back to RPCS3): close any open RPCS3 window and run SETUP.bat again, or decrypt
   by hand: RPCS3 → *Utilities* → *Decrypt PS3 Binaries* → `game\PS3_GAME\USRDIR\EBOOT.BIN`.
   If RPCS3 itself complains, install the PS3 firmware in RPCS3 first (*File → Install Firmware*).
   SETUP tries three times and shows RPCS3's exit code and log. In **Windows Sandbox or a virtual
@@ -366,7 +370,8 @@ Everything SETUP.bat produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs)
 
 - [ps3recomp](https://github.com/sp00nznet/ps3recomp) by Ned Heller / sp00nznet (MIT): the recompiler
   and runtime this port is built on.
-- [RPCS3](https://rpcs3.net): used to decrypt the EBOOT, and as the reference for how the PS3 behaves.
+- [RPCS3](https://rpcs3.net): its source code publishes the PS3 keys SETUP decrypts the EBOOT with (RPCS3 itself
+  is the fallback), and it is the reference for how the PS3 behaves.
 - The *PC Remaster* mod is by fromsoftserve.
 
 This repo's own code and patches are under the MIT license (see [LICENSE](LICENSE)). Demon's Souls is

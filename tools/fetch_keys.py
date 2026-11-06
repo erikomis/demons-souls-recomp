@@ -54,7 +54,9 @@ def default_path():
         if os.environ.get(var):
             return os.environ[var]
     home = os.path.expanduser('~')
-    if sys.platform == 'darwin':
+    if os.name == 'nt':   # Windows: %LOCALAPPDATA%\demons-souls-recomp\keys
+        base = os.environ.get('LOCALAPPDATA') or os.path.join(home, 'AppData', 'Local')
+    elif sys.platform == 'darwin':
         base = os.path.join(home, 'Library', 'Application Support')
     else:
         base = os.environ.get('XDG_DATA_HOME') or os.path.join(home, '.local', 'share')

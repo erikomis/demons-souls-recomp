@@ -56,6 +56,39 @@ try:                            # pycryptodome, in the toolkit's requirements; o
     from Crypto.Cipher import AES   # decrypting needs it (--info and key parsing run without)
 except ImportError:
     AES = None
+if AES is None:
+    # This port's SETUP installs `cryptography` (setup/requirements.txt), not pycryptodome: the same three AES
+    # modes through it, behind pycryptodome's AES.new() spelling (CTR's 16-byte initial_value is the counter block).
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher as _Cipher, algorithms as _alg, modes as _modes
+
+        class _AESCipher:
+            def __init__(self, key, mode):
+                self._c = _Cipher(_alg.AES(key), mode)
+
+            def decrypt(self, data):
+                d = self._c.decryptor()
+                return d.update(data) + d.finalize()
+
+            def encrypt(self, data):
+                e = self._c.encryptor()
+                return e.update(data) + e.finalize()
+
+        class AES:   # noqa: N801 -- pycryptodome's name
+            MODE_ECB, MODE_CBC, MODE_CTR = 1, 2, 6
+
+            @staticmethod
+            def new(key, mode, iv=None, nonce=None, initial_value=None):
+                if mode == AES.MODE_ECB:
+                    return _AESCipher(key, _modes.ECB())
+                if mode == AES.MODE_CBC:
+                    return _AESCipher(key, _modes.CBC(iv))
+                if mode == AES.MODE_CTR:
+                    assert not nonce and initial_value is not None and len(initial_value) == 16
+                    return _AESCipher(key, _modes.CTR(initial_value))
+                raise ValueError('AES mode %r' % mode)
+    except ImportError:
+        AES = None
 
 # The .rap conversion is only for NPDRM (PSN) SELFs: the disc's are not, so
 # rap2rifkey.py is optional and this runs without it.

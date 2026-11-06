@@ -2205,6 +2205,24 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       (before: about 38 s plus the opening movie); it stays on PRESS START without opening the menu; START ->
       LOAD GAME loads the save into the Nexus with the game clock normal again (0.995 game s per real s). The
       story movies still play: the movie player is not refused, only the opening movie is skipped by START.
+97. **SETUP decrypts EBOOT.BIN without RPCS3 (2026-11-06, asked for after PR #30: "can we do the fetch keys for ours
+    too? makes it easier on the end user"):**
+    - Step 2 first runs `tools/fetch_keys.py` (from PR #30): it downloads RPCS3's `Crypto/key_vault.cpp` at a pinned
+      commit, checks its SHA-256 and writes the PS3 application keys to a private per-user file outside the port
+      folder (Windows `%LOCALAPPDATA%\demons-souls-recomp\keys`, macOS Application Support, Linux XDG data). Then
+      `tools/decrypt_self.py` decrypts with those keys. SETUP asks before the download, as for every other.
+    - The result must match the tested EBOOT.elf (`EBOOT_ELF_SHA256`) when EBOOT.BIN is the tested one. Otherwise,
+      or when the download / decrypt fails, SETUP falls back to RPCS3 exactly as before. `--rpcs3 <exe>` still goes
+      straight to RPCS3.
+    - `decrypt_self.py` used pycryptodome. SETUP installs `cryptography`, so the same three AES modes (ECB, CBC,
+      CTR with a 16-byte initial counter block) now go through it when pycryptodome is missing. Its `--selftest`
+      round trip passes on `cryptography` alone.
+    - Checked: the user's EBOOT.BIN decrypts in 0.24 s to EBOOT.elf sha256 `90eaa5e9...`, byte-identical to
+      RPCS3's (the tested hash). SETUP step 2 in a scratch folder with only `cryptography`: "decrypted without
+      RPCS3", "EBOOT.elf OK". With the download blocked (a dead proxy): "could not get the keys ... using RPCS3
+      instead", no EBOOT.elf left behind.
+    - What this removes for most players: the ~40 MB RPCS3 download, its Visual C++ runtime check, the Vulkan
+      driver hiding and its administrator / virtual-machine crashes (NOTES fixes 81-83).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

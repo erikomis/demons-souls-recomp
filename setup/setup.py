@@ -5,7 +5,8 @@ output is already there, so after a failure just fix the cause and run SETUP.bat
 update of this repo, steps 3 and 5 re-apply the patches that changed (setup/patch_sync.py).
 
   1. extract the game files from the disc image          -> game/
-  2. decrypt EBOOT.BIN with RPCS3 (SELF -> ELF)           -> game/PS3_GAME/USRDIR/EBOOT.elf
+  2. decrypt EBOOT.BIN (SELF -> ELF), with the PS3 keys   -> game/PS3_GAME/USRDIR/EBOOT.elf
+     from RPCS3's public source (RPCS3 itself if that fails)
   3. fetch ps3recomp at the tested commit + our patches   -> deps/ps3recomp
   4. recompile the game's PPU and SPU code to C/C++       -> port/recompiled, port/spu
   5. apply this port's edits to the recompiled code       (patches/lifted-code.patch)
@@ -14,8 +15,8 @@ update of this repo, steps 3 and 5 re-apply the patches that changed (setup/patc
 usage: SETUP.bat [image.iso | image.zip | dumped disc folder] [--key HEX | --key file.dkey]
                  [--rpcs3 path\\to\\rpcs3.exe] [--jobs N]
 
-On Linux the same steps run from linux/setup.sh or the AppImage (docs/LINUX.md); step 2 uses
-RPCS3's Linux AppImage and step 6 cross-compiles the Windows exe (setup/build.py).
+On Linux the same steps run from linux/setup.sh or the AppImage (docs/LINUX.md); step 2's fallback
+is RPCS3's Linux AppImage and step 6 cross-compiles the Windows exe (setup/build.py).
 """
 import glob, hashlib, json, os, shutil, subprocess, sys, urllib.parse, urllib.request
 
@@ -455,8 +456,54 @@ def download_rpcs3():
     return out
 
 
+def decrypt_without_rpcs3(eboot, tested_bin):
+    """EBOOT.BIN -> EBOOT.elf in Python (docs/NOTES.md fix 97): tools/fetch_keys.py downloads the PS3's application
+    keys from RPCS3's public source (one file at a pinned commit, checked against its SHA-256) into a private file
+    outside this folder, and tools/decrypt_self.py decrypts with them -- byte-identical to rpcs3 --decrypt. No
+    emulator download, no Vulkan driver, no administrator problems. False: use RPCS3 as before."""
+    fetch = os.path.join(ROOT, 'tools', 'fetch_keys.py')
+    dec = os.path.join(ROOT, 'tools', 'decrypt_self.py')
+    if not (os.path.isfile(fetch) and os.path.isfile(dec)):
+        return False
+    say('  The game\'s EBOOT.BIN is a signed+encrypted PS3 executable (SELF). It is decrypted with the PS3\'s')
+    say('  application keys, which RPCS3 (the PS3 emulator, open source) publishes in its source code.')
+    if ask('  Download that key file from RPCS3\'s GitHub now (one small file, checked against its SHA-256;'
+           ' the keys go to a private file outside this folder)? [Y/n] ').lower() == 'n':
+        return False
+    try:
+        r = subprocess.run([sys.executable, fetch], capture_output=True, text=True, timeout=180,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        say(f'  could not get the keys ({e}); using RPCS3 instead')
+        return False
+    keys = r.stdout.strip().splitlines()[-1] if r.returncode == 0 and r.stdout.strip() else ''
+    if not keys or not os.path.isfile(keys):
+        say('  could not get the keys (' + (r.stderr.strip().splitlines() or ['no output'])[-1] + '); using RPCS3 instead')
+        return False
+    out = os.path.join(USRDIR, 'EBOOT.elf')
+    try:
+        r = subprocess.run([sys.executable, dec, eboot, '-o', out, '--keys', keys], capture_output=True, text=True,
+                           timeout=300, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        r = None
+        say(f'  the decrypt did not run ({e})')
+    if not r or r.returncode or not os.path.isfile(out):
+        if r is not None:
+            say('  the decrypt failed (' + ((r.stderr or r.stdout).strip().splitlines() or ['no output'])[-1] + ')')
+        if os.path.isfile(out):
+            os.remove(out)
+        say('  using RPCS3 instead')
+        return False
+    if tested_bin and sha256(out) != EBOOT_ELF_SHA256:   # the tested EBOOT.BIN must give the tested EBOOT.elf
+        os.remove(out)
+        say('  the decrypted EBOOT.elf is not the expected one; using RPCS3 instead')
+        return False
+    say('  decrypted without RPCS3')
+    return True
+
+
 def step_decrypt(args, cfg):
-    step(2, 'decrypt EBOOT.BIN (RPCS3)')
+    step(2, 'decrypt EBOOT.BIN')
     eboot = os.path.join(USRDIR, 'EBOOT.BIN')
     h = sha256(eboot)
     if h != EBOOT_BIN_SHA256:
@@ -466,6 +513,8 @@ def step_decrypt(args, cfg):
         if ask('  Continue anyway? [y/N] ').lower() != 'y':
             sys.exit(1)
     elf = find_eboot_elf()
+    if not elf and not args.get('rpcs3') and decrypt_without_rpcs3(eboot, h == EBOOT_BIN_SHA256):
+        elf = find_eboot_elf()
     if not elf:
         rpcs3 = find_rpcs3(args, cfg)
         if not rpcs3 and os.name == 'nt':

@@ -23,7 +23,8 @@ rewritten for Vulkan; that is not planned for now.
 - About **25 GB free** (8 GB game files, 1-2 GB tools and SDK, the rest build files) and time: the first
   build takes 10-30 minutes on a desktop (6 minutes on a 16-core one), probably **1-2 hours on a
   Steam Deck**.
-- An internet connection for the first run: it downloads RPCS3 (to decrypt the game's EBOOT),
+- An internet connection for the first run: it downloads the PS3 decryption keys for the game's EBOOT
+  (one small file from RPCS3's public source; RPCS3's AppImage only if that fails),
   ps3recomp, Microsoft's C runtime and Windows SDK (through xwin; you are asked to accept Microsoft's
   license), and Proton (through umu-launcher). None of these are part of the kit.
 
@@ -35,8 +36,8 @@ rewritten for Vulkan; that is not planned for now.
 2. Run it. A terminal window opens and asks for your disc image (a file picker, or drag the file into
    the window), then for the disc key if needed. Everything goes into `~/DemonsSoulsRecomp`
    (set `DS_HOME=/other/folder` to put it elsewhere, e.g. on an SD card).
-3. It works through the same six steps as `SETUP.bat`: extract the game files, decrypt the EBOOT with
-   RPCS3, fetch ps3recomp and apply this repo's patches, recompile the game code, apply the port's
+3. It works through the same six steps as `SETUP.bat`: extract the game files, decrypt the EBOOT (keys from
+   RPCS3's source), fetch ps3recomp and apply this repo's patches, recompile the game code, apply the port's
    edits, build `DemonsSoulsRecomp.exe`. On the way it asks before each download.
 4. Then it offers to start the game. The first start sets up Proton (a few hundred MB download).
 5. To play later, run the AppImage again (it checks for updates to the patches and only rebuilds what
