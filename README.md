@@ -150,9 +150,12 @@ those are all launcher options now.
 | *Frame rate*: Auto / 30 / 50 / 60 / Unlimited / Custom... | Auto = 60, or 50 on a ~100 Hz screen; 30 = the original; Unlimited = up to 240 fps, no vsync, game speed stays correct; Custom = **any frame rate you type in** (31–240) |
 | *Game*: Normal / PC Remaster mod / My models | your game as on the disc, with the *PC Remaster* mod installed, or with your imported models (see below) |
 | *Dump textures* | saves every texture the game draws, for texture packs (see below) |
+| *Skip the intro (straight to PRESS START)* | the logos and the opening movie are skipped (the window stays black for a few seconds, then the title screen); the story movies still play |
+| *Keep my build after updates* | after an update, plays the build you already have instead of rebuilding first |
 
 Without the launcher (Linux, or `PLAY.bat` by hand) the same choices are switches: `DES_FPS=30|50|60|unlimited|31-240`,
-`DES_GAME=game_remaster` (PC Remaster) or `DES_GAME=game_mod` (your models), `LD_TEX_DUMP=1` (dump textures).
+`DES_GAME=game_remaster` (PC Remaster) or `DES_GAME=game_mod` (your models), `LD_TEX_DUMP=1` (dump textures),
+`DES_SKIP_INTRO=1` (skip the intro), `DES_NO_REBUILD=1` (keep my build).
 In the launcher, any other folder made by `tools\flver_tool.py import --mod <folder>` goes in *Extra settings*
 as `DES_GAME=<folder>`.
 

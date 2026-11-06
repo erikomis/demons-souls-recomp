@@ -257,8 +257,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
---- a/recompiled/ppu_recomp_011.cpp	2026-11-05 20:02:35.933570900 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-11-05 20:02:35.947101700 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-11-05 21:34:49.704370600 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-05 21:34:49.719386200 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -274,7 +274,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,381 @@
+@@ -38897,8 +38899,409 @@
          return;
  }
  
@@ -362,6 +362,10 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +    *ctx = save;
 +}
 +
++extern "C" volatile int g_des_title_shown;
++extern "C" volatile unsigned g_ps3_pad_inject;   /* cellPad.c */
++extern "C" volatile int g_ps3_present_black;     /* rsx_live_draw.c */
++volatile int g_des_title_shown;
  void func_0001B8D0(ppu_context* ctx) {
      PPU_MM_SNAP
 +    /* DES_STEP_STATS=1 (PORT DEBUG): this is the game's per-step update; every 5 s print steps per
@@ -652,6 +656,30 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +              cur = cur > 0.0f ? cur + 0.25f * (target - cur) : target;
 +              uint32_t w; memcpy(&w, &cur, 4);
 +              vm_write32(0x018C8DB4, w);
++          } } }
++    /* DES_SKIP_INTRO=1 (PORT PATCH, NOTES fix 96): straight to PRESS START. Until the title screen is up
++     * (g_des_title_shown, set by its per-frame function in ppu_recomp_049.cpp) every step is 0.25 game seconds,
++     * so the publisher / developer / middleware logos -- which time themselves in game time -- pass in a few
++     * frames, and CROSS + START are pulsed (6 steps down, 6 up): CROSS confirms the autosave notice, START skips
++     * the opening movie as a player would. The window stays black meanwhile (g_ps3_present_black), so the
++     * first thing shown is the title screen. Then the step, the buttons and the picture go back to normal.
++     * DES_SKIP_INTRO_STEP=<s> (default 0.25; at 1.0 the boot never reaches the title): the fast step. */
++    { static int on = -1; static unsigned n; static uint32_t saved;
++      if (on < 0) { const char* e = getenv("DES_SKIP_INTRO"); on = (e && *e == '1') ? 1 : 0;
++                    if (on) saved = vm_read32(0x018C8DB4); }
++      if (on == 1) {
++          if (g_des_title_shown) {
++              on = 0; g_ps3_pad_inject = 0; g_ps3_present_black = 0;
++              if (!getenv("DES_60FPS")) vm_write32(0x018C8DB4, saved);   /* the adaptive step takes over otherwise */
++              fprintf(stderr, "[des] intro skipped: title screen after %u fast steps\n", n);
++          } else {
++              n++;
++              static float st = 0.0f;
++              if (st == 0.0f) { const char* e = getenv("DES_SKIP_INTRO_STEP"); st = e ? (float)atof(e) : 0.25f;
++                                if (!(st > 0.0f && st <= 10.0f)) st = 0.25f; }
++              uint32_t w; memcpy(&w, &st, 4); vm_write32(0x018C8DB4, w);
++              g_ps3_present_black = 1;
++              g_ps3_pad_inject = ((n / 6) & 1) ? 0x4008u : 0u;   /* CROSS | START */
 +          } } }
          uint64_t _cs_29 = ctx->gpr[29];
          uint64_t _cs_30 = ctx->gpr[30];
@@ -1745,8 +1773,8 @@ diff -ruN a/recompiled/ppu_recomp_048.cpp b/recompiled/ppu_recomp_048.cpp
          uint64_t _cs_20 = ctx->gpr[20];
          uint64_t _cs_21 = ctx->gpr[21];
 diff -ruN a/recompiled/ppu_recomp_049.cpp b/recompiled/ppu_recomp_049.cpp
---- a/recompiled/ppu_recomp_049.cpp	2026-11-04 21:56:34.025464100 -0700
-+++ b/recompiled/ppu_recomp_049.cpp	2026-11-04 21:56:34.043444600 -0700
+--- a/recompiled/ppu_recomp_049.cpp	2026-11-05 21:34:49.896198300 -0700
++++ b/recompiled/ppu_recomp_049.cpp	2026-11-05 21:34:49.911232400 -0700
 @@ -219,6 +219,7 @@
  #endif
  
@@ -1778,6 +1806,19 @@ diff -ruN a/recompiled/ppu_recomp_049.cpp b/recompiled/ppu_recomp_049.cpp
          uint64_t _cs_15 = ctx->gpr[15];
          uint64_t _cs_16 = ctx->gpr[16];
          uint64_t _cs_17 = ctx->gpr[17];
+@@ -47751,8 +47755,12 @@
+         { g_trampoline_fn = (void(*)(void*))func_007D9958; return; }
+ }
+ 
++/* PORT PATCH (NOTES fix 96): DsMenuDlgTitle_vf03 runs on every frame of the title screen (PRESS START) and on
++ * none before it, so its first call ends DES_SKIP_INTRO's fast-forward (ppu_recomp_011.cpp). */
++extern "C" volatile int g_des_title_shown;
+ void func_007D9958(ppu_context* ctx) {
+     PPU_MM_SNAP
++    g_des_title_shown = 1;
+         return;
+         /* nop */;
+         { g_trampoline_fn = (void(*)(void*))func_007D9960; return; }
 diff -ruN a/recompiled/ppu_recomp_050.cpp b/recompiled/ppu_recomp_050.cpp
 --- a/recompiled/ppu_recomp_050.cpp	2026-10-31 08:09:11.946464800 -0700
 +++ b/recompiled/ppu_recomp_050.cpp	2026-10-31 08:09:17.966244200 -0700

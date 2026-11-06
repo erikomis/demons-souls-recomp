@@ -2186,6 +2186,25 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       map's MSB, the Storm King 822; DES_TRACK=<id>,... PORT DEBUG prints their positions with DES_WHERE) fly at
       9.02 m per game second at 1/60 and at 1/240, with the fix on and off, and their spikes fly and spawn per game
       second the same way. Not done here: the sound drifting above 60 fps (#16).
+96. **Skip the intro: straight to PRESS START (2026-11-05, asked for: "a boot option that skips straight to the
+    press start button screen and skips the intro logos and movie"):** DES_SKIP_INTRO=1, launcher checkbox
+    "Skip the intro (straight to PRESS START)".
+    - The boot sequence cannot simply be cut short, because it also sets the save system up (the autosave notice and
+      "Checking SAVE DATA"). Its logos (Atlus, Sony, Japan Studio, FromSoftware, Havok) time themselves in game
+      time, so the port fast-forwards them instead. Until the title screen is up, every game step is 0.25 game
+      seconds (DES_SKIP_INTRO_STEP; at 1.0 the boot never reaches the title). CROSS and START are pulsed, 6 steps
+      down and 6 up: CROSS confirms the autosave notice, START skips the opening movie as a player would. The
+      window stays black meanwhile, then everything goes back to normal.
+    - End marker: DsMenuDlgTitle_vf03 (func_007D9958, an empty function) runs on every frame of the title screen
+      and on none before it (function counts, logos vs title). Its first call sets g_des_title_shown
+      (ppu_recomp_049.cpp). The fast-forward runs in the step hook after the adaptive step (ppu_recomp_011.cpp).
+    - Runtime: cellPad.c g_ps3_pad_inject (a button mask the port presses, PAD_SCRIPT encoding, ORed into port 0);
+      rsx_live_draw.c g_ps3_present_black (while set, the swap chain buffer is cleared after the frame's copy, so
+      the window shows black).
+    - Result (sandbox, movies on, no input): the title screen after 293 fast steps, about 7 s after launch
+      (before: about 38 s plus the opening movie); it stays on PRESS START without opening the menu; START ->
+      LOAD GAME loads the save into the Nexus with the game clock normal again (0.995 game s per real s). The
+      story movies still play: the movie player is not refused, only the opening movie is skipped by START.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

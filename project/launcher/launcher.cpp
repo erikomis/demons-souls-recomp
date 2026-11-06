@@ -63,6 +63,7 @@ struct Settings {
     bool fullscreen = false, movies = true, god = false, record = true, dump = false;
     bool by_letter = false, pin = true;
     bool no_rebuild = false;  // DES_NO_REBUILD: after an update, play the build there is
+    bool skip_intro = false;  // DES_SKIP_INTRO: straight to PRESS START
     wstring extra;            // NAME=value NAME=value ...
 };
 static Settings g_set;
@@ -86,6 +87,7 @@ static void load_settings() {
     s.by_letter = ini_int(L"keys_by_letter", s.by_letter) != 0;
     s.pin = ini_int(L"pin_cores", s.pin) != 0;
     s.no_rebuild = ini_int(L"no_rebuild", s.no_rebuild) != 0;
+    s.skip_intro = ini_int(L"skip_intro", s.skip_intro) != 0;
     wchar_t buf[2048];
     GetPrivateProfileStringW(L"launcher", L"extra", L"", buf, 2048, g_ini.c_str());
     s.extra = buf;
@@ -106,6 +108,7 @@ static void save_settings() {
     ini_put(L"keys_by_letter", s.by_letter);
     ini_put(L"pin_cores", s.pin);
     ini_put(L"no_rebuild", s.no_rebuild);
+    ini_put(L"skip_intro", s.skip_intro);
     ini_put(L"extra", s.extra);
 }
 
@@ -191,6 +194,7 @@ static wstring game_env(const Settings& s) {
     envif(L"PAD_KEYS_BY_LETTER", s.by_letter, L"1");
     envif(L"DES_AFFINITY", !s.pin, L"0");
     envif(L"DES_NO_REBUILD", s.no_rebuild, L"1");
+    envif(L"DES_SKIP_INTRO", s.skip_intro, L"1");
     std::vector<std::pair<wstring, wstring>> extra;
     parse_extra(s.extra, &extra, nullptr);
     for (auto& kv : extra)
@@ -296,7 +300,7 @@ static HANDLE start_game(const Settings& s) {
 // ---------------------------------------------------------------------------------------------
 enum {
     ID_PLAY = IDOK, ID_FPS = 100, ID_CUSTOM, ID_FPS_HINT, ID_RES, ID_SHADOW, ID_GAME0, ID_GAME1, ID_GAME2,
-    ID_FULLSCREEN, ID_MOVIES, ID_GOD, ID_RECORD, ID_DUMP, ID_LETTER, ID_PIN, ID_NOREBUILD, ID_EXTRA,
+    ID_FULLSCREEN, ID_MOVIES, ID_GOD, ID_RECORD, ID_DUMP, ID_LETTER, ID_PIN, ID_NOREBUILD, ID_SKIPINTRO, ID_EXTRA,
     ID_UPDATE, ID_REPORT, ID_CONTROLS, ID_FOLDERS, ID_STATUS,
     ID_F_SAVES = 200, ID_F_LOGS, ID_F_PERF, ID_F_REPLACE, ID_F_DUMP, ID_F_CAPTURES, ID_F_MODELS, ID_F_ROOT,
 };
@@ -418,6 +422,7 @@ static void read_controls() {
     s.by_letter = checked(ID_LETTER);
     s.pin = checked(ID_PIN);
     s.no_rebuild = checked(ID_NOREBUILD);
+    s.skip_intro = checked(ID_SKIPINTRO);
     GetWindowTextW(item(ID_EXTRA), b, 2048);
     s.extra = b;
 }
@@ -443,6 +448,7 @@ static void write_controls() {
     check(ID_LETTER, s.by_letter);
     check(ID_PIN, s.pin);
     check(ID_NOREBUILD, s.no_rebuild);
+    check(ID_SKIPINTRO, s.skip_intro);
     SetWindowTextW(item(ID_EXTRA), s.extra.c_str());
     g_loading = false;
     update_fps_hint();
@@ -906,6 +912,10 @@ static void create_controls() {
         L"After an update, Play normally rebuilds the game first (only what changed). Tick this to play the build "
         L"you already have instead; the update's fixes then wait until you run BUILD.bat. An old build with new "
         L"files can misbehave (e.g. a black screen with movies on).");
+    y += 26;
+    add(WC_BUTTONW, L"Skip the intro (straight to PRESS START)", BS_AUTOCHECKBOX | WS_TABSTOP, ID_SKIPINTRO, L, y, 320, 22,
+        L"Confirms the autosave notice, fast-forwards the logos and skips the opening movie, so the game starts at "
+        L"the title screen in a few seconds. The story movies later on still play.");
     y += 34;
 
     label(L"Extra settings", L, y + 3, 92);
@@ -930,7 +940,7 @@ static void create_controls() {
     label(L"", L, y, W, 20, ID_STATUS);
 }
 
-static int client_h() { return 12 + banner_h() + 10 + 28 + 40 + 28 + 32 + 34 + 26 * 3 + 34 + 36 + 54 + 36 + 20 + 12; }
+static int client_h() { return 12 + banner_h() + 10 + 28 + 40 + 28 + 32 + 34 + 26 * 4 + 34 + 36 + 54 + 36 + 20 + 12; }
 
 static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
     switch (m) {
