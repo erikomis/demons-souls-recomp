@@ -21080,7 +21080,7 @@ index 8c4ccaa..eac2f00 100644
      /* Mark tag as completed -- EXCEPT a list parked at a stall-and-notify
       * element: its tag group stays incomplete until MFC_WrListStallAck resumes
 diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
-index f04fda6..56a5a05 100644
+index f04fda6..b34f4da 100644
 --- a/runtime/spu/spu_helpers.h
 +++ b/runtime/spu/spu_helpers.h
 @@ -465,7 +465,10 @@ static inline u128 spu_selb(u128 a, u128 b, u128 c) { return spu_selb_ref(a, b,
@@ -21179,7 +21179,72 @@ index f04fda6..56a5a05 100644
  SPU__X8_INLINE u128 spu_fma(u128 a, u128 b, u128 c)  { return spu__x8_fma(a, b, c, 0, 0); }            /* a*b + c */
  SPU__X8_INLINE u128 spu_fms(u128 a, u128 b, u128 c)  { return spu__x8_fma(a, b, c, 0, 0x80000000u); }  /* a*b - c */
  SPU__X8_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return spu__x8_fma(a, b, c, 0x80000000u, 0); }  /* c - a*b */
-@@ -2330,4 +2403,41 @@ static inline u128 spu_fsmh(u128 a) { return spu_fsmh_ref(a); }
+@@ -1673,6 +1746,64 @@ SPU__XE_INLINE u128 spu_cuflt(u128 a, int i8) {
+     const __m128i nz = _mm_xor_si128(_mm_cmpeq_epi32(v, _mm_setzero_si128()), _mm_set1_epi32(-1));
+     return spu__xe_st(spu__xe_cxflt(d, _mm_setzero_si128(), nz, i8));
+ }
++#elif defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)
++/* arm64: fi, cflts and cfltu four lanes at a time (from the inFAMOUS 2 port's toolkit, where
++ * cflts/cfltu alone were ~4% of SPU time in a cutscene, scalar); the rest stay on the
++ * references. The AVX2 block above is x86-only, so on Apple silicon these ran lane by lane.
++ * tests/test_spu_float_neon.c compares each against its _ref over random and edge inputs. */
++#include <arm_neon.h>
++/* fi: see spu_fi_ref. The product step * Y < 2^29 and the base << 19 < 2^32, so 32-bit lanes
++ * hold d = base*2^19 - step*Y modulo 2^32; it borrowed (hi < p) exactly when the result is
++ * normalised one place down, its fraction then d[8..30] and its exponent one lower. A zero
++ * exponent before or after gives +0. */
++static inline u128 spu_fi(u128 a, u128 b) {
++    const uint32x4_t est  = vld1q_u32(b._u32);
++    const uint32x4_t y    = vandq_u32(vld1q_u32(a._u32), vdupq_n_u32(0x7FFFFu));
++    const uint32x4_t hi   = vshlq_n_u32(vandq_u32(vshrq_n_u32(est, 10), vdupq_n_u32(0x1FFFu)), 19);
++    const uint32x4_t p    = vmulq_u32(vandq_u32(est, vdupq_n_u32(0x3FFu)), y);
++    const uint32x4_t d    = vsubq_u32(hi, p);
++    const uint32x4_t brw  = vcltq_u32(hi, p);                    /* all-ones where normalised */
++    const uint32x4_t frac = vandq_u32(vbslq_u32(brw, vshrq_n_u32(d, 8), vshrq_n_u32(d, 9)),
++                                      vdupq_n_u32(0x7FFFFFu));
++    const uint32x4_t e    = vandq_u32(vshrq_n_u32(est, 23), vdupq_n_u32(0xFFu));
++    const uint32x4_t e2   = vaddq_u32(e, brw);                   /* e - 1 where normalised */
++    const uint32x4_t zero = vorrq_u32(vceqzq_u32(e), vceqzq_u32(e2));
++    uint32x4_t res = vorrq_u32(vandq_u32(est, vdupq_n_u32(0x80000000u)),
++                               vorrq_u32(vshlq_n_u32(e2, 23), frac));
++    res = vbicq_u32(res, zero);
++    u128 r; vst1q_u32(r._u32, res); return r;
++}
++/* cflts/cfltu: x * 2^scale is exact or overflows to infinity, and FCVTZS/FCVTZU truncate toward
++ * zero and saturate as the SPU does (cfltu: negatives -> 0). Exponent-0 lanes are the SPU's zero
++ * (denormals included) and are forced to 0; a lane with exponent 255 -- extended range on the
++ * SPU, NaN/Inf here -- sends the whole vector to the reference. */
++static inline int spu__cfl_fast_ok(uint32x4_t x, int scale, uint32x4_t* zero_mask) {
++    if (scale < 0 || scale > 127) return 0;
++    const uint32x4_t e = vandq_u32(vshrq_n_u32(x, 23), vdupq_n_u32(0xFF));
++    if (vmaxvq_u32(e) == 0xFF) return 0;
++    *zero_mask = vceqq_u32(e, vdupq_n_u32(0));
++    return 1;
++}
++static inline u128 spu_cflts(u128 a, int i8) {
++    const int scale = 173 - (i8 & 0xFF);
++    const uint32x4_t x = vld1q_u32(a._u32); uint32x4_t z;
++    if (!spu__cfl_fast_ok(x, scale, &z)) return spu_cflts_ref(a, i8);
++    const float32x4_t f = vmulq_f32(vreinterpretq_f32_u32(x),
++                                    vreinterpretq_f32_u32(vdupq_n_u32((uint32_t)(127 + scale) << 23)));
++    u128 r; vst1q_u32(r._u32, vbicq_u32(vreinterpretq_u32_s32(vcvtq_s32_f32(f)), z)); return r;
++}
++static inline u128 spu_cfltu(u128 a, int i8) {
++    const int scale = 173 - (i8 & 0xFF);
++    const uint32x4_t x = vld1q_u32(a._u32); uint32x4_t z;
++    if (!spu__cfl_fast_ok(x, scale, &z)) return spu_cfltu_ref(a, i8);
++    const float32x4_t f = vmulq_f32(vreinterpretq_f32_u32(x),
++                                    vreinterpretq_f32_u32(vdupq_n_u32((uint32_t)(127 + scale) << 23)));
++    u128 r; vst1q_u32(r._u32, vbicq_u32(vcvtq_u32_f32(f), z)); return r;
++}
++static inline u128 spu_frest(u128 a)           { return spu_frest_ref(a); }
++static inline u128 spu_frsqest(u128 a)         { return spu_frsqest_ref(a); }
++static inline u128 spu_csflt(u128 a, int i8)   { return spu_csflt_ref(a, i8); }
++static inline u128 spu_cuflt(u128 a, int i8)   { return spu_cuflt_ref(a, i8); }
+ #else
+ static inline u128 spu_fi(u128 a, u128 b)      { return spu_fi_ref(a, b); }
+ static inline u128 spu_frest(u128 a)           { return spu_frest_ref(a); }
+@@ -2330,4 +2461,41 @@ static inline u128 spu_fsmh(u128 a) { return spu_fsmh_ref(a); }
  static inline u128 spu_fsmb(u128 a) { return spu_fsmb_ref(a); }
  #endif
  
@@ -21666,6 +21731,32 @@ index add088d..d357352 100644
  static spu_context spu;
  
  static double host_ms(void)
+diff --git a/runtime/spu/tests/test_spu_float_est.c b/runtime/spu/tests/test_spu_float_est.c
+index 0cda949..46820ef 100644
+--- a/runtime/spu/tests/test_spu_float_est.c
++++ b/runtime/spu/tests/test_spu_float_est.c
+@@ -1,7 +1,8 @@
+ /* The vector spu_fi/frest/frsqest/cflts/cfltu/csflt/cuflt (AVX2 on x86) must be bit-identical
+  * to the scalar references (spu_*_ref) for every input: random words, ordinary floats, the
+  * normal/extended-range boundaries, zeros and denormals, integers of every magnitude, and every
+- * scale immediate. Prints a rough speed comparison too. Build on x86 with AVX2:
++ * scale immediate. Prints a rough speed comparison too. On arm64 it checks the NEON fi/cflts/cfltu
++ * (the other four are the references there). Build on x86 with AVX2:
+  *   cc -O2 -mavx2 -mfma -I../../../include -I.. test_spu_float_est.c -o t && ./t */
+ #include "../spu_helpers.h"
+ #include <stdio.h>
+@@ -62,8 +63,9 @@ static void report(const char* op, int imm, u128 a, u128 b, u128 got, u128 want)
+ 
+ int main(void)
+ {
+-#if !(defined(__AVX2__) && !defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS))
+-    puts("test_spu_float_est: no AVX2, nothing to compare");
++#if !((defined(__AVX2__) && !defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)) || \
++      (defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS)))
++    puts("test_spu_float_est: no AVX2 or NEON forms, nothing to compare");
+     return 0;
+ #else
+     const long N = 2000000;
 diff --git a/runtime/spu/tests/test_spu_sdcrz.c b/runtime/spu/tests/test_spu_sdcrz.c
 index d2cda2f..5c8191f 100644
 --- a/runtime/spu/tests/test_spu_sdcrz.c
