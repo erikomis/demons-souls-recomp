@@ -66,7 +66,18 @@ ninja -C port/build_mac
 ```
 
 The two `.py` files in step 2 come from the resistance-recomp port (`tools/decrypt_self.py`,
-`tools/fetch_keys.py`). They are not in this repository yet.
+`tools/fetch_keys.py`, same author, MIT).
+
+`mac/install.sh` runs all of the above in one go, resumable (each step skips what is done):
+
+```sh
+DES_ISO="/path/to/Demon's Souls (USA).iso" mac/install.sh          # DES_KEY=<hex or .dkey> for Redump
+mac/rebuild.sh lift build                                          # or any of: deps venv game decrypt toolkit lift build
+```
+
+The key file goes to `~/Library/Application Support/demons-souls-recomp/keys/self_keys.txt` (`DES_KEYS`
+moves it). The desktop launcher in `mac/launcher/` (its README) runs these scripts for you: install
+from the disc image, settings, saves, controls, the log, rebuilds.
 
 The first build takes a while: there are 129 lifted files, about 440 MB of C++.
 
@@ -86,6 +97,8 @@ Settings, as environment variables:
 | `DES_LOG=1` | the runtime's per-event log; off by default, because it costs frames |
 | `PS3_INPUT_MAP=<file>` | another key layout |
 | `PS3_INPUT_MODE=controller` or `keyboard` | only that input; the default takes both |
+| `DES_SIZE=<w>x<h>` | the window's size (default 1280x720) |
+| `DES_LOG_DIR=<dir>` | where the two logs go (default `logs/`) |
 
 The logs go to `logs/last_run_out.txt` and `logs/last_run_err.txt`.
 

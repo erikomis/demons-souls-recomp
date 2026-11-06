@@ -22,6 +22,9 @@
 #   DES_LOG=1         the runtime's per-event log lines (PS3_VERBOSE=1). Off by default: thousands of
 #                     lines a second from every guest thread through one stderr lock change the game's
 #                     timing (frame drops, hitches) and grew the log by ~50 MB in five minutes
+#   DES_SIZE=<w>x<h>  the window's size (default 1280x720; the picture keeps its 16:9 inside it)
+#   DES_LOG_DIR=<dir> where last_run_out.txt / last_run_err.txt go (default logs/; the launcher's
+#                     debug mode points it at the session's folder)
 set -e
 D=$(cd "$(dirname "$0")/.." && pwd)
 cd "$D"
@@ -37,7 +40,8 @@ EBOOT="$D/$DES_GAME/PS3_GAME/USRDIR/EBOOT.elf"
 
 export PS3_TITLE="Demon's Souls (ps3recomp)"
 [ "$DES_GAME" = game_remaster ] && PS3_TITLE="Demon's Souls (ps3recomp) - PC Remaster mod"
-mkdir -p "$D/hdd0" "$D/hdd1" "$D/no_flash" "$D/logs"
+LOGS=${DES_LOG_DIR:-$D/logs}
+mkdir -p "$D/hdd0" "$D/hdd1" "$D/no_flash" "$LOGS"
 export PS3_HDD0_ROOT="$D/hdd0" PS3_HDD1_ROOT="$D/hdd1" PS3_DEV_FLASH="$D/no_flash"
 export GCM_NO_TITLE_RECYCLE=1 PS3_NP_STRICT_OFFLINE=1 SPU_INTERP_UNLIFTED=1 SPURS_JC_EVENTS=0
 export PS3_INPUT_MAP="${PS3_INPUT_MAP:-$D/mac/input.toml}"
@@ -69,12 +73,17 @@ esac
 if [ "${DES_LOG:-0}" = 1 ]; then export PS3_VERBOSE=1; else export PS3_VERBOSE="${PS3_VERBOSE:-0}"; fi
 
 for f in out err; do
-  [ -f "$D/logs/last_run_$f.txt" ] && mv -f "$D/logs/last_run_$f.txt" "$D/logs/last_run_${f}_prev.txt"
+  [ -f "$LOGS/last_run_$f.txt" ] && mv -f "$LOGS/last_run_$f.txt" "$LOGS/last_run_${f}_prev.txt"
 done
-echo "Demon's Souls: game log in logs/last_run_err.txt"
+SIZE=${DES_SIZE:-1280x720}
+case "$SIZE" in
+  [0-9]*x[0-9]*) ;;
+  *) die "DES_SIZE=$SIZE: give the window size as <width>x<height>, e.g. 1920x1080." ;;
+esac
+echo "Demon's Souls: game log in $LOGS/last_run_err.txt"
 set +e
-"$WIN" --title "$PS3_TITLE" --size 1280x720 -- "$BIN" "$EBOOT" \
-  > "$D/logs/last_run_out.txt" 2> "$D/logs/last_run_err.txt"
+"$WIN" --title "$PS3_TITLE" --size "$SIZE" -- "$BIN" "$EBOOT" \
+  > "$LOGS/last_run_out.txt" 2> "$LOGS/last_run_err.txt"
 CODE=$?
-[ $CODE -eq 0 ] || echo "Demon's Souls exited with code $CODE. The logs are in logs/last_run_*.txt."
+[ $CODE -eq 0 ] || echo "Demon's Souls exited with code $CODE. The logs are in $LOGS/last_run_*.txt."
 exit $CODE
