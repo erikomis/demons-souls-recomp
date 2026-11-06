@@ -107,6 +107,42 @@ index 0000000..07924a4
 +}
 +
 +#endif /* PS3EMU_HOST_INPUT_H */
+diff --git a/include/ps3emu/thread_name.h b/include/ps3emu/thread_name.h
+index da9c592..4c7c19d 100644
+--- a/include/ps3emu/thread_name.h
++++ b/include/ps3emu/thread_name.h
+@@ -3,9 +3,9 @@
+  * "audio mix", ...), so a debugger, a profiler or a per-thread CPU table can
+  * tell the guest's PPU and SPU threads and the runtime's own threads apart.
+  *
+- * Windows only for now: SetThreadDescription (Windows 10 1607 and later) is
+- * looked up at run time, so older systems just skip it. Elsewhere it does
+- * nothing; pthread_setname_np needs _GNU_SOURCE on glibc before the first
++ * Windows: SetThreadDescription (Windows 10 1607 and later) is looked up at
++ * run time, so older systems just skip it. macOS: pthread_setname_np. Elsewhere
++ * it does nothing; pthread_setname_np needs _GNU_SOURCE on glibc before the first
+  * pthread.h, which a header included this late cannot promise.
+  */
+ #ifndef PS3EMU_THREAD_NAME_H
+@@ -39,6 +39,18 @@ static inline void ps3_thread_name(const char* fmt, ...)
+     w[i] = 0;
+     set_desc(GetCurrentThread(), w);
+ }
++#elif defined(__APPLE__)
++#include <pthread.h>
++/* macOS names only the calling thread, and needs no feature macro. */
++static inline void ps3_thread_name(const char* fmt, ...)
++{
++    char s[64];
++    va_list ap;
++    va_start(ap, fmt);
++    vsnprintf(s, sizeof s, fmt, ap);
++    va_end(ap);
++    pthread_setname_np(s);
++}
+ #else
+ static inline void ps3_thread_name(const char* fmt, ...) { (void)fmt; }
+ #endif
 diff --git a/libs/audio/audio_rt_thread.c b/libs/audio/audio_rt_thread.c
 new file mode 100644
 index 0000000..0f80fdd
@@ -8456,10 +8492,25 @@ index 5efd6f6..9a9d5b4 100644
  
  /* Tickets, account region and network time. Every pointer is a guest
 diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
-index 82ea66c..9275453 100644
+index 82ea66c..26aead9 100644
 --- a/libs/spurs/cellSpurs.c
 +++ b/libs/spurs/cellSpurs.c
-@@ -903,6 +903,7 @@ static s32 spurs_create_taskset(CellSpurs* spurs, CellSpursTaskset* taskset,
+@@ -12,6 +12,14 @@
+ #include "cellSpurs.h"
+ #include "../../runtime/platform/win32_compat.h"
+ #include "../../runtime/ps3_log.h"
++
++/* Every stdout line of this file is per-task / per-job-chain detail (attribute
++ * forms, job chain command dumps, taskset lifecycles): thousands a second in a
++ * title that runs job chains every frame, and Demon's Souls' 3.7 MB of them a
++ * session went through the stdout lock its threads also print through, so a
++ * slow flush stalled the frame. Verbose only (PS3_VERBOSE; a redirected log
++ * keeps them by default). Warnings go to stderr and are unaffected. */
++#define printf(...) (ps3_log_verbose() ? printf(__VA_ARGS__) : 0)
+ #include "spu_workload.h"   /* SPU image -> lifted-entry dispatch (runtime/spu) */
+ #include "spurs_taskset.h"  /* REAL BE CellSpursTaskset layout builders (fork Option-B) */
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
+@@ -903,6 +911,7 @@ static s32 spurs_create_taskset(CellSpurs* spurs, CellSpursTaskset* taskset,
          return (s32)0x8041090Du; /* host backing safety, before writes */
      taskset = GUEST_PTR(taskset, CellSpursTaskset*);
      memset(taskset, 0, taskset_size);
@@ -8467,7 +8518,7 @@ index 82ea66c..9275453 100644
  
      /* Write the REAL big-endian CellSpursTaskset layout (fork Option-B) so the lifted
       * SPU leaf + spurs_pm_build_context read valid data (the native writes above are
-@@ -947,24 +948,36 @@ s32 cellSpursDestroyTaskset(CellSpursTaskset* taskset)
+@@ -947,24 +956,36 @@ s32 cellSpursDestroyTaskset(CellSpursTaskset* taskset)
      return CELL_OK;
  }
  
@@ -8507,7 +8558,7 @@ index 82ea66c..9275453 100644
      return CELL_OK;
  }
  
-@@ -1017,6 +1030,14 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+@@ -1017,6 +1038,14 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
      uint32_t taskset_ea = (uint32_t)(uintptr_t)taskset;
      uint32_t elf_ea     = (uint32_t)(uintptr_t)elf;
      uint32_t context_ea = (uint32_t)(uintptr_t)context;
@@ -8522,7 +8573,7 @@ index 82ea66c..9275453 100644
  
      /* taskId/taskset are guest EAs; translate before deref. elf/context stay
       * guest EAs (handled below — elf is translated for load, context kept EA). */
-@@ -1085,7 +1106,7 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+@@ -1085,7 +1114,7 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
              g_ydkj_real_taskset_ea = taskset_ea;
              g_ydkj_real_taskid     = i;
  
@@ -8531,7 +8582,7 @@ index 82ea66c..9275453 100644
                     " ctx=0x%08X lsp=%08X %08X %08X %08X)\n",
                     s_tasks[i].id, elf, task_arg[0], task_arg[1], task_arg[2], task_arg[3],
                     context_ea, task_lsp[0], task_lsp[1], task_lsp[2], task_lsp[3]);
-@@ -1157,11 +1178,18 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
+@@ -1157,11 +1186,18 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
                   * as the guest EA (the SPU job's DMA uses guest EAs / r3). */
                  const uint8_t* host_elf = GUEST_PTR(elf, const uint8_t*);
                  size_t sz = spu_elf_image_size(host_elf, 2u * 1024 * 1024);
@@ -8551,7 +8602,7 @@ index 82ea66c..9275453 100644
              }
              return CELL_OK;
          }
-@@ -1250,7 +1278,7 @@ s32 _cellSpursTaskAttributeInitialize(CellSpursTaskAttribute* attr, u32 revision
+@@ -1250,7 +1286,7 @@ s32 _cellSpursTaskAttributeInitialize(CellSpursTaskAttribute* attr, u32 revision
                   d, (u32)attr->eaContext, attr->sizeContext,
                   attr->lsPattern_ea, attr->argument_ea);
        } }
@@ -8560,7 +8611,7 @@ index 82ea66c..9275453 100644
             (u32)eaElf, (u32)eaContext, sizeContext,
             attr->lsPattern_ea, attr->argument_ea);
      return CELL_OK;
-@@ -2127,6 +2155,15 @@ s32 cellSpursEventFlagWait(CellSpursEventFlag* eventFlag, u16* bits,
+@@ -2127,6 +2163,15 @@ s32 cellSpursEventFlagWait(CellSpursEventFlag* eventFlag, u16* bits,
                              (unsigned long)GetCurrentThreadId(), waits / 500, pattern,
                              mode == CELL_SPURS_EVENT_FLAG_AND ? "AND" : "OR",
                              current, ea);
@@ -8576,7 +8627,7 @@ index 82ea66c..9275453 100644
                      fflush(stderr);
                  }
              }
-@@ -2257,7 +2294,7 @@ s32 _cellSpursEventFlagInitialize(void* spurs, void* taskset,
+@@ -2257,7 +2302,7 @@ s32 _cellSpursEventFlagInitialize(void* spurs, void* taskset,
  s32 _cellSpursSendSignal(void* taskset, u32 taskId)
  {
      uint32_t taskset_ea = (uint32_t)(uintptr_t)taskset;
@@ -8585,7 +8636,7 @@ index 82ea66c..9275453 100644
      /* Real delivery now that SPU tasks execute (comment was stale). */
      if (taskset_ea) spu_taskset_signal_task(taskset_ea, taskId);
      return CELL_OK;
-@@ -2683,6 +2720,16 @@ static void jc_signal_done(u32 jc_ea, int job_index)
+@@ -2683,6 +2728,16 @@ static void jc_signal_done(u32 jc_ea, int job_index)
       * so a data2 pinned at 0 never ends that loop -- with the chain's lwmutex
       * held, which blocks the main thread's teardown behind it. A chain-level
       * signal (job_index < 0) sends 0. */
@@ -8602,7 +8653,7 @@ index 82ea66c..9275453 100644
      u64 d2 = (u64)(unsigned)(job_index < 0 ? 0 : job_index);
      u64 mbox = 0, d3 = 0;
      (void)spurs_event_data3_probe();   /* prime d3_probe_valid */
-@@ -2778,8 +2825,33 @@ static void jc_execute(u32 entry_ea, u32 jc_ea, u32 size_desc)
+@@ -2778,8 +2833,33 @@ static void jc_execute(u32 entry_ea, u32 jc_ea, u32 size_desc)
              if (!jg_wait(g_ea)) return;                  /* still closed */
              pc += 8; continue;
          }
@@ -8637,7 +8688,7 @@ index 82ea66c..9275453 100644
          pc += 8;
      }
      printf("[cellSpurs] chain 0x%08X: 4096 commands with no job run after %d "
-@@ -2937,42 +3009,45 @@ s32 cellSpursKickJobChain(u64 jc_ea, u32 numReadyCount)
+@@ -2937,42 +3017,45 @@ s32 cellSpursKickJobChain(u64 jc_ea, u32 numReadyCount)
  s32 _cellSpursQueueInitialize(u64 spurs_ea, u64 taskset_ea, u64 queue_ea,
                                u64 buffer_ea, u32 size, u32 depth, u32 direction)
  {
@@ -8715,7 +8766,7 @@ index 82ea66c..9275453 100644
      return CELL_OK;
  }
  
-@@ -3446,6 +3521,28 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
+@@ -3446,6 +3529,28 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
      uint32_t q = (uint32_t)queue_ea;
      for (uint32_t o = 0; o < 128; o += 4) vm_write32(q + o, 0);
  
@@ -8744,7 +8795,7 @@ index 82ea66c..9275453 100644
      /* W3 at +0x0C is the ring modulus the consumer reduces indices by: the
       * empty test is (W1-W0) mod 2*W3 and the buffer slot is index mod W3
       * (derived at 0x12914..0x129B8). Leaving it zero degenerated both and made
-@@ -3479,3 +3576,202 @@ s32 cellSpursLFQueueAttachLv2EventQueue(u64 queue_ea)
+@@ -3479,3 +3584,202 @@ s32 cellSpursLFQueueAttachLv2EventQueue(u64 queue_ea)
      if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] LFQueueAttachLv2EventQueue(q=0x%08X)\n", (u32)queue_ea);
      return CELL_OK;
  }
@@ -15490,7 +15541,7 @@ index 2579117..9e1341d 100644
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index ad8db0b..172d0f5 100644
+index ad8db0b..4137007 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -54,6 +54,13 @@
@@ -15542,7 +15593,211 @@ index ad8db0b..172d0f5 100644
      const u32 rw = m->width, rh = m->height, gen = m->generation;
      mach_msg_destroy(&in.m.header);         /* the mapping and the textures hold their own references */
      if (!ok) {
-@@ -4659,10 +4687,17 @@ void rsx_metal_backend_shutdown(void)
+@@ -2507,7 +2535,9 @@ static void release_surfaces(void)
+     id<MTLDepthStencilState>   ds;
+     MTLCullMode cull;
+     MTLWinding  winding;
++    _Atomic int state;          /* ENG_PIPE_*: built here or on the build queue */
+ } EngPipeline;
++enum { ENG_PIPE_READY = 0, ENG_PIPE_BUILDING = 1, ENG_PIPE_FAILED = 2 };
+ static EngPipeline s_eng_pipe[ENG_MAX_PIPES];
+ static u32 s_eng_pipe_count;
+ 
+@@ -2927,6 +2957,7 @@ static void eng_stage_hand_off(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+     s_eng_stage_cap = 0;
+ }
+ 
++static u32 s_eng_stage_peak;   /* largest arena use of a recent frame (decays) */
+ static int eng_stage_reserve(u32 bytes, u32* out_off)
+ {
+     const u32 start = (s_eng_stage_used + ENG_ALIGN - 1u) & ~(ENG_ALIGN - 1u);
+@@ -2937,7 +2968,13 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
+         return eng_stage_reserve(bytes, out_off);
+     }
+     if (start + bytes > s_eng_stage_cap) {
++        /* A fresh arena starts at the size recent frames needed (s_eng_stage_peak),
++         * not 4 MB: growing it mid-frame copies everything recorded so far into a
++         * bigger buffer, often a new one whose pages fault in during the copy --
++         * Demon's Souls' busy frames went 4 -> 8 -> 16 -> 32 MB and the FIFO
++         * thread spent a quarter of a second in that memmove. */
+         u32 cap = s_eng_stage_cap ? s_eng_stage_cap : (4u << 20);
++        if (!s_eng_stage_cap) while (cap < s_eng_stage_peak && cap < ENG_STAGE_MAX / 2u) cap *= 2u;
+         while (start + bytes > cap) cap *= 2u;
+         /* A pool of its own: the caller is the FIFO walker, a PPU host thread
+          * with no autorelease pool, and the driver's -contents autoreleases
+@@ -2957,6 +2994,7 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
+     }
+     *out_off = start;
+     s_eng_stage_used = start + bytes;
++    if (s_eng_stage_used > s_eng_stage_peak) s_eng_stage_peak = s_eng_stage_used;
+     return 1;
+ }
+ 
+@@ -3294,8 +3332,19 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
+ 
+ /* ---- pipelines ----------------------------------------------------------- */
+ 
++static pthread_mutex_t s_eng_func_lock = PTHREAD_MUTEX_INITIALIZER;
++static id<MTLFunction> eng_function_locked(const char* hlsl, int stage, const char* what);
+ static id<MTLFunction> eng_function(const char* hlsl, int stage,
+                                     const char* what)
++{
++    pthread_mutex_lock(&s_eng_func_lock);
++    id<MTLFunction> fn = eng_function_locked(hlsl, stage, what);
++    pthread_mutex_unlock(&s_eng_func_lock);
++    return fn;
++}
++
++static id<MTLFunction> eng_function_locked(const char* hlsl, int stage,
++                                           const char* what)
+ {
+     const u64 hash = fnv1a64(hlsl, (u32)strlen(hlsl), 1469598103934665603ull);
+     for (u32 i = 0; i < s_eng_func_count; i++)
+@@ -3321,21 +3370,20 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
+     return fn;
+ }
+ 
+-static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_hlsl,
+-                               const rsx_be_render_state* rs,
+-                               const rsx_vertex_layout_plan* layout,
+-                               u32 vertex_stride, rsx_be_format rt_fmt,
+-                               u32 rt_count)
++/* The expensive half of a pipeline: both guest programs through HLSL -> SPIR-V
++ * -> MSL and the Metal compiler, then the render pipeline state. Runs on the
++ * build queue (eng_pipeline_create) or, with PS3RECOMP_METAL_ASYNC_PIPELINES=0,
++ * on the caller. nil on failure. */
++static id<MTLRenderPipelineState> eng_build_pso(const char* vs_hlsl, const char* ps_hlsl,
++                                                const rsx_be_render_state* rs,
++                                                const rsx_vertex_layout_plan* layout,
++                                                u32 vertex_stride, rsx_be_format rt_fmt,
++                                                u32 rt_count)
+ {
+-    (void)user;
+-    if (!s_dev || !s_guest_shaders || !vertex_stride) return 0;
+-    if (!rt_count) rt_count = 1;
+-    if (rt_count > RSX_BE_MAX_COLOR_TARGETS) rt_count = RSX_BE_MAX_COLOR_TARGETS;
+-    if (s_eng_pipe_count >= ENG_MAX_PIPES) return 0;
+     id<MTLFunction> vs = eng_function(vs_hlsl, RSX_SHADER_STAGE_VERTEX, "vp");
+-    if (!vs) return 0;
++    if (!vs) return nil;
+     id<MTLFunction> fs = eng_function(ps_hlsl, RSX_SHADER_STAGE_FRAGMENT, "fp");
+-    if (!fs) return 0;
++    if (!fs) return nil;
+ 
+     /* Attribute index is the layout SLOT, not the guest's ATTRn number.
+      * glslang numbers an HLSL input struct's members in DECLARATION order --
+@@ -3411,10 +3459,47 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+     NSError* err = nil;
+     id<MTLRenderPipelineState> pso =
+         [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
+-    if (!pso) {
++    if (!pso)
+         fprintf(stderr, "[rsx engine/metal] pipeline state failed: %s\n",
+                 [[err localizedDescription] UTF8String]);
+-        return 0;
++    return pso;
++}
++
++static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_hlsl,
++                               const rsx_be_render_state* rs,
++                               const rsx_vertex_layout_plan* layout,
++                               u32 vertex_stride, rsx_be_format rt_fmt,
++                               u32 rt_count)
++{
++    (void)user;
++    if (!s_dev || !s_guest_shaders || !vertex_stride) return 0;
++    if (!rt_count) rt_count = 1;
++    if (rt_count > RSX_BE_MAX_COLOR_TARGETS) rt_count = RSX_BE_MAX_COLOR_TARGETS;
++    if (s_eng_pipe_count >= ENG_MAX_PIPES) return 0;
++    /* PS3RECOMP_METAL_ASYNC_PIPELINES (default on): a new pipeline is built on a
++     * background queue instead of the FIFO thread. The first time a material
++     * appears its programs go through glslang, spirv-cross and the Metal
++     * compiler -- tens of milliseconds, up to a second -- and the frame waited
++     * for all of it. Now the thread waits at most PS3RECOMP_METAL_PIPELINE_WAIT_MS
++     * (default 3; most builds from the shader cache finish inside it), and a
++     * draw whose pipeline is still building is skipped: the object appears a
++     * frame or two later instead of the game stopping. =0 builds in place. */
++    static int async = -1, wait_ms = 3;
++    static dispatch_queue_t build_q;
++    if (async < 0) {
++        const char* e = getenv("PS3RECOMP_METAL_ASYNC_PIPELINES");
++        async = !(e && e[0] == '0');
++        const char* w = getenv("PS3RECOMP_METAL_PIPELINE_WAIT_MS");
++        if (w) wait_ms = atoi(w) < 0 ? 0 : atoi(w);
++        if (async) build_q = dispatch_queue_create("ps3recomp.metal.pipelines",
++                                                   dispatch_queue_attr_make_with_qos_class(
++                                                       DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
++        if (async && !build_q) async = 0;
++    }
++    id<MTLRenderPipelineState> pso = nil;
++    if (!async) {
++        pso = eng_build_pso(vs_hlsl, ps_hlsl, rs, layout, vertex_stride, rt_fmt, rt_count);
++        if (!pso) return 0;
+     }
+ 
+     /* Depth and stencil are pipeline state in D3D12 and an encoder object in
+@@ -3452,6 +3537,7 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+     const u32 slot = s_eng_pipe_count++;
+     s_eng_pipe[slot].pso = pso;
+     s_eng_pipe[slot].ds  = ds;
++    atomic_store(&s_eng_pipe[slot].state, async ? ENG_PIPE_BUILDING : ENG_PIPE_READY);
+     /* CULL_FACE FRONT=0x0404 BACK=0x0405 FRONT_AND_BACK=0x0408 (front here,
+      * as in the D3D12 engine); FRONT_FACE CW=0x0900 CCW=0x0901. */
+     s_eng_pipe[slot].cull = MTLCullModeNone;
+@@ -3463,6 +3549,29 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+     s_eng_pipe[slot].winding = (rs->front_face == 0x0901u)
+                                    ? MTLWindingCounterClockwise
+                                    : MTLWindingClockwise;
++    if (async) {
++        /* The job gets its own copies: the engine reuses its HLSL buffers and
++         * render state for the next pipeline. */
++        char* vs = strdup(vs_hlsl);
++        char* ps = strdup(ps_hlsl);
++        rsx_be_render_state rs_copy = *rs;
++        rsx_vertex_layout_plan layout_copy = *layout;
++        if (!vs || !ps) { free(vs); free(ps); atomic_store(&s_eng_pipe[slot].state, ENG_PIPE_FAILED); return slot + 1; }
++        dispatch_semaphore_t done = dispatch_semaphore_create(0);
++        dispatch_async(build_q, ^{
++            @autoreleasepool {
++                id<MTLRenderPipelineState> built = eng_build_pso(vs, ps, &rs_copy, &layout_copy,
++                                                                  vertex_stride, rt_fmt, rt_count);
++                s_eng_pipe[slot].pso = built;
++                atomic_store_explicit(&s_eng_pipe[slot].state,
++                                      built ? ENG_PIPE_READY : ENG_PIPE_FAILED, memory_order_release);
++            }
++            free(vs); free(ps);
++            dispatch_semaphore_signal(done);
++        });
++        if (wait_ms)
++            dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)wait_ms * NSEC_PER_MSEC));
++    }
+     return slot + 1;
+ }
+ 
+@@ -3718,6 +3827,14 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+ {
+     if (!r->pipeline || r->pipeline > s_eng_pipe_count) { s_eng_encoding_failed = 1; return; }
+     const EngPipeline* p = &s_eng_pipe[r->pipeline - 1];
++    if (atomic_load_explicit(&((EngPipeline*)p)->state, memory_order_acquire) == ENG_PIPE_BUILDING) {
++        static unsigned skipped; static int said;
++        if (++skipped == 1u || (skipped % 1000u) == 0) {
++            if (said < 8) { said++;
++                fprintf(stderr, "[rsx engine/metal] %u draw(s) skipped while their pipeline builds\n", skipped); }
++        }
++        return;
++    }
+     if (!p->pso) { s_eng_encoding_failed = 1; return; }
+     [enc setRenderPipelineState:p->pso];
+     [enc setDepthStencilState:p->ds];
+@@ -4340,6 +4457,7 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+         }
+         s_eng_rec_count  = 0;
+         s_eng_stage_used = 0;
++        s_eng_stage_peak -= s_eng_stage_peak >> 8;   /* forget a heavy frame over ~3 s */
+         eng_collect_retired_objects();
+     }
+ }
+@@ -4659,10 +4777,17 @@ void rsx_metal_backend_shutdown(void)
      }
  }
  
@@ -15560,7 +15815,7 @@ index ad8db0b..172d0f5 100644
      @autoreleasepool {
          for (;;) {
              NSEvent* ev = [NSApp nextEventMatchingMask:NSEventMaskAny
-@@ -4682,8 +4717,14 @@ static int pump_messages_impl(void)
+@@ -4682,8 +4807,14 @@ static int pump_messages_impl(void)
                  }
                  continue;
              }
@@ -16753,6 +17008,276 @@ index 8507deb..a6a6edb 100644
  #define RSX_VERTEX_TYPE_F              2  /* float32 */
  #define RSX_VERTEX_TYPE_SF             3  /* half-float (float16) */
  #define RSX_VERTEX_TYPE_UB             4  /* unsigned byte */
+diff --git a/runtime/diag/stall_sampler.c b/runtime/diag/stall_sampler.c
+new file mode 100644
+index 0000000..2b16e6c
+--- /dev/null
++++ b/runtime/diag/stall_sampler.c
+@@ -0,0 +1,264 @@
++/*
++ * ps3recomp - stall sampler (macOS): what every thread does while the guest is frozen
++ *
++ * PS3_STALL_SAMPLE=<ms> starts a watchdog thread that reads the guest's flip
++ * count (cellGcm_flip_request_count) every 2 ms. When no flip has come for
++ * <ms> milliseconds it samples the stack of every other thread of the
++ * process every 5 ms -- suspend, read pc/lr/fp, walk the frame-pointer chain,
++ * resume -- until flips resume (or 5 s pass), then prints to stderr the most
++ * frequent stacks of each thread, symbolized with dladdr:
++ *
++ *   [stall] 1840 ms without a flip (t=12.345 s), 368 samples
++ *   [stall]   HighGraphics  92%  sys_cond_wait < func_009E0370 < func_00B498E8 < ...
++ *
++ * A sampling profile of the whole run says where time goes on average; a
++ * stall is one event, and only stacks taken during it say who held it up.
++ * The 70-200 ms hitches and the multi-second freezes seen in Demon's Souls
++ * on the Mac have no span of their own in ps3_ftrace (PPU work is not traced).
++ *
++ * A file of its own because the Mach headers clash with names the runtime's
++ * headers define. Elsewhere it does nothing. arm64 and x86_64 both keep frame
++ * pointers on macOS, so the chain walk needs no unwinder.
++ */
++#if defined(__APPLE__)
++#include <dlfcn.h>
++#include <mach/mach.h>
++#include <mach/mach_vm.h>
++#include <pthread.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++#include <unistd.h>
++
++extern unsigned cellGcm_flip_request_count(void);
++
++#define SS_MAX_THREADS 128
++#define SS_DEPTH       10
++#define SS_MAX_STACKS  512
++
++typedef struct {
++    uint64_t tid;
++    uintptr_t pc[SS_DEPTH];
++    int n;
++    unsigned count;
++    char name[48];
++} ss_stack;
++
++static ss_stack s_st[SS_MAX_STACKS];
++static int s_nst;
++static unsigned s_samples_per_tid[SS_MAX_THREADS];
++static uint64_t s_tids[SS_MAX_THREADS];
++static char s_tnames[SS_MAX_THREADS][48];
++static int s_ntid;
++
++static double ss_now(void)
++{
++    struct timespec t;
++    clock_gettime(CLOCK_MONOTONIC, &t);
++    return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
++}
++
++static int ss_tid_index(uint64_t tid, const char* name)
++{
++    for (int i = 0; i < s_ntid; i++) if (s_tids[i] == tid) return i;
++    if (s_ntid >= SS_MAX_THREADS) return -1;
++    s_tids[s_ntid] = tid;
++    snprintf(s_tnames[s_ntid], sizeof s_tnames[0], "%s", name);
++    s_samples_per_tid[s_ntid] = 0;
++    return s_ntid++;
++}
++
++static void ss_record(uint64_t tid, const char* name, const uintptr_t* pc, int n)
++{
++    for (int i = 0; i < s_nst; i++)
++        if (s_st[i].tid == tid && s_st[i].n == n && !memcmp(s_st[i].pc, pc, (size_t)n * sizeof *pc)) {
++            s_st[i].count++; return;
++        }
++    if (s_nst >= SS_MAX_STACKS) return;
++    ss_stack* s = &s_st[s_nst++];
++    s->tid = tid; s->n = n; s->count = 1;
++    memcpy(s->pc, pc, (size_t)n * sizeof *pc);
++    snprintf(s->name, sizeof s->name, "%s", name);
++}
++
++/* One stack of thread t: suspended for the few microseconds of the walk. */
++static void ss_sample_thread(thread_act_t t)
++{
++    pthread_t pt = pthread_from_mach_thread_np(t);
++    char name[48] = "";
++    if (pt) pthread_getname_np(pt, name, sizeof name);
++    uint64_t tid = 0;
++    thread_identifier_info_data_t info; mach_msg_type_number_t ic = THREAD_IDENTIFIER_INFO_COUNT;
++    if (thread_info(t, THREAD_IDENTIFIER_INFO, (thread_info_t)&info, &ic) == KERN_SUCCESS) tid = info.thread_id;
++    uintptr_t lo = 0, hi = 0;
++    if (pt) { hi = (uintptr_t)pthread_get_stackaddr_np(pt); lo = hi - pthread_get_stacksize_np(pt); }
++    if (thread_suspend(t) != KERN_SUCCESS) return;
++    uintptr_t pc[SS_DEPTH]; int n = 0;
++#if defined(__arm64__) || defined(__aarch64__)
++    arm_thread_state64_t st; mach_msg_type_number_t sc = ARM_THREAD_STATE64_COUNT;
++    if (thread_get_state(t, ARM_THREAD_STATE64, (thread_state_t)&st, &sc) == KERN_SUCCESS) {
++        pc[n++] = (uintptr_t)arm_thread_state64_get_pc(st);
++        uintptr_t lr = (uintptr_t)arm_thread_state64_get_lr(st);
++        uintptr_t fp = (uintptr_t)arm_thread_state64_get_fp(st);
++        if (lr && n < SS_DEPTH) pc[n++] = lr & 0x0000FFFFFFFFFFFFull;
++#else
++    x86_thread_state64_t st; mach_msg_type_number_t sc = x86_THREAD_STATE64_COUNT;
++    if (thread_get_state(t, x86_THREAD_STATE64, (thread_state_t)&st, &sc) == KERN_SUCCESS) {
++        pc[n++] = (uintptr_t)st.__rip;
++        uintptr_t fp = (uintptr_t)st.__rbp;
++#endif
++        /* Only inside the thread's own stack, and through mach_vm_read_overwrite:
++         * a thread caught mid-prologue or in code without a frame record
++         * leaves fp pointing anywhere, and a plain load there faults. */
++        while (n < SS_DEPTH && hi && fp && (fp & 7u) == 0 && fp >= lo && fp + 16 <= hi) {
++            uintptr_t f[2]; mach_vm_size_t got = 0;
++            if (mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)fp, sizeof f,
++                                       (mach_vm_address_t)(uintptr_t)f, &got) != KERN_SUCCESS ||
++                got != sizeof f) break;
++            const uintptr_t ret = f[1] & 0x0000FFFFFFFFFFFFull;
++            const uintptr_t next = f[0];
++            if (!ret) break;
++            pc[n++] = ret;
++            if (next <= fp) break;
++            fp = next;
++        }
++    }
++    thread_resume(t);
++    if (n == 0) return;
++    const int ti = ss_tid_index(tid, name);
++    if (ti >= 0) s_samples_per_tid[ti]++;
++    ss_record(tid, name, pc, n);
++}
++
++static const char* ss_sym(uintptr_t a, char* buf, size_t cap)
++{
++    Dl_info di;
++    if (dladdr((void*)a, &di) && di.dli_sname) {
++        snprintf(buf, cap, "%s", di.dli_sname);
++        char* p = strchr(buf, '(');   /* C++: drop the argument list */
++        if (p) *p = 0;
++    } else snprintf(buf, cap, "0x%llx", (unsigned long long)a);
++    return buf;
++}
++
++static int ss_cmp(const void* a, const void* b)
++{
++    const ss_stack* x = (const ss_stack*)a; const ss_stack* y = (const ss_stack*)b;
++    return (int)y->count - (int)x->count;
++}
++
++/* Is this pc a wait in the kernel (the thread was blocked, not working)? */
++static int ss_is_wait(uintptr_t pc)
++{
++    char sym[256];
++    ss_sym(pc, sym, sizeof sym);
++    return strstr(sym, "cvwait") || strstr(sym, "semwait") || strstr(sym, "ulock_wait") ||
++           strstr(sym, "mach_msg") || strstr(sym, "workq_kernreturn") || strstr(sym, "semaphore_wait") ||
++           strstr(sym, "semaphore_timedwait") || strstr(sym, "__select") || strstr(sym, "kevent") ||
++           strstr(sym, "nanosleep") || strstr(sym, "psynch_mutexwait") || strstr(sym, "swtch_pri");
++}
++
++static void ss_report(double ms, double t0, unsigned samples)
++{
++    fprintf(stderr, "[stall] %.0f ms without a flip (t=%.3f s), %u samples\n", ms, t0, samples);
++    qsort(s_st, (size_t)s_nst, sizeof s_st[0], ss_cmp);
++    /* Per thread: the share of samples it was running (not blocked in the
++     * kernel), then its most frequent stack, then -- when it was running --
++     * the functions its running samples were in most. */
++    for (int ti = 0; ti < s_ntid; ti++) {
++        const unsigned tot = s_samples_per_tid[ti];
++        if (!tot) continue;
++        unsigned run = 0;
++        struct { uintptr_t pc; unsigned n; } top[64]; int ntop = 0;
++        const ss_stack* first = NULL;
++        for (int i = 0; i < s_nst; i++) {
++            const ss_stack* st = &s_st[i];
++            if (st->tid != s_tids[ti]) continue;
++            if (!first) first = st;
++            if (ss_is_wait(st->pc[0])) continue;
++            run += st->count;
++            /* the innermost frames only: the outer ones are in every sample */
++            for (int k = 0; k < st->n && k < 4; k++) {
++                int j = 0;
++                while (j < ntop && top[j].pc != st->pc[k]) j++;
++                if (j == ntop && ntop < 64) { top[ntop].pc = st->pc[k]; top[ntop].n = 0; ntop++; }
++                if (j < ntop) top[j].n += st->count;
++            }
++        }
++        const int busy = run * 10u >= tot;          /* running 10% of the stall or more */
++        if (!busy && first && first->count * 2u < tot) continue;   /* idle, no dominant wait: skip */
++        char line[1400]; size_t o = 0; char sym[256];
++        if (first)
++            for (int k = 0; k < first->n && o < sizeof line - 80; k++)
++                o += (size_t)snprintf(line + o, sizeof line - o, "%s%s", k ? " < " : "",
++                                      ss_sym(first->pc[k], sym, sizeof sym));
++        fprintf(stderr, "[stall]   %-30s run %3u%%  top %3u%%  %s\n", s_tnames[ti][0] ? s_tnames[ti] : "(unnamed)",
++                100u * run / tot, first ? 100u * first->count / tot : 0u, line);
++        if (busy) {
++            /* frames that appear in the most running samples (inclusive), deepest first */
++            for (int pass = 0; pass < 6 && ntop; pass++) {
++                int best = -1;
++                for (int j = 0; j < ntop; j++) if (top[j].n && (best < 0 || top[j].n > top[best].n)) best = j;
++                if (best < 0) break;
++                fprintf(stderr, "[stall]       %3u%% %s\n", 100u * top[best].n / tot, ss_sym(top[best].pc, sym, sizeof sym));
++                top[best].n = 0;
++            }
++        }
++    }
++    fflush(stderr);
++}
++
++static void* ss_thread(void* arg)
++{
++    const double limit = (double)(uintptr_t)arg / 1000.0;
++    pthread_setname_np("ps3_stall_sampler");
++    const thread_act_t self = mach_thread_self();
++    const double start = ss_now();
++    unsigned last = cellGcm_flip_request_count();
++    double last_t = ss_now();
++    for (;;) {
++        usleep(2000);
++        const unsigned f = cellGcm_flip_request_count();
++        const double now = ss_now();
++        if (f != last) { last = f; last_t = now; continue; }
++        if (!f || now - last_t < limit) continue;           /* nothing drawn yet, or no stall */
++        /* Stalled: sample until a flip comes, at most 5 s. */
++        s_nst = 0; s_ntid = 0;
++        unsigned samples = 0;
++        const double s0 = last_t;
++        while (cellGcm_flip_request_count() == last && ss_now() - s0 < 5.0) {
++            thread_act_array_t th; mach_msg_type_number_t nth = 0;
++            if (task_threads(mach_task_self(), &th, &nth) == KERN_SUCCESS) {
++                for (mach_msg_type_number_t i = 0; i < nth; i++) {
++                    if (th[i] != self) ss_sample_thread(th[i]);
++                    mach_port_deallocate(mach_task_self(), th[i]);
++                }
++                vm_deallocate(mach_task_self(), (vm_address_t)th, nth * sizeof(thread_act_t));
++            }
++            samples++;
++            usleep(5000);
++        }
++        const double end = ss_now();
++        ss_report((end - s0) * 1000.0, s0 - start, samples);
++        last = cellGcm_flip_request_count(); last_t = ss_now();
++    }
++    return NULL;
++}
++
++void ps3_stall_sampler_start(void)
++{
++    static int started;
++    const char* e = getenv("PS3_STALL_SAMPLE");
++    if (started || !e || atoi(e) <= 0) return;
++    started = 1;
++    pthread_t t;
++    if (pthread_create(&t, NULL, ss_thread, (void*)(uintptr_t)atoi(e)) == 0) {
++        pthread_detach(t);
++        fprintf(stderr, "[stall] sampler on: stacks of every thread after %d ms without a flip\n", atoi(e));
++    }
++}
++#else
++void ps3_stall_sampler_start(void) {}
++#endif
 diff --git a/runtime/platform/win32_compat.c b/runtime/platform/win32_compat.c
 index 11a7480..9eb9792 100644
 --- a/runtime/platform/win32_compat.c
@@ -17262,10 +17787,10 @@ index 35052c6..56e782d 100644
  #define VMX_FUN(name, expr, flush_in, nanmode) \
  VMX_INL void name(VMX_D, VMX_B, uint32_t vscr) { const uint8_t* b = (const uint8_t*)b_; uint8_t r[16]; \
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb0..8f727f2 100644
+index a55afb0..e041889 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
-@@ -51,6 +51,48 @@ uint32_t ps3_hle_count(void);   /* handlers actually registered, for the milesto
+@@ -51,6 +51,49 @@ uint32_t ps3_hle_count(void);   /* handlers actually registered, for the milesto
  void     ppu_sysprx_register(void);
  void     ppu_fs_register(void);
  int      ppu_run(uint32_t entry_opd, uint32_t stack_top);
@@ -17311,10 +17836,11 @@ index a55afb0..8f727f2 100644
 +#else
 +static int boot_run_guest(uint32_t entry, uint32_t stack_top) { return ppu_run(entry, stack_top); }
 +#endif
++extern "C" void ps3_stall_sampler_start(void);
  extern const char* ppu_vfs_root;   /* host dir that PS3 mount points map into */
  /* The status a guest handed to sys_process_exit, published by
   * libs/system/sysPrxForUser.c before it calls the host exit(). A title that
-@@ -73,7 +115,7 @@ void     ps3_load_prx_modules(void) {}
+@@ -73,7 +116,7 @@ void     ps3_load_prx_modules(void) {}
  
  #ifdef _WIN32
  #include <windows.h>
@@ -17323,7 +17849,7 @@ index a55afb0..8f727f2 100644
  /* timeBeginPeriod: windows.h is included with WIN32_LEAN_AND_MEAN, which
   * excludes the multimedia timer API, so it must be asked for by name -- and
   * AFTER windows.h, since timeapi.h uses UINT and friends. */
-@@ -118,28 +160,28 @@ char* __cdecl cached_getenv(const char* name)
+@@ -118,28 +161,28 @@ char* __cdecl cached_getenv(const char* name)
          const char* k = s_env[i].key;
          MemoryBarrier();
          if (!k) break;
@@ -17374,7 +17900,7 @@ index a55afb0..8f727f2 100644
      }
      AcquireSRWLockExclusive(&s_env_lock);
      const char* val = NULL; int found = 0;
-@@ -306,6 +348,7 @@ extern "C" int  rsx_null_backend_pump_messages(void);
+@@ -306,6 +349,7 @@ extern "C" int  rsx_null_backend_pump_messages(void);
  #endif
  extern "C" void cellGcm_rsx_process_fifo(void);   /* cellGcmSys.c: drain get->put */
  extern "C" void cellGcm_fifo_kick_wait(unsigned ms); /* idle wait, woken by a kick */
@@ -17382,7 +17908,7 @@ index a55afb0..8f727f2 100644
  extern "C" unsigned cellGcm_flip_request_count(void);
  extern "C" unsigned cellGcmGetCurrentDisplayBufferId(void);
  extern "C" int sys_event_queue_inject(unsigned int, unsigned long long, unsigned long long, unsigned long long, unsigned long long);
-@@ -323,6 +366,7 @@ extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
+@@ -323,6 +367,7 @@ extern "C" int   rsx_live_draw_init(void* hwnd, uint32_t w, uint32_t h,
  extern "C" void  rsx_live_draw_present(uint32_t buffer_id);
  extern "C" uint32_t rsx_live_draw_get_frames(void);
  extern "C" uint32_t rsx_live_draw_get_last_draws(void);
@@ -17390,7 +17916,7 @@ index a55afb0..8f727f2 100644
  extern "C" int   rsx_null_backend_init(uint32_t w, uint32_t h, const char* title);
  extern "C" int   rsx_null_backend_pump_messages(void);
  extern "C" void* rsx_null_backend_get_hwnd(void);
-@@ -485,17 +529,53 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -485,17 +530,53 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -17448,7 +17974,7 @@ index a55afb0..8f727f2 100644
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -503,18 +583,33 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -503,18 +584,33 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * right now is exactly the completed frame. Presenting on a raw
               * flip-count change after the drain raced the guest's next-frame
               * writes and showed empty or mixed batches. */
@@ -17489,7 +18015,7 @@ index a55afb0..8f727f2 100644
              fired++;
          }
          if (fired >= 240) next_tick = now;   /* fell too far behind -> resync */
-@@ -523,10 +618,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -523,10 +619,7 @@ static DWORD WINAPI vblank_ticker(LPVOID)
           * at 16ms per fence wave's six passes paced the guest to ~7 fps.
           * The real RSX writes those fences in microseconds. */
          if (rsx_ok) {
@@ -17501,7 +18027,7 @@ index a55afb0..8f727f2 100644
              cellGcm_rsx_process_fifo();
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
-@@ -934,45 +1026,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,45 +1027,45 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -17576,7 +18102,7 @@ index a55afb0..8f727f2 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1083,8 +1175,67 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
+@@ -1083,8 +1176,67 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
  }
  #endif
  
@@ -17644,7 +18170,7 @@ index a55afb0..8f727f2 100644
      /* <PPU ELF> [--username NAME] [--psnr host[:port]], flags in any order. */
      const char* elf = NULL;
      const char* username = NULL;
-@@ -1106,6 +1257,7 @@ int main(int argc, char** argv)
+@@ -1106,6 +1258,7 @@ int main(int argc, char** argv)
  
  #ifdef _WIN32
  #pragma comment(lib, "winmm.lib")
@@ -17652,11 +18178,12 @@ index a55afb0..8f727f2 100644
      timeBeginPeriod(1);   /* 1ms timer resolution: the default ~15.6ms granularity
                             * inflates every sub-15ms wait (the game's event polls,
                             * usleeps) and throttled the whole title. */
-@@ -1242,7 +1394,7 @@ int main(int argc, char** argv)
+@@ -1242,7 +1395,8 @@ int main(int argc, char** argv)
  #ifdef _WIN32
      fprintf(stderr, "[boot] MAIN guest thread tid=%lu\n", (unsigned long)GetCurrentThreadId());
  #endif
 -    int rc = ppu_run(entry, stack_top);
++    ps3_stall_sampler_start();   /* PS3_STALL_SAMPLE=<ms> (runtime/diag/stall_sampler.c) */
 +    int rc = boot_run_guest(entry, stack_top);
      printf("\n[boot] ppu_run returned %d (entry function unwound)\n", rc);
      /* A guest that called sys_process_exit never reaches this line: that path
