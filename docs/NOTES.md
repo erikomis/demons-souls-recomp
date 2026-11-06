@@ -2159,6 +2159,33 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       (cbuffer b0, root parameter 2 of the depth snapshot root signature, set before each Dispatch from
       snapshot_w / argb_w * sc) instead of GetDimensions. Same result on Windows (Nexus frame dump matches the
       fix 93 one).
+95. **Dash in slow motion above 150 fps: the game's "pressing into a wall" check assumed 1/30 s steps (2026-11-05,
+    GitHub issues #23 "with unlimited frames the player runs slower than he walks" and #22, only walking at 165 fps):**
+    - Measured with a new PORT DEBUG knob, DES_FIXED_STEP=<s>[@<sec>] (every game step is <s> seconds from <sec>
+      seconds on, at any real frame rate, so short steps can be tested on any PC), and per-step positions
+      (DES_WHERE=0.000001). Plain running is 3.67 m per game second at every step from 1/60 to 1/480 s, whatever
+      the real frame rate or PS3_CLOCK_SCALE. The DASH (circle held) is 6.3 up to a 1/150 s step, then 2.96-3.16
+      at 1/160, 1/200 and 1/240: a cliff, with every step exactly half as long. Stamina is not involved.
+    - Found by diffing the character object between full-speed and slow dashes (DES_CHR_DUMP=<sec>:<file>, PORT
+      DEBUG: the player character's 0x1000 bytes and 0x800 bytes behind every pointer in it): ChrCtrl+0x128, a
+      speed factor, is 1.0 vs 0.5, next to the target speed at +0x12C (6.33 dash, 3.67 run). PPU_WWATCH on it (the
+      character's address changes between runs; rerun until the dump matches) gives the writer, func_002EC2B8
+      (ChrCtrl): while the move speed is over 5.0 (or a virtual-call value is over 0.3), it takes |position -
+      previous position| x 30.0, i.e. metres per second at the PS3's 1/30 s step. Under 1.0 (moving under
+      1 m/s = pressing into a wall) the factor goes x0.8 per step down to 0.5, otherwise x1.2 per step back up to
+      1.0. At a 1/160 s step a dash speeding up through 5 m/s reads 0.94, and the factor locks at 0.5, because at
+      half speed it keeps reading "stuck". 5 m/s x 30 x step = 1 puts the cliff at exactly 1/150.
+    - Fix (port patch, ppu_recomp_025.cpp, des_wallslow_step): x (1 / step) instead of x 30, and the two rates as
+      0.8^(step x 30) and 1.2^(step x 30). The check is the same in real time at any frame rate and unchanged at
+      30 fps. DES_WALLSLOW_FIX=0 = the original.
+    - Result (sandbox, a Nexus save, dashing across the floor): top dash speed 6.33 m/s at 1/30, 1/60, 1/160 and
+      1/240; 1/160 and 1/240 cover the same ground per game second (1.5 s: 6.57 m both); at 60 fps the fix changes
+      nothing measurable (6.15 vs 6.18 m). Dashing into the statue wall still slows down: 1.0 -> 0.5 in ~0.13 game
+      seconds at both 1/60 (8 steps) and 1/240 (32 steps).
+    - Also checked, because the check runs for every character: the Storm King's mantas (entity ids 400-411 in the
+      map's MSB, the Storm King 822; DES_TRACK=<id>,... PORT DEBUG prints their positions with DES_WHERE) fly at
+      9.02 m per game second at 1/60 and at 1/240, with the fix on and off, and their spikes fly and spawn per game
+      second the same way. Not done here: the sound drifting above 60 fps (#16).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

@@ -257,8 +257,8 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
---- a/recompiled/ppu_recomp_011.cpp	2026-11-04 21:56:33.541827100 -0700
-+++ b/recompiled/ppu_recomp_011.cpp	2026-11-04 21:56:33.560854100 -0700
+--- a/recompiled/ppu_recomp_011.cpp	2026-11-05 20:02:35.933570900 -0700
++++ b/recompiled/ppu_recomp_011.cpp	2026-11-05 20:02:35.947101700 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -274,7 +274,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,348 @@
+@@ -38897,8 +38899,381 @@
          return;
  }
  
@@ -303,7 +303,12 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 + * X[+0x30]) writes the map id bytes (area, block, ..) at out; the position: lua_SaveChrPos's virtual call chr->vtable[+0x70](out, chr),
 + * which writes x, y, z (big-endian floats) to out. Calls run on a frame below the live stack with
 + * the context saved and restored. Returns 0 when there is no player (title, loading). */
++static int des_chr_where(ppu_context* ctx, int id, uint32_t* chr_out, int* block, float xyz[3]);
 +static int des_player_where(ppu_context* ctx, uint32_t* chr_out, int* block, float xyz[3])
++{ return des_chr_where(ctx, 10000, chr_out, block, xyz); }
++/* any character by its event entity id (10000 = the player; MSB part field +0x78, e.g. Storm King 822, its
++ * mantas 400-411): DES_TRACK, NOTES fix 95 */
++static int des_chr_where(ppu_context* ctx, int id, uint32_t* chr_out, int* block, float xyz[3])
 +{
 +    PPU_MM_SNAP
 +    const uint32_t toc = vm_read32((uint32_t)ctx->gpr[2] - 0x7884);
@@ -313,7 +318,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +    ppu_context save = *ctx;
 +    ctx->gpr[1] = (save.gpr[1] - 0x400) & ~0xFull;
 +    const uint32_t out = (uint32_t)ctx->gpr[1] + 0x200;   /* between the callees' frames and ours */
-+    ctx->gpr[3] = obj; ctx->gpr[4] = 10000; ctx->gpr[5] = 0; ctx->gpr[6] = 0;
++    ctx->gpr[3] = obj; ctx->gpr[4] = (uint64_t)(int64_t)id; ctx->gpr[5] = 0; ctx->gpr[6] = 0;
 +    ctx->lr = 0x0001B8D0; func_004142A8(ctx); DRAIN_TRAMPOLINE(ctx);
 +    const uint32_t chr = (uint32_t)ctx->gpr[3];
 +    int ok = 0;
@@ -554,11 +559,31 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +                     e = strchr(e, ';'); if (e) e++; }
 +                   const char* w = getenv("DES_WHERE"); where_us = w ? (unsigned long long)(atof(w) * 1e6) : 0; }
 +      const unsigned long long now = ps3_qpc_us();
++      /* DES_CHR_DUMP=<sec>:<file> (PORT DEBUG): once, <sec> s after the first step, the player's character object
++       * (0x1000 bytes) and 0x800 bytes behind every pointer in it, "<label> <offset> <word>" -- diff two runs. */
++      { static int dn = -1; static unsigned long long d_at; static char d_path[400];
++        if (dn < 0) { const char* e = getenv("DES_CHR_DUMP"); double s; dn = 0;
++                      if (e && sscanf(e, "%lf:%399s", &s, d_path) == 2) { dn = 1; d_at = now + (unsigned long long)(s * 1e6); } }
++        if (dn == 1 && now >= d_at) { dn = 0;
++            uint32_t c = 0; int b = -1; float p3[3];
++            FILE* f = des_player_where(ctx, &c, &b, p3) ? fopen(d_path, "w") : 0;
++            if (f) {
++                for (uint32_t o = 0; o < 0x1000; o += 4) fprintf(f, "chr %04X %08X\n", o, vm_read32(c + o));
++                for (uint32_t o = 0; o < 0x1000; o += 4) { const uint32_t v = vm_read32(c + o);
++                    if (v >= 0x00100000u && v < 0x40000000u && !(v & 3) && v != c)
++                        for (uint32_t k = 0; k < 0x800; k += 4) fprintf(f, "p%04X %04X %08X\n", o, k, vm_read32(v + k)); }
++                fclose(f); fprintf(stderr, "[des] chr dump 0x%08X -> %s\n", c, d_path); } } }
 +      const int tele = next < n && now >= t_at[next], where = where_us && now - where_t >= where_us;
 +      if (tele || where) {
 +          uint32_t chr = 0; int blk = -1; float xyz[3];
 +          if (des_player_where(ctx, &chr, &blk, xyz)) {
-+              if (where) { where_t = now; fprintf(stderr, "[des] where map %d,%d pos %.2f %.2f %.2f\n", (blk >> 8) & 0xFF, blk & 0xFF, xyz[0], xyz[1], xyz[2]); }
++              if (where) { static int tn = -1; static int tid[16];
++                  if (tn < 0) { tn = 0; const char* e = getenv("DES_TRACK");   /* DES_TRACK=<id>,<id>... (PORT DEBUG) */
++                                while (e && *e && tn < 16) { tid[tn++] = atoi(e); e = strchr(e, ','); if (e) e++; } }
++                  for (int i = 0; i < tn; i++) { uint32_t c2 = 0; int b2 = -1; float p2[3];
++                      if (des_chr_where(ctx, tid[i], &c2, &b2, p2))
++                          fprintf(stderr, "[des] track %d %.4f %.4f %.4f\n", tid[i], p2[0], p2[1], p2[2]); } }
++              if (where) { where_t = now; fprintf(stderr, "[des] where map %d,%d pos %.4f %.4f %.4f sp %d/%d k %08X v %08X f %08X %08X %08X %08X %08X\n", (blk >> 8) & 0xFF, blk & 0xFF, xyz[0], xyz[1], xyz[2], (int32_t)vm_read32(chr + 0x3D4), (int32_t)vm_read32(chr + 0x3D8), vm_read32(chr + 0xCC8), vm_read32(chr + 0xCCC), vm_read32(vm_read32(chr + 0xDA0) + 0x59C), vm_read32(vm_read32(chr + 0xDA0) + 0x6DC), vm_read32(vm_read32(chr + 0xDA0) + 0x77C), vm_read32(vm_read32(chr + 0xDA0) + 0x7DC), vm_read32(vm_read32(chr + 0xDA0) + 0x7E0)); }
 +              if (tele) {
 +                  des_player_place(ctx, chr, at[next]);
 +                  fprintf(stderr, "[des] teleport %.2f %.2f %.2f (was map %d,%d at %.2f %.2f %.2f)\n",
@@ -600,7 +625,15 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +      if (on < 0) { const char* e = getenv("DES_60FPS"); const char* a = getenv("DES_ADAPTIVE_STEP");
 +                    on = (e && *e == '1' && !(a && *a == '0')) ? 1 : 0;
 +                    const char* st = getenv("DES_STALL_MS"); stall_us = (unsigned long long)(st ? atoi(st) : 100) * 1000ull; }
-+      if (on) {
++      /* DES_FIXED_STEP=<s> (PORT DEBUG): every step is <s> game seconds whatever the frame rate -- a step
++       * as short as a very high frame rate's (1/240, 1/480) on any PC; game time runs slow or fast by design. */
++      /* "<s>@<sec>": only from <sec> seconds after the first step (menus and loading at normal speed). */
++      static float fixed_step = -1.0f; static unsigned long long fixed_at;
++      if (fixed_step < 0.0f) { const char* e = getenv("DES_FIXED_STEP"); fixed_step = e ? (float)atof(e) : 0.0f;
++                               const char* a = e ? strchr(e, '@') : 0;
++                               fixed_at = ps3_qpc_us() + (unsigned long long)((a ? atof(a + 1) : 0.0) * 1e6); }
++      if (on && fixed_step > 0.0f && ps3_qpc_us() >= fixed_at) { uint32_t w; memcpy(&w, &fixed_step, 4); vm_write32(0x018C8DB4, w); }
++      else if (on) {
 +          const unsigned long long t = ps3_qpc_us();
 +          const unsigned long long iv = last ? t - last : 0; last = t;
 +          if (iv && (!stall_us || iv <= stall_us)) {
@@ -1040,8 +1073,8 @@ diff -ruN a/recompiled/ppu_recomp_024.cpp b/recompiled/ppu_recomp_024.cpp
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
 diff -ruN a/recompiled/ppu_recomp_025.cpp b/recompiled/ppu_recomp_025.cpp
---- a/recompiled/ppu_recomp_025.cpp	2026-10-31 08:09:10.978163400 -0700
-+++ b/recompiled/ppu_recomp_025.cpp	2026-10-31 08:09:16.696481000 -0700
+--- a/recompiled/ppu_recomp_025.cpp	2026-11-05 20:02:36.127352000 -0700
++++ b/recompiled/ppu_recomp_025.cpp	2026-11-05 20:02:36.143880000 -0700
 @@ -242,12 +242,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
@@ -1057,6 +1090,54 @@ diff -ruN a/recompiled/ppu_recomp_025.cpp b/recompiled/ppu_recomp_025.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
+@@ -32753,6 +32755,23 @@
+         goto loc_002EC1B0;
+ }
+ 
++/* PORT PATCH (Demon's Souls NOTES fix 95): func_002EC2B8 is the run / dash "pressing into a wall" check -- the
++ * distance the character moved in one step x 30.0 (m/s at the PS3's fixed 1/30 s step); under 1 m/s the speed factor
++ * at ctrl+0x128 drops x0.8 per step down to 0.5, otherwise it recovers x1.2 per step up to 1.0. With shorter steps
++ * the same speed reads slower: above 150 fps a dash speeding up through 5 m/s reads under 1 and the factor locks at
++ * 0.5 (half speed, which then keeps reading "stuck") -- "the run goes into slow motion". The patch divides by the
++ * real step and makes the two rates per 1/30 s, so the check is the same in real time at any frame rate (and
++ * unchanged at 30 fps). DES_WALLSLOW_FIX=0 = the original. Returns the step in seconds, or 0 = leave it alone. */
++static float des_wallslow_step(void)
++{
++    PPU_MM_SNAP
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("DES_WALLSLOW_FIX"); on = (e && *e == '0') ? 0 : 1; }
++    if (!on) return 0.0f;
++    const uint32_t w = vm_read32(0x018C8DB4); float st; memcpy(&st, &w, 4);   /* the game's step (fix 28 / 33) */
++    return (st > 0.0f && st <= 0.25f) ? st : 0.0f;
++}
++
+ void func_002EC2B8(ppu_context* ctx) {
+     PPU_MM_SNAP
+         uint64_t _cs_28 = ctx->gpr[28];
+@@ -32853,6 +32872,7 @@
+         ctx->gpr[9] = (int64_t)(int32_t)(0x20);
+         { uint32_t v[4]; for(int i=0;i<4;i++) v[i]=(uint32_t)(int32_t)-1; ppu_vstu4(&ctx->vr[13],v); }
+         { uint32_t tmp = vm_read32(ctx->gpr[30] + -0x7E80); float ftmp; memcpy(&ftmp, &tmp, 4); ctx->fpr[13] = ftmp; }
++        { const float st = des_wallslow_step(); if (st > 0.0f) ctx->fpr[13] = 1.0f / st; }   /* PORT PATCH: x 1/step, not x 30 */
+         { uint32_t tmp = vm_read32(ctx->gpr[30] + -0x8000); float ftmp; memcpy(&ftmp, &tmp, 4); ctx->fpr[12] = ftmp; }
+         { uint64_t ea = ((ctx->gpr[10] + ctx->gpr[0])) & ~0xFULL; vm_raw_ld16(&ctx->vr[1], ea); }
+         vmx_vslw(&ctx->vr[13], &ctx->vr[13], &ctx->vr[13]);
+@@ -32890,6 +32910,7 @@
+         { double a = ctx->fpr[13]; double b = ctx->fpr[0]; uint32_t cr_val = (a != a || b != b) ? 1 : (a < b) ? 8 : (a > b) ? 4 : 2; ctx->cr = (ctx->cr & ~(0xFu << 0)) | (cr_val << 0); }
+         if ((!((ctx->cr >> 2) & 1))) goto loc_002EC510;
+         { uint32_t tmp = vm_read32(ctx->gpr[30] + -0x7E24); float ftmp; memcpy(&ftmp, &tmp, 4); ctx->fpr[0] = ftmp; }
++        { const float st = des_wallslow_step(); if (st > 0.0f) ctx->fpr[0] = powf((float)ctx->fpr[0], st * 30.0f); }   /* PORT PATCH: 0.8 per 1/30 s */
+         ctx->fpr[0] = ppu_fp_single(ppu_fmul(ctx->fpr[13], ctx->fpr[0]));
+         { float ftmp = (float)ctx->fpr[0]; uint32_t tmp; memcpy(&tmp, &ftmp, 4); vm_write32(ctx->gpr[31] + 0x128, tmp); }
+         goto loc_002EC398;
+@@ -32917,6 +32938,7 @@
+         /* nop */;
+ loc_002EC508:
+         { uint32_t tmp = vm_read32(ctx->gpr[30] + -0x7E14); float ftmp; memcpy(&ftmp, &tmp, 4); ctx->fpr[0] = ftmp; }
++        { const float st = des_wallslow_step(); if (st > 0.0f) ctx->fpr[0] = powf((float)ctx->fpr[0], st * 30.0f); }   /* PORT PATCH: 1.2 per 1/30 s */
+         ctx->fpr[0] = ppu_fp_single(ppu_fmul(ctx->fpr[13], ctx->fpr[0]));
+ loc_002EC510:
+         { float ftmp = (float)ctx->fpr[0]; uint32_t tmp; memcpy(&tmp, &ftmp, 4); vm_write32(ctx->gpr[31] + 0x128, tmp); }
 diff -ruN a/recompiled/ppu_recomp_026.cpp b/recompiled/ppu_recomp_026.cpp
 --- a/recompiled/ppu_recomp_026.cpp	2026-10-31 08:09:11.014340400 -0700
 +++ b/recompiled/ppu_recomp_026.cpp	2026-10-31 08:09:16.740200100 -0700
