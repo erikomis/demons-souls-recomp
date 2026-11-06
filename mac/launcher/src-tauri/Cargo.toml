@@ -1,0 +1,43 @@
+[package]
+name = "demons-souls-launcher"
+version = "0.1.0"
+description = "Launcher for the Demon's Souls static-recompilation port on macOS: install from your disc, settings, saves, play"
+license = "MIT"
+edition = "2021"
+publish = false
+
+[lib]
+name = "demons_souls_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# the saves manager's and the debug reports' .zip files (both already in the
+# tree through tauri)
+flate2 = "1"
+crc32fast = "1"
+# the Dock icon and the Steam art drawn from the player's disc (app_icon.rs,
+# steam_art.rs): PNG in and out, already in the tree through tauri (muda)
+png = "0.18"
+# the build-feature scan (lib.rs build_features): substring search in the
+# ~90 MB executables, already in the tree through tauri
+memchr = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# NSApplication/NSWorkspace for the Dock and Finder icons (the versions and
+# most features tauri itself uses)
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSResponder", "NSWorkspace"] }
+
+# Proc macros and build scripts are not stripped: with this machine's toolchain
+# (rustc 1.94, macOS 27) a stripped proc-macro dylib loses the metadata rustc
+# reads back ("can't find crate for `zerofrom_derive`"). The app itself still is.
+[profile.release.build-override]
+strip = false

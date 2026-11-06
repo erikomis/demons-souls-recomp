@@ -10,6 +10,7 @@
 /gamedata/
 /logs/
 /perf/
+/cache/
 /captures/
 /textures/dump/
 /textures/replace/
