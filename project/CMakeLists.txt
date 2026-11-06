@@ -216,8 +216,22 @@ if(SPU_SOURCES)
         # it on a CPU without AVX2) keeps the exact scalar paths: ~2 fps slower
         # in the heaviest area, otherwise the same. An AVX2 build stops with a
         # message on a CPU without it (PS3_REQUIRE_AVX2 in PLAY.bat).
-        set(DS_SPU_OPTS "-O2;/GS-;-msse4.1")
-        if(DS_AVX2)
+        # The native macOS / Linux build (clang or gcc driver) spells /GS- as
+        # -fno-stack-protector and gets the x86 flags only on an x86 host:
+        # on arm64, spu_helpers.h takes its exact scalar paths.
+        if(MSVC)
+            set(DS_SPU_OPTS "-O2;/GS-;-msse4.1")
+        else()
+            set(DS_SPU_OPTS "-O2;-fno-stack-protector")
+        endif()
+        set(DS_SPU_X86 OFF)
+        if(MSVC OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+            set(DS_SPU_X86 ON)
+        endif()
+        if(DS_SPU_X86 AND NOT MSVC)
+            list(APPEND DS_SPU_OPTS "-msse4.1")
+        endif()
+        if(DS_AVX2 AND DS_SPU_X86)
             list(APPEND DS_SPU_OPTS "-mavx2")
         endif()
         set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "${DS_SPU_OPTS}")
