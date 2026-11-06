@@ -274,7 +274,7 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -38897,8 +38899,409 @@
+@@ -38897,8 +38899,414 @@
          return;
  }
  
@@ -288,7 +288,12 @@ diff -ruN a/recompiled/ppu_recomp_010.cpp b/recompiled/ppu_recomp_010.cpp
 +extern "C" int texpack_kbm_want(void);   /* rsx_tex_pack.c: keyboard / mouse button icons shown (fix 91) */
 +extern "C" unsigned long long ps3_thread_cpu_us(void);   /* rsx_live_draw.c */
 +extern "C" void ps3_perf_step_begin(void);               /* rsx_live_draw.c (DES_PERF_STACKS) */
++#ifdef _WIN32
 +extern "C" __declspec(dllimport) void __stdcall Sleep(unsigned long ms);   /* kernel32 (DES_HITCH_AT) */
++#else
++#include <unistd.h>
++static inline void Sleep(unsigned long ms) { usleep((useconds_t)(ms * 1000u)); }   /* macOS / Linux build */
++#endif
 +/* The window title's suffix: god mode (fix 44) and the stutter recording (fix 46). */
 +static int g_des_title_god, g_des_title_marks = -1;   /* marks -1 = not recording */
 +static void des_title(void) {
@@ -2525,7 +2530,7 @@ diff -ruN a/recompiled/ppu_recomp_085.cpp b/recompiled/ppu_recomp_085.cpp
 diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
 --- a/recompiled/ppu_recomp_086.cpp	2026-11-04 21:56:34.178403200 -0700
 +++ b/recompiled/ppu_recomp_086.cpp	2026-11-04 21:56:34.192914600 -0700
-@@ -220,6 +220,488 @@
+@@ -220,6 +220,493 @@
  
  #include "ppu_vmx.h"   /* exact VMX semantics (runtime/ppu/ppu_vmx.h) */
  
@@ -2539,7 +2544,12 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
 + * [pt-snd]   func_0072D970 sound ids
 + * Guest reads only; nothing changes. */
 +extern "C" unsigned ps3_ld_frame_index(void);   /* rsx_live_draw.c */
++#ifdef _WIN32
 +extern "C" __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId(void);
++#else
++#include <pthread.h>
++static inline unsigned long GetCurrentThreadId(void) { return (unsigned long)(uintptr_t)pthread_self(); }   /* log tag only */
++#endif
 +static int des_pt_mode = -1, des_pt_every = 30;
 +extern "C" int des_pt_on(void)
 +{
@@ -3014,7 +3024,7 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
  /* VM base pointer (defined by game project) */
  extern "C" uint8_t* vm_base;
  
-@@ -242,12 +724,14 @@
+@@ -242,12 +729,14 @@
  
  /* Drain pending trampolines after any call that might set g_trampoline_fn.
   * Converts cross-fragment fallthrough chains into iterative loops. */
@@ -3029,7 +3039,7 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
  } while(0)
  
  /* Each lifted function opens with PPU_MM_SNAP; its loads and stores use that
-@@ -35812,6 +36296,8 @@
+@@ -35812,6 +36301,8 @@
  
  void func_00F55A18(ppu_context* ctx) {
      PPU_MM_SNAP
@@ -3038,7 +3048,7 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
          uint64_t _cs_30 = ctx->gpr[30];
          uint64_t _cs_31 = ctx->gpr[31];
          vm_write64(ctx->gpr[1] + -0xA0, ctx->gpr[1]); ctx->gpr[1] += -0xA0;
-@@ -35828,6 +36314,7 @@
+@@ -35828,6 +36319,7 @@
          ctx->gpr[0] = (int64_t)(int32_t)(0);
  loc_00F55A44:
          ctx->gpr[3] = (int64_t)(int32_t)ctx->gpr[0];
@@ -3046,7 +3056,7 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
          ctx->gpr[0] = vm_read64(ctx->gpr[1] + 0xB0);
          ctx->gpr[30] = _cs_30;
          ctx->gpr[31] = _cs_31;
-@@ -35883,6 +36370,7 @@
+@@ -35883,6 +36375,7 @@
          ctx->gpr[0] = ctx->gpr[9] - ctx->gpr[0];
          ctx->gpr[0] = ppc_rlw64(ctx->gpr[0], 1, 31, 31, 0, 0);
          ctx->gpr[3] = (int64_t)(int32_t)ctx->gpr[0];
@@ -3054,7 +3064,7 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
          ctx->gpr[0] = vm_read64(ctx->gpr[1] + 0xB0);
          ctx->gpr[1] = ctx->gpr[1] + (int64_t)(0xA0);
          ctx->lr = ctx->gpr[0];
-@@ -46931,6 +47419,7 @@
+@@ -46931,6 +47424,7 @@
          vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);
          ctx->ctr = ctx->gpr[0];
          ctx->gpr[2] = vm_read32(ctx->gpr[11] + 0x4);
@@ -3062,7 +3072,7 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
          ctx->lr = 0x00F5F754; ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx);
          ctx->gpr[2] = vm_read64(ctx->gpr[1] + 0x28);
  loc_00F5F758:
-@@ -47000,6 +47489,7 @@
+@@ -47000,6 +47494,7 @@
          vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);
          ctx->ctr = ctx->gpr[0];
          ctx->gpr[2] = vm_read32(ctx->gpr[9] + 0x4);
@@ -3070,7 +3080,7 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
          ctx->lr = 0x00F5F85C; ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx);
          ctx->gpr[2] = vm_read64(ctx->gpr[1] + 0x28);
          ctx->gpr[3] = ctx->gpr[29] | ctx->gpr[29];
-@@ -47874,6 +48364,7 @@
+@@ -47874,6 +48369,7 @@
          vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);
          ctx->ctr = ctx->gpr[0];
          ctx->gpr[2] = vm_read32(ctx->gpr[11] + 0x4);
@@ -3078,7 +3088,7 @@ diff -ruN a/recompiled/ppu_recomp_086.cpp b/recompiled/ppu_recomp_086.cpp
          ctx->lr = 0x00F6054C; ps3_indirect_call(ctx); DRAIN_TRAMPOLINE(ctx);
          ctx->gpr[2] = vm_read64(ctx->gpr[1] + 0x28);
  loc_00F60550:
-@@ -48268,6 +48759,7 @@
+@@ -48268,6 +48764,7 @@
          vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);
          ctx->ctr = ctx->gpr[0];
          ctx->gpr[2] = vm_read32(ctx->gpr[9] + 0x4);
