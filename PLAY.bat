@@ -142,8 +142,11 @@ rem port\build_opt\built (setup/build.py); when the folder's patches differ from
 rem before 2026-11-03 left none, or a rebuild failed or was stopped) the game was not rebuilt: build it
 rem now, then play. Only then -- an up-to-date folder starts straight away.
 rem (gotos, not ( ) blocks: a ")" in the folder's path would end a block.)
+rem DES_NO_REBUILD=1 ("Keep my build after updates" in the launcher) plays the build there is instead, and a
+rem rebuild that does not finish asks whether to play it anyway.
 call :stale
 if not defined STALE goto play
+if "%DES_NO_REBUILD%"=="1" goto stale_keep
 if defined DES_LAUNCHER goto stale_launcher
 echo.
 echo This folder was updated: rebuilding the game first with BUILD.bat (a few minutes; only what
@@ -155,15 +158,28 @@ goto play
 :stale_launcher
 rem The launcher runs this file without a window: rebuild in a window of its own and wait for it (the
 rem launcher keeps Play greyed out meanwhile), then start the game if the build is now current. The
-rem window closes by itself when the build works and stays open (press a key) when it fails.
-start "Demon's Souls - rebuilding after the update" /wait /d "%D%" cmd /c call "%D%\BUILD.bat" ^|^| pause
+rem window closes by itself when the build works; when it fails it asks whether to play the build there is
+rem anyway (setup\rebuild_window.bat leaves logs\play_old_build.flag for a yes).
+if exist "%D%\logs\play_old_build.flag" del "%D%\logs\play_old_build.flag"
+start "Demon's Souls - rebuilding after the update" /wait /d "%D%" cmd /c call "%D%\setup\rebuild_window.bat"
 call :stale
 if not defined STALE goto play
-exit /b 1
+if not exist "%D%\logs\play_old_build.flag" exit /b 1
+del "%D%\logs\play_old_build.flag"
+goto play
+:stale_keep
+echo.
+echo This folder was updated, but DES_NO_REBUILD=1 ("Keep my build after updates" in the launcher): playing
+echo the build you already have. Its fixes are from before the update; run BUILD.bat to get the new ones.
+echo.
+goto play
 :build_failed
+echo.
 echo BUILD.bat did not finish. If it asks for SETUP.bat, run SETUP.bat: it keeps your game files.
-pause
-exit /b 1
+echo The build you already have is still there, but it was made before this update.
+choice /c YN /m "Play the build you already have anyway"
+if errorlevel 2 exit /b 1
+goto play
 :play
 rem (again: a rebuild may have switched between the AVX2 and the plain build)
 set "PS3_REQUIRE_AVX2="

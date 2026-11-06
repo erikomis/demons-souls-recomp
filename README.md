@@ -119,7 +119,9 @@ press Play (or run **`BUILD.bat`**). It re-applies
 the patches that changed since your last setup and recompiles only the files they touch. If it
 says so, run `SETUP.bat` instead: that also works, keeps the game files and skips what is done.
 If you forget, Play notices that the folder was updated but not rebuilt and runs BUILD.bat first
-(an old build with new files can stay on a black screen).
+(an old build with new files can stay on a black screen). To play the build you already have instead, tick
+**Keep my build after updates** in the launcher (or `set DES_NO_REBUILD=1`); the update's fixes then wait until
+you run BUILD.bat. And if a rebuild does not finish, Play asks whether to start the build you already have.
 Setups made before 2026-11-03 could not take updates (the patches were applied once and never
 again); the first `BUILD.bat` or `SETUP.bat` with this version brings them up to date.
 
