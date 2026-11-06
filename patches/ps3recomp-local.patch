@@ -9641,7 +9641,7 @@ index eca370f..306216e 100644
              (*load)++;
          return;
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 8dff601..6cf0767 100644
+index 8dff601..114c995 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -1489,6 +1489,59 @@ static int eng_surface_to_guest(u32 slot)
@@ -9704,7 +9704,25 @@ index 8dff601..6cf0767 100644
  static float* s_depth_rows;
  static u32 s_depth_cap;
  
-@@ -2040,6 +2093,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1910,6 +1963,17 @@ static u64 eng_fp_debug_hash(const u8* fp_uc, u32 fp_size)
+     return fp_uc && fp_size
+         ? rsx_fp_structural_hash(fp_uc, fp_size, 1469598103934665603ull) : 0;
+ }
++/* RSX_ENGINE_PIPE_TIME: a monotonic clock on every host. The MSVC C runtime (the Windows build) has no
++ * clock_gettime / CLOCK_MONOTONIC; timespec_get is C11 and there. */
++static void eng_clock_now(struct timespec* ts)
++{
++#ifdef _WIN32
++    timespec_get(ts, TIME_UTC);
++#else
++    clock_gettime(CLOCK_MONOTONIC, ts);
++#endif
++}
++
+ 
+ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+                             const rsx_be_render_state* rs,
+@@ -2040,6 +2104,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      }
      if (g.n_pipelines >= ENG_MAX_PIPELINES) return 0;
  
@@ -9713,17 +9731,17 @@ index 8dff601..6cf0767 100644
 +     * monotonic time, for lining build stalls up with long frames. */
 +    static int pipe_time = -1;
 +    if (pipe_time < 0) pipe_time = getenv("RSX_ENGINE_PIPE_TIME") ? 1 : 0;
-+    struct timespec pt0; if (pipe_time) clock_gettime(CLOCK_MONOTONIC, &pt0);
++    struct timespec pt0; if (pipe_time) eng_clock_now(&pt0);
 +
      u32 handle = 0;
      int vi = 1, fi = 1;
      u32 nconst = 0;
-@@ -2080,6 +2140,12 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2080,6 +2151,12 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      if (vi > 0 && fi > 0)
          handle = g.be->pipeline_create(g.be->user, s_vs_hlsl, s_ps_hlsl, rs,
                                         layout, layout->stride, rt_fmt, rt_count);
 +    if (pipe_time) {
-+        struct timespec pt1; clock_gettime(CLOCK_MONOTONIC, &pt1);
++        struct timespec pt1; eng_clock_now(&pt1);
 +        const double ms = (pt1.tv_sec - pt0.tv_sec) * 1e3 + (pt1.tv_nsec - pt0.tv_nsec) / 1e6;
 +        fprintf(stderr, "[pipe-time] t=%.3f s pipeline #%u %.1f ms%s\n",
 +                pt1.tv_sec + pt1.tv_nsec / 1e9, g.n_pipelines, ms, handle ? "" : " (failed)");
@@ -9731,7 +9749,7 @@ index 8dff601..6cf0767 100644
      const u64 fp_hash = fixed ? 0 : eng_fp_debug_hash(fp_uc, fp_size);
      /* RSX_ENGINE_SHADER_DUMP=<existing dir>: each new pipeline's two programs
       * as <dir>/pipe<handle>.vs.hlsl and .ps.hlsl, the handle being the one
-@@ -3375,6 +3441,7 @@ static void eng_present(u32 buffer_id)
+@@ -3375,6 +3452,7 @@ static void eng_present(u32 buffer_id)
                      i, g.surfaces[i].location, g.surfaces[i].offset,
                      g.surfaces[i].w, g.surfaces[i].h, g.surfaces[i].handle);
      }

@@ -60,6 +60,10 @@ takes is pressing **F8** when it happens and running `REPORT.bat` afterwards.
   Visual Studio later and want it used? Delete `deps\.portable_compiler`.) Keep the folder's path plain:
   no `[ ]` or `&` in it (the build tools cannot handle them; SETUP says so).
 
+**macOS (Apple Silicon):** a native arm64 build that draws through Metal, contributed by erikomis (PR #30).
+It plays through the menus, character creation and into the Tutorial so far; build steps, controls and known
+gaps are in [docs/MACOS.md](docs/MACOS.md). It is experimental, and the Windows build is unchanged.
+
 **Linux / Steam Deck:** a setup + play kit (an AppImage) builds the same port from your own disc
 image on Linux and runs it through Proton. See [docs/LINUX.md](docs/LINUX.md).
 **It works on Linux:** set up and played on Ubuntu 24.04 (Intel i7-4770K + NVIDIA GTX 980). On that
@@ -318,6 +322,7 @@ tools/                       disc extraction, UDF names, SPURS job lifting, perf
                              model export/import (flver_tool.py, souls_formats.py)
 docs/NOTES.md                development log: every fix, why, and how it was measured
 linux/, docs/LINUX.md        Linux / Steam Deck kit: setup.sh, play.sh, the AppImage (linux/appimage)
+mac/, docs/MACOS.md          native macOS (Apple Silicon, Metal) build: install.sh, rebuild.sh, play.sh, the launcher app
 setup/clang-cl-xwin.cmake    the cross toolchain Linux builds with (clang-cl + an SDK fetched by xwin)
 ```
 

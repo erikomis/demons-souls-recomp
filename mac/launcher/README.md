@@ -53,9 +53,8 @@ found on its own). Then:
    and Homebrew's `cmake ninja sdl2 glslang spirv-cross ffmpeg python@3.12`, installed only after the
    player says yes to the `brew install` line shown. The free space (14 GB) is checked.
 2. **sources** (`src-tauri/src/install.zsh`): when the launcher found no checkout of the port, it
-   clones `SOURCES_URL` at `SOURCES_BRANCH` (lib.rs: `github.com/erikomis/demons-souls-recomp`,
-   branch `macos-native`, where the Mac support lives; `DES_SOURCES_URL` / `DES_SOURCES_BRANCH`
-   override them) into `~/Library/Application Support/demons-souls-recomp/src`. A checkout the
+   clones `SOURCES_URL` at `SOURCES_BRANCH` (lib.rs: `github.com/timboat/demons-souls-recomp`,
+   branch `main`; `DES_SOURCES_URL` / `DES_SOURCES_BRANCH` override them) into `~/Library/Application Support/demons-souls-recomp/src`. A checkout the
    launcher already uses (the folder it was built from, for example) is installed into in place.
 3. Then the repository's `mac/install.sh`, whose steps the progress bar follows: **deps**, **venv**
    (`.venv` with `setup/requirements.txt` and `pycryptodome`), **game** (`tools/iso_extract.py --all`,
@@ -183,6 +182,6 @@ warning lines; **Create .zip** packs the folder (frames as PNG, the home folder'
 
 ## Not tested
 
-The install from an empty data folder end to end (the clone needs the Mac scripts on the
-`macos-native` branch), skip the intro on the Mac, Add to Steam with Steam installed, and keyboard
+The install from an empty data folder end to end (the clone of the repository's main branch),
+skip the intro on the Mac, Add to Steam with Steam installed, and keyboard
 and mouse in the game beyond the menus.

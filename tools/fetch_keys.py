@@ -17,10 +17,10 @@ for tools/decrypt_self.py.
 The key file goes to a per-user folder outside the repository, readable only
 by you (mode 600):
 
-    macOS  ~/Library/Application Support/resistance-recomp/keys/self_keys.txt
-    other  $XDG_DATA_HOME (~/.local/share)/resistance-recomp/keys/self_keys.txt
+    macOS  ~/Library/Application Support/demons-souls-recomp/keys/self_keys.txt
+    other  $XDG_DATA_HOME (~/.local/share)/demons-souls-recomp/keys/self_keys.txt
 
---out or RES_SELF_KEYS put it elsewhere. The path is printed on stdout (and
+--out or DES_SELF_KEYS (RES_SELF_KEYS also works) put it elsewhere. The path is printed on stdout (and
 nothing else); progress and errors go to stderr. No key is ever printed.
 
 Only the Python standard library is used, so this runs before the toolkit's
@@ -50,14 +50,15 @@ NEEDED_REVISIONS = (0x0001, 0x0002)
 
 
 def default_path():
-    if os.environ.get('RES_SELF_KEYS'):
-        return os.environ['RES_SELF_KEYS']
+    for var in ('DES_SELF_KEYS', 'RES_SELF_KEYS'):   # RES_: the name in the author's earlier ports
+        if os.environ.get(var):
+            return os.environ[var]
     home = os.path.expanduser('~')
     if sys.platform == 'darwin':
         base = os.path.join(home, 'Library', 'Application Support')
     else:
         base = os.environ.get('XDG_DATA_HOME') or os.path.join(home, '.local', 'share')
-    return os.path.join(base, 'resistance-recomp', 'keys', 'self_keys.txt')
+    return os.path.join(base, 'demons-souls-recomp', 'keys', 'self_keys.txt')
 
 
 def log(msg):
@@ -69,7 +70,7 @@ class FetchError(Exception):
 
 
 def download(url, timeout):
-    req = urllib.request.Request(url, headers={'User-Agent': 'resistance-recomp fetch_keys.py'})
+    req = urllib.request.Request(url, headers={'User-Agent': 'demons-souls-recomp fetch_keys.py'})
 
     def get(ctx):
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:

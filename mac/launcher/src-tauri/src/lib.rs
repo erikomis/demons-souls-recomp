@@ -48,10 +48,10 @@ const ELF_REL: &str = "game/PS3_GAME/USRDIR/EBOOT.elf";
 const PLAY_SH: &str = "mac/play.sh";
 const REBUILD_SH: &str = "mac/rebuild.sh";
 const INSTALL_SH: &str = "mac/install.sh";
-/// The repository "Install the game" clones when there is no checkout yet: the Mac support lives
-/// on this branch (DES_SOURCES_URL / DES_SOURCES_BRANCH override both).
-const SOURCES_URL: &str = "https://github.com/erikomis/demons-souls-recomp.git";
-const SOURCES_BRANCH: &str = "macos-native";
+/// The repository "Install the game" clones when there is no checkout yet: the port's own repository,
+/// whose main branch has the Mac support since PR #30 (DES_SOURCES_URL / DES_SOURCES_BRANCH override both).
+const SOURCES_URL: &str = "https://github.com/timboat/demons-souls-recomp.git";
+const SOURCES_BRANCH: &str = "main";
 
 // ---------------------------------------------------------------------------
 // Settings
