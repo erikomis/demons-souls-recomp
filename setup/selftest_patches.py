@@ -50,13 +50,43 @@ def main():
             olds.append(c)
         if len(olds) == 3:
             break
+    p = setup.PS3RECOMP
+    # An update where the applied version cannot be told (a ZIP copy has no history and the saved copy does
+    # not match the disk): sync_runtime puts the commit's files back and applies the new patch in place. A
+    # stray file (made by an unknown old patch) must go, a file the update does not change must keep its time.
+    print('2. update when the applied version is unknown')
+    git('-c', 'advice.detachedHead=false', 'checkout', '-q', '-f', commit, cwd=p)
+    git('clean', '-q', '-fd', cwd=p)
+    tmp = os.path.join(p, '.ds_selftest_old.patch')
+    patch_sync._write(tmp, olds[0] if olds else new)
+    r = patch_sync._apply(p, tmp, repo=True)
+    os.remove(tmp)
+    if r.returncode:
+        sys.exit('FAIL: that version does not apply:\n' + r.stdout + r.stderr)
+    stray = os.path.join(p, 'libs', 'ds_selftest_stray.c')
+    patch_sync._write(stray, b'int ds_selftest_stray;\n')
+    keep = os.path.join(p, 'README.md')
+    keep_t = os.stat(keep).st_mtime_ns if os.path.isfile(keep) else None
+    patch_sync.save_runtime_state(commit, b'not the applied version\n')
+    real_history, patch_sync._history = patch_sync._history, (lambda rel: [])
+    try:
+        state = patch_sync.sync_runtime(commit)
+    finally:
+        patch_sync._history = real_history
+    if state != 'updated':
+        sys.exit(f'FAIL: sync_runtime returned {state!r}, expected updated')
+    if patch_sync._apply(p, patch_sync.RUNTIME_PATCH, '-R', '--check', repo=True).returncode:
+        sys.exit('FAIL: after the update the new patch is not what is applied')
+    if os.path.exists(stray):
+        sys.exit('FAIL: a file that is not in the commit stayed')
+    if keep_t is not None and os.stat(keep).st_mtime_ns != keep_t:
+        sys.exit('FAIL: an unchanged file got a new timestamp')
     if not olds:
         print('no older version for this ps3recomp commit yet: update test skipped')
         print('ok')
         return
-    p = setup.PS3RECOMP
     for n, old in enumerate(olds, 1):
-        print(f'{n + 1}. update from the version {n} before this one')
+        print(f"{n + 2}. update from the version {n} before this one")
         git('-c', 'advice.detachedHead=false', 'checkout', '-q', '-f', commit, cwd=p)
         git('clean', '-q', '-fd', cwd=p)
         tmp = os.path.join(p, '.ds_selftest_old.patch')

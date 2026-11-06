@@ -256,12 +256,21 @@ def sync_runtime(commit):
     finally:
         if os.path.isfile(tmp):
             os.remove(tmp)
+    in_commit = set(git('ls-tree', '-r', '--name-only', '-z', commit).stdout.split('\0')) - {''}
     if old is None:
-        say('  could not tell which version is applied')
-        return 'redo'
-    # Only what the two patches name goes back to the commit; anything else in the checkout stays.
-    paths = _paths(old) | _paths(new)
-    in_commit = set(git('ls-tree', '-r', '--name-only', '-z', commit).stdout.split('\0'))
+        # Neither the saved copy nor this checkout's history matches what is on disk (seen 2026-11-05 on a
+        # player's setup from a release ZIP, which has no history). The checkout is still at the tested
+        # commit, so no guess is needed: every file that differs from the commit goes back to it, files that
+        # are not in the commit are removed (what SETUP.bat's fresh step 3 does with checkout -f + clean -fd),
+        # and the new patch goes on. Unchanged files keep their timestamps: only real changes recompile.
+        say('  could not tell which version is applied: putting the runtime files back to the tested commit')
+        dirty = set(git('diff', '--name-only', '-z', commit).stdout.split('\0')) - {''}
+        extra = set(git('ls-files', '--others', '--exclude-standard', '-z').stdout.split('\0'))
+        extra -= {'', '.ds_patched', '.ds_patched.patch'}
+        paths = dirty | extra | _paths(new)
+    else:
+        # Only what the two patches name goes back to the commit; anything else in the checkout stays.
+        paths = _paths(old) | _paths(new)
     snap = _snapshot(PS3RECOMP, paths)
     back = sorted(p for p in paths if p in in_commit)
     for i in range(0, len(back), 100):
