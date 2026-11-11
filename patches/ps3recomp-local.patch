@@ -5527,7 +5527,7 @@ index 0000000..d9edd4d
 +
 +#endif /* PS3RECOMP_VDEC_MF_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..b0e00ff 100644
+index afdd93d..25eabf5 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -9,6 +9,23 @@
@@ -5856,7 +5856,7 @@ index afdd93d..b0e00ff 100644
 +                vk_of[i] = v ? (int)v : 'A' + i;
 +            }
 +        }
-+    }
+     }
 +    return vk_of[us_letter - 'A'];
 +}
 +/* Keys for the game layouts (fix 73 review): a key or mouse button that is already down when the
@@ -5875,7 +5875,7 @@ index afdd93d..b0e00ff 100644
 +    if (s_key_gate) s_key_stale[vk] = 1;
 +    return !s_key_stale[vk];
 +}
-+
+ 
 +/* Port hotkeys (Demon's Souls god mode, NOTES fix 44): ps3_host_hotkey(vk) is 1 once per press of
 + * vk while the game window is in front (or from PAD_KEY_SCRIPT). Call it from one thread only.
 + * ps3_host_title_suffix(s) shows s after the game window's title ("" = the plain title again); a
@@ -6356,7 +6356,7 @@ index afdd93d..b0e00ff 100644
 +            }
 +            SetCursorPos(c.x, c.y);
 +        }
-     }
++    }
 +    cap_prev = s_mouse_cap != 0;
 +    if (rx > 127) rx = 127; if (rx < -127) rx = -127;
 +    if (ry > 127) ry = 127; if (ry < -127) ry = -127;
@@ -6365,7 +6365,7 @@ index afdd93d..b0e00ff 100644
 +    hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
 +    hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
 +}
- 
++
 +static void pad_poll_keyboard_basic(PadHostState* hs)
 +{
      static const struct { int vk; u16 btn; } map[] = {
@@ -6385,7 +6385,7 @@ index afdd93d..b0e00ff 100644
      hs->trigger_l2 = (u8)((btns & CELL_PAD_CTRL_L2) ? 255 : 0);
      hs->trigger_r2 = (u8)((btns & CELL_PAD_CTRL_R2) ? 255 : 0);
 +}
-+
+ 
 +/* The keyboard (and in the souls layout the mouse) drives port 0 whether or not an XInput pad is
 + * there (Demon's Souls NOTES fix 73). Before, it was only read with no pad on port 0, so a pad that
 + * was merely switched on -- or a virtual one (Steam, DS4Windows, ViGEm) -- made Enter / START and
@@ -6405,7 +6405,7 @@ index afdd93d..b0e00ff 100644
 +    if (off < 0) off = getenv("PAD_NO_KEYBOARD") ? 1 : 0;
 +    s_dbg_kb = 0;
 +    if (off) { s_kbm_active = 0; return; }   /* no keyboard: the pad's icons */
- 
++
 +    PadHostState* hs = &s_host_state[0];
 +    const int pad = hs->connected;
 +    static int kb_last = 0;   /* the keyboard / mouse was used more recently than the pad */
@@ -6519,7 +6519,22 @@ index afdd93d..b0e00ff 100644
      const int on = r->lo || r->hi;
      SDL_GameControllerRumble(gc, r->lo, r->hi, on ? PAD_RUMBLE_HOLD_MS : 0);
      r->sent_ms = on ? pad_now_ms() : 0;
-@@ -562,9 +1390,14 @@ static void pad_sdl_hotplug(int force)
+@@ -541,6 +1369,14 @@ static void pad_sdl_hotplug(int force)
+     int got;
+     /* SDL_JOYAXISMOTION (0x600) up to the touch events (0x700): every
+      * joystick and game controller event, which only this file uses. */
++    /* SDL installs SIGINT / SIGTERM handlers that only queue SDL_QUIT, so those signals ended
++     * nothing: a launcher closing its window sent SIGTERM, the game ran on and was SIGKILLed,
++     * whatever it was saving. Nothing else here reads SDL's queue: end the game the way the
++     * console's Quit Game does (ps3_host_quit: REQUEST_EXITGAME, let a save finish, exit 0). */
++    if (SDL_PeepEvents(ev, 1, SDL_GETEVENT, SDL_QUIT, SDL_QUIT) > 0) {
++        extern void ps3_host_quit(const char* why);   /* cellSysutil.c */
++        ps3_host_quit("SIGTERM / SIGINT");
++    }
+     while ((got = SDL_PeepEvents(ev, 32, SDL_GETEVENT, SDL_JOYAXISMOTION, SDL_JOYAXISMOTION + 0xFF)) > 0)
+         for (int i = 0; i < got; i++)
+             if (ev[i].type == SDL_JOYDEVICEADDED || ev[i].type == SDL_JOYDEVICEREMOVED ||
+@@ -562,9 +1398,14 @@ static void pad_sdl_hotplug(int force)
  
  static void pad_poll_sdl2(void)
  {
@@ -6534,7 +6549,7 @@ index afdd93d..b0e00ff 100644
      for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
          SDL_GameController* gc = s_sdl_controllers[i];
          if (!gc) {
-@@ -575,43 +1408,59 @@ static void pad_poll_sdl2(void)
+@@ -575,43 +1416,59 @@ static void pad_poll_sdl2(void)
  
          s_host_state[i].connected = 1;
  
@@ -6623,7 +6638,7 @@ index afdd93d..b0e00ff 100644
  
          /* Pressure: SDL has digital buttons, so 0 or 255 */
          s_host_state[i].press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
-@@ -629,6 +1478,7 @@ static void pad_poll_sdl2(void)
+@@ -629,6 +1486,7 @@ static void pad_poll_sdl2(void)
  
  static void pad_init_backend(void)
  {
@@ -6631,7 +6646,7 @@ index afdd93d..b0e00ff 100644
      if (!s_sdl_inited) {
          if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0) {
              /* The game is not always the focused app: on macOS its window
-@@ -643,6 +1493,17 @@ static void pad_init_backend(void)
+@@ -643,6 +1501,17 @@ static void pad_init_backend(void)
               * cared. SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=0 in the
               * environment still wins over this. */
              SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -6649,7 +6664,7 @@ index afdd93d..b0e00ff 100644
              SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
          }
          s_sdl_inited = 1;
-@@ -650,6 +1511,11 @@ static void pad_init_backend(void)
+@@ -650,6 +1519,11 @@ static void pad_init_backend(void)
      memset(s_sdl_controllers, 0, sizeof(s_sdl_controllers));
      for (int p = 0; p < PAD_MAX_HOST_PORTS; p++) s_sdl_ids[p] = -1;
  
@@ -6661,7 +6676,7 @@ index afdd93d..b0e00ff 100644
      /* Open any controllers already connected */
      pad_sdl_hotplug(1);
  }
-@@ -684,7 +1550,13 @@ static void pad_shutdown_backend(void)
+@@ -684,7 +1558,13 @@ static void pad_shutdown_backend(void)
  static unsigned long long pad_now_ms(void)
  {
  #ifdef _WIN32
@@ -6676,7 +6691,7 @@ index afdd93d..b0e00ff 100644
  #else
      struct timespec ts;
      clock_gettime(CLOCK_MONOTONIC, &ts);
-@@ -693,6 +1565,240 @@ static unsigned long long pad_now_ms(void)
+@@ -693,6 +1573,240 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -6917,7 +6932,7 @@ index afdd93d..b0e00ff 100644
  static void pad_poll_backend(void)
  {
      static unsigned long long s_last_ms = 0;
-@@ -706,17 +1812,63 @@ static void pad_poll_backend(void)
+@@ -706,17 +1820,63 @@ static void pad_poll_backend(void)
      for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) s_data_fresh[_i] = 1;
  
  #if PAD_BACKEND_XINPUT
@@ -6983,7 +6998,7 @@ index afdd93d..b0e00ff 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -735,6 +1887,7 @@ s32 cellPadInit(u32 max_connect)
+@@ -735,6 +1895,7 @@ s32 cellPadInit(u32 max_connect)
      if (max_connect == 0 || max_connect > 127)
          return CELL_PAD_ERROR_INVALID_PARAMETER;
  
@@ -6991,7 +7006,7 @@ index afdd93d..b0e00ff 100644
      s_pad_initialized = 1;
      s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
      memset(s_port_setting, 0, sizeof(s_port_setting));
-@@ -865,6 +2018,7 @@ skip_inject: ;
+@@ -865,6 +2026,7 @@ skip_inject: ;
          len = CELL_PAD_LEN_CHANGE_PRESS_ON;
  
      data->len = len;
@@ -6999,7 +7014,7 @@ index afdd93d..b0e00ff 100644
      /* Finalize this call's packet freshness before any injected hold budget
       * advances. len=0 drain reads still build the ordinary payload, but do
       * not consume a PAD_FILE report. See the emission contract below. */
-@@ -875,6 +2029,17 @@ skip_inject: ;
+@@ -875,6 +2037,17 @@ skip_inject: ;
              if (!s_data_fresh[port_no]) data->len = 0;   /* nothing new: end the drain */
              else                        s_data_fresh[port_no] = 0;
          }
@@ -7017,7 +7032,7 @@ index afdd93d..b0e00ff 100644
      }
      /* button[0] is reserved and 0 on hardware; button[1] carries the pad mode
       * in its high nibble (0x7) and len/2 in its low one. GH3 drops any packet
-@@ -947,13 +2112,28 @@ skip_inject: ;
+@@ -947,13 +2120,28 @@ skip_inject: ;
                    held[i]--;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(ev[i].mask & 0xFF);
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
@@ -7048,7 +7063,7 @@ index afdd93d..b0e00ff 100644
      /* PAD_FILE=<path> -- closed-loop input. Each poll, if the file holds a
       * button mask (same encoding as PAD_SCRIPT), press it for a fixed number
       * of positive guest reports and empty the file on admission. A driver
-@@ -967,6 +2147,7 @@ skip_inject: ;
+@@ -967,6 +2155,7 @@ skip_inject: ;
       *   echo 0x0040 4 > pad.txt  # DOWN for 4 reports (menus auto-repeat a
       *                            # long hold; the default is 40)
       */
@@ -7056,7 +7071,7 @@ index afdd93d..b0e00ff 100644
      { static int s_pf = -1; static char pf_path[512];
        static unsigned held_mask = 0; static int held_n = 0;
        if (s_pf < 0) { const char* e = getenv("PAD_FILE");
-@@ -978,11 +2159,25 @@ skip_inject: ;
+@@ -978,11 +2167,25 @@ skip_inject: ;
                if (f) {
                    char buf[64]; buf[0] = 0;
                    if (fgets(buf, sizeof buf, f)) {
@@ -7087,7 +7102,7 @@ index afdd93d..b0e00ff 100644
                    }
                    fclose(f);
                    if (held_n > 0) { FILE* w = fopen(pf_path, "wb"); if (w) fclose(w); }
-@@ -1015,6 +2210,30 @@ skip_inject: ;
+@@ -1015,6 +2218,30 @@ skip_inject: ;
        if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
@@ -7118,7 +7133,7 @@ index afdd93d..b0e00ff 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
-@@ -1042,8 +2261,16 @@ skip_inject: ;
+@@ -1042,8 +2269,16 @@ skip_inject: ;
                  fprintf(stderr, "[PADSWEEP] step %d: l=(%u,%u) r=(%u,%u)%c", k,
                          steps[k][0], steps[k][1], steps[k][2], steps[k][3], 10); } }
          } } }
@@ -7137,7 +7152,7 @@ index afdd93d..b0e00ff 100644
      data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_X]  = hs->analog_lx;
      data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_Y]  = hs->analog_ly;
  
-@@ -1122,6 +2349,21 @@ emit:
+@@ -1122,6 +2357,21 @@ emit:
       * PAD_ALWAYS_CHANGE=1 restores the old always-a-packet behaviour. */
      {
          unsigned int ea = (unsigned int)(uintptr_t)data_guest;
@@ -7159,7 +7174,7 @@ index afdd93d..b0e00ff 100644
          vm_write32((unsigned long long)ea + 0, (unsigned int)data->len);   /* len (s32) */
          for (int _i = 0; _i < CELL_PAD_MAX_CODES; _i++)                    /* button[] u16 */
              vm_write16((unsigned long long)ea + 4 + (unsigned int)_i * 2, data->button[_i]);
-@@ -1395,18 +2637,26 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1395,18 +2645,26 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  
      param = GUEST_PTR(param, CellPadActParam*);
  
@@ -7191,7 +7206,7 @@ index afdd93d..b0e00ff 100644
          XINPUT_VIBRATION vib;
          vib.wLeftMotorSpeed  = (WORD)lo;
          vib.wRightMotorSpeed = (WORD)hi;
-@@ -1419,7 +2669,7 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1419,7 +2677,7 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
      pad_sdl_rumble_send((int)port_no);
      pad_unlock();
  #endif
@@ -16133,7 +16148,7 @@ index 2579117..9e1341d 100644
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index ad8db0b..f98eed1 100644
+index ad8db0b..bf4520d 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -52,8 +52,21 @@
@@ -16258,7 +16273,23 @@ index ad8db0b..f98eed1 100644
                                                         mipmapped:NO];
      td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
      s_offscreen = [s_dev newTextureWithDescriptor:td];
-@@ -643,6 +720,26 @@ static void host_watch_launcher(pid_t pid)
+@@ -606,10 +683,15 @@ static IOSurfaceRef host_lookup_surface(mach_port_t port)
+ }
+ 
+ /* The window is gone: the pump reports it the way it reports a closed window. */
++/* cellSysutil.c; weak so the backend's own tests link without it. */
++extern void ps3_host_quit(const char* why) __attribute__((weak_import));
+ static void host_note_gone(const char* why)
+ {
+     if (atomic_exchange(&s_closed, 1)) return;
+     fprintf(stderr, "[RSX metal] host window gone (%s)\n", why);
++    /* The window is gone: end the game as the console's Quit Game does (REQUEST_EXITGAME, a
++     * save being written finishes, exit 0) instead of running on until the launcher's SIGKILL. */
++    if (ps3_host_quit) ps3_host_quit(why);
+ }
+ 
+ /* The launcher closes its window by setting `closed` and sending SIGTERM. A
+@@ -643,6 +725,26 @@ static void host_watch_launcher(pid_t pid)
   * size already matches). Called at init, by the image an exec brought up
   * just the same, and by a vtable-path resize with nothing in flight. On
   * failure the previous attachment, if any, stays. */
@@ -16285,7 +16316,7 @@ index ad8db0b..f98eed1 100644
  static int host_attach(u32 w, u32 h)
  {
      const char* name = getenv(RSX_HOST_SURFACE_ENV);
-@@ -712,6 +809,7 @@ static int host_attach(u32 w, u32 h)
+@@ -712,6 +814,7 @@ static int host_attach(u32 w, u32 h)
          }
          ok = tex[i] != nil;
      }
@@ -16293,7 +16324,7 @@ index ad8db0b..f98eed1 100644
      const u32 rw = m->width, rh = m->height, gen = m->generation;
      mach_msg_destroy(&in.m.header);         /* the mapping and the textures hold their own references */
      if (!ok) {
-@@ -826,13 +924,255 @@ static void window_close_observer_start(NSWindow* window)
+@@ -826,13 +929,255 @@ static void window_close_observer_start(NSWindow* window)
          }];
  }
  
@@ -16551,7 +16582,7 @@ index ad8db0b..f98eed1 100644
          initWithContentRect:frame
                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                               NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
-@@ -843,6 +1183,19 @@ static int create_window_impl(const char* title)
+@@ -843,6 +1188,19 @@ static int create_window_impl(const char* title)
  
      [s_window setTitle:[NSString stringWithUTF8String:(title ? title : "ps3recomp")]];
      [s_window center];
@@ -16571,7 +16602,7 @@ index ad8db0b..f98eed1 100644
  
      /* A window handed over by the executable that spawned this one (see
       * rsx_metal_backend_export_window_state): open where it was. */
-@@ -858,15 +1211,39 @@ static int create_window_impl(const char* title)
+@@ -858,15 +1216,39 @@ static int create_window_impl(const char* title)
      s_layer.device          = s_dev;
      s_layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
      s_layer.framebufferOnly = YES;
@@ -16612,7 +16643,7 @@ index ad8db0b..f98eed1 100644
      fps_start();
      return 0;
  }
-@@ -2501,13 +2878,19 @@ static void release_surfaces(void)
+@@ -2501,13 +2883,19 @@ static void release_surfaces(void)
  static u32 s_eng_obj_free[ENG_MAX_OBJECTS];
  static u32 s_eng_obj_free_count;
  static u8 s_eng_obj_retired[ENG_MAX_OBJECTS];
@@ -16632,7 +16663,7 @@ index ad8db0b..f98eed1 100644
  static EngPipeline s_eng_pipe[ENG_MAX_PIPES];
  static u32 s_eng_pipe_count;
  
-@@ -2584,8 +2967,9 @@ static void release_surfaces(void)
+@@ -2584,8 +2972,9 @@ static void release_surfaces(void)
  static id<MTLRenderPipelineState> s_eng_blit_pso;
  static MTLPixelFormat             s_eng_blit_pso_fmt;
  static id<MTLRenderPipelineState> s_eng_depth_pso;
@@ -16644,7 +16675,7 @@ index ad8db0b..f98eed1 100644
  static int                        s_eng_depth_color_failed;
  static id<MTLSamplerState>        s_eng_point_sampler;
  static id<MTLSamplerState>        s_eng_linear_sampler;   /* FXAA's taps */
-@@ -2601,14 +2985,54 @@ static void release_surfaces(void)
+@@ -2601,14 +2990,54 @@ static void release_surfaces(void)
   * sample (and gamma) it always was.
   *   PS3_AA=fxaa        FXAA 3.11 (quality preset 29) on the display buffer,
   *                      at the guest's resolution, before the present
@@ -16700,7 +16731,7 @@ index ad8db0b..f98eed1 100644
  
  static float eng_sharpen_from(const char* e)
  {
-@@ -2616,20 +3040,205 @@ static float eng_sharpen_from(const char* e)
+@@ -2616,20 +3045,205 @@ static float eng_sharpen_from(const char* e)
      const double v = strtod(e, NULL);
      return !(v > 0.0) ? 0.0f : v > 1.0 ? 1.0f : (float)v;
  }
@@ -16911,7 +16942,7 @@ index ad8db0b..f98eed1 100644
  }
  
  static NSString* const kEngHelperMSL = @
-@@ -2658,9 +3267,10 @@ static void eng_post_options(void)
+@@ -2658,9 +3272,10 @@ static void eng_post_options(void)
  "}\n"
  /* The present: optional contrast-adaptive sharpening (AMD FidelityFX CAS,
   * the non-scaling form: a cross whose negative weight grows where the 3x3
@@ -16925,7 +16956,7 @@ index ad8db0b..f98eed1 100644
  "fragment float4 eng_present_fs(BOut i [[stage_in]],\n"
  "                               texture2d<float> src [[texture(0)]],\n"
  "                               sampler s [[sampler(0)]],\n"
-@@ -2685,6 +3295,73 @@ static void eng_post_options(void)
+@@ -2685,6 +3300,73 @@ static void eng_post_options(void)
  "        float3 w = amp * (-1.0 / mix(8.0, 5.0, saturate(p.sharp)));\n"
  "        c.rgb = saturate((b * w + l * w + r * w + h * w + e) / (1.0 + 4.0 * w));\n"
  "    }\n"
@@ -16999,7 +17030,7 @@ index ad8db0b..f98eed1 100644
  "    if (p.gamma != 1.0) c.rgb = pow(max(c.rgb, 0.0), float3(p.gamma));\n"
  "    return c;\n"
  "}\n"
-@@ -2815,6 +3492,23 @@ static void eng_post_options(void)
+@@ -2815,6 +3497,23 @@ static void eng_post_options(void)
  "fragment float4 eng_depth_d16_fs(AOut i [[stage_in]],\n"
  "                                 depth2d<float> src [[texture(0)]]) {\n"
  "    return float4(float(eng_depth_round(src.read(uint2(i.pos.xy)), 16u)) / 65535.0, 0.0, 0.0, 1.0);\n"
@@ -17023,7 +17054,7 @@ index ad8db0b..f98eed1 100644
  "}\n";
  
  static u32 eng_obj_add(id<MTLTexture> t)
-@@ -2828,6 +3522,7 @@ static u32 eng_obj_add(id<MTLTexture> t)
+@@ -2828,6 +3527,7 @@ static u32 eng_obj_add(id<MTLTexture> t)
          slot = s_eng_obj_count++;
      }
      s_eng_obj[slot] = t;
@@ -17031,7 +17062,7 @@ index ad8db0b..f98eed1 100644
      return slot + 1;
  }
  
-@@ -2836,6 +3531,71 @@ static u32 eng_obj_add(id<MTLTexture> t)
+@@ -2836,6 +3536,71 @@ static u32 eng_obj_add(id<MTLTexture> t)
      return (handle && handle <= s_eng_obj_count) ? s_eng_obj[handle - 1] : nil;
  }
  
@@ -17103,7 +17134,7 @@ index ad8db0b..f98eed1 100644
  /* Recorded commands resolve numeric handles during encoding. Do not recycle
   * a released slot until those commands have acquired their Metal resources.
   * Submitted command buffers retain the objects for the GPU's remaining work. */
-@@ -2927,6 +3687,7 @@ static void eng_stage_hand_off(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -2927,6 +3692,7 @@ static void eng_stage_hand_off(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
      s_eng_stage_cap = 0;
  }
  
@@ -17111,7 +17142,7 @@ index ad8db0b..f98eed1 100644
  static int eng_stage_reserve(u32 bytes, u32* out_off)
  {
      const u32 start = (s_eng_stage_used + ENG_ALIGN - 1u) & ~(ENG_ALIGN - 1u);
-@@ -2937,7 +3698,13 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
+@@ -2937,7 +3703,13 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
          return eng_stage_reserve(bytes, out_off);
      }
      if (start + bytes > s_eng_stage_cap) {
@@ -17125,7 +17156,7 @@ index ad8db0b..f98eed1 100644
          while (start + bytes > cap) cap *= 2u;
          /* A pool of its own: the caller is the FIFO walker, a PPU host thread
           * with no autorelease pool, and the driver's -contents autoreleases
-@@ -2957,6 +3724,7 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
+@@ -2957,6 +3729,7 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
      }
      *out_off = start;
      s_eng_stage_used = start + bytes;
@@ -17133,7 +17164,7 @@ index ad8db0b..f98eed1 100644
      return 1;
  }
  
-@@ -3022,6 +3790,7 @@ static void eng_shutdown(void* user)
+@@ -3022,6 +3795,7 @@ static void eng_shutdown(void* user)
      s_eng_blit_pso = nil;
      s_eng_depth_pso = nil;
      s_eng_depth_color_pso[0] = s_eng_depth_color_pso[1] = nil;
@@ -17141,7 +17172,7 @@ index ad8db0b..f98eed1 100644
      s_eng_depth_color_failed = 0;
      for (u32 k = 0; k < s_eng_clear_pso_count; k++) s_eng_clear_pso[k].pso = nil;
      s_eng_clear_pso_count = 0;
-@@ -3031,6 +3800,15 @@ static void eng_shutdown(void* user)
+@@ -3031,6 +3805,15 @@ static void eng_shutdown(void* user)
      s_eng_linear_sampler = nil;
      s_eng_fxaa_pso = nil;
      s_eng_fxaa_tex = nil;
@@ -17157,7 +17188,7 @@ index ad8db0b..f98eed1 100644
      s_eng_active = 0;
      s_eng_encoding_failed = 0;
      s_eng_checked_completed = 0;
-@@ -3126,9 +3904,10 @@ static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
+@@ -3126,9 +3909,10 @@ static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
  {
      (void)user;
      if (!s_dev || !w || !h) return 0;
@@ -17169,7 +17200,7 @@ index ad8db0b..f98eed1 100644
                                                         mipmapped:NO];
      /* PixelFormatView because a unit sampling this target wears its own
       * TEXTURE_CONTROL1 crossbar as a view swizzle. */
-@@ -3136,10 +3915,19 @@ static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
+@@ -3136,10 +3920,19 @@ static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
                 MTLTextureUsagePixelFormatView;
      id<MTLTexture> t = [s_dev newTextureWithDescriptor:td];
      if (!t) return 0;
@@ -17191,7 +17222,7 @@ index ad8db0b..f98eed1 100644
  }
  
  static u32 eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_format)
-@@ -3162,7 +3950,7 @@ static u32 eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_format)
+@@ -3162,7 +3955,7 @@ static u32 eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_format)
                                   swizzle:MTLTextureSwizzleChannelsMake(
                                               swizzle_sel(sel[1]), swizzle_sel(sel[2]),
                                               swizzle_sel(sel[3]), swizzle_sel(sel[0]))];
@@ -17200,7 +17231,7 @@ index ad8db0b..f98eed1 100644
      if (!handle) return 0;
      s_eng_view[s_eng_view_count].surface = surface;
      s_eng_view[s_eng_view_count].remap   = remap;
-@@ -3185,7 +3973,7 @@ static u32 eng_color_snapshot(void* user, u32 surface)
+@@ -3185,7 +3978,7 @@ static u32 eng_color_snapshot(void* user, u32 surface)
                           width:[src width] height:[src height] mipmapped:NO];
      td.storageMode = MTLStorageModePrivate;
      td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
@@ -17209,7 +17240,7 @@ index ad8db0b..f98eed1 100644
      if (!copy) { s_eng_dropped++; return 0; }
      EngRecord* r = &s_eng_rec[s_eng_rec_count++];
      memset(r, 0, sizeof *r);
-@@ -3201,21 +3989,21 @@ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
+@@ -3201,21 +3994,21 @@ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
      if (!s_dev || !w || !h) return 0;
      MTLTextureDescriptor* td =
          [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTL_DEPTH_FORMAT
@@ -17236,7 +17267,7 @@ index ad8db0b..f98eed1 100644
      if (!eng_obj(depth) || !s_eng_helper_lib) return 0;
      if (s_eng_rec_count >= ENG_MAX_RECORDS) { s_eng_dropped++; return 0; }
      if (!s_eng_depth_pso) {
-@@ -3236,7 +4024,7 @@ static u32 eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+@@ -3236,7 +4029,7 @@ static u32 eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
                                                             width:w height:h
                                                         mipmapped:NO];
      td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
@@ -17245,7 +17276,7 @@ index ad8db0b..f98eed1 100644
      if (!dst) return 0;
  
      EngRecord* r = &s_eng_rec[s_eng_rec_count++];
-@@ -3247,15 +4035,33 @@ static u32 eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+@@ -3247,15 +4040,33 @@ static u32 eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
      return dst;
  }
  
@@ -17282,7 +17313,7 @@ index ad8db0b..f98eed1 100644
      if (!s_eng_depth_color_pso[k]) {
          NSError* err = nil;
          id<MTLLibrary> lib = [s_dev newLibraryWithSource:
-@@ -3263,7 +4069,7 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
+@@ -3263,7 +4074,7 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
                                                   options:nil error:&err];
          MTLRenderPipelineDescriptor* pd = [MTLRenderPipelineDescriptor new];
          pd.vertexFunction   = [lib newFunctionWithName:@"eng_depth_color_vs"];
@@ -17291,7 +17322,7 @@ index ad8db0b..f98eed1 100644
          pd.colorAttachments[0].pixelFormat = formats[k];
          if (lib) s_eng_depth_color_pso[k] = [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
          if (!s_eng_depth_color_pso[k]) {
-@@ -3294,8 +4100,19 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
+@@ -3294,8 +4105,19 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
  
  /* ---- pipelines ----------------------------------------------------------- */
  
@@ -17311,7 +17342,7 @@ index ad8db0b..f98eed1 100644
  {
      const u64 hash = fnv1a64(hlsl, (u32)strlen(hlsl), 1469598103934665603ull);
      for (u32 i = 0; i < s_eng_func_count; i++)
-@@ -3321,21 +4138,20 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
+@@ -3321,21 +4143,20 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
      return fn;
  }
  
@@ -17344,7 +17375,7 @@ index ad8db0b..f98eed1 100644
  
      /* Attribute index is the layout SLOT, not the guest's ATTRn number.
       * glslang numbers an HLSL input struct's members in DECLARATION order --
-@@ -3411,10 +4227,51 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+@@ -3411,10 +4232,51 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
      NSError* err = nil;
      id<MTLRenderPipelineState> pso =
          [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
@@ -17398,7 +17429,7 @@ index ad8db0b..f98eed1 100644
      }
  
      /* Depth and stencil are pipeline state in D3D12 and an encoder object in
-@@ -3452,6 +4309,7 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+@@ -3452,6 +4314,7 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
      const u32 slot = s_eng_pipe_count++;
      s_eng_pipe[slot].pso = pso;
      s_eng_pipe[slot].ds  = ds;
@@ -17406,7 +17437,7 @@ index ad8db0b..f98eed1 100644
      /* CULL_FACE FRONT=0x0404 BACK=0x0405 FRONT_AND_BACK=0x0408 (front here,
       * as in the D3D12 engine); FRONT_FACE CW=0x0900 CCW=0x0901. */
      s_eng_pipe[slot].cull = MTLCullModeNone;
-@@ -3463,6 +4321,29 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+@@ -3463,6 +4326,29 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
      s_eng_pipe[slot].winding = (rs->front_face == 0x0901u)
                                     ? MTLWindingCounterClockwise
                                     : MTLWindingClockwise;
@@ -17436,7 +17467,7 @@ index ad8db0b..f98eed1 100644
      return slot + 1;
  }
  
-@@ -3598,15 +4479,25 @@ static void eng_bind_vertex_textures(void* user, const u32* textures,
+@@ -3598,15 +4484,25 @@ static void eng_bind_vertex_textures(void* user, const u32* textures,
  static void eng_set_viewport(void* user, float x, float y, float w, float h)
  {
      (void)user;
@@ -17466,7 +17497,7 @@ index ad8db0b..f98eed1 100644
  }
  
  static void eng_set_stencil_ref(void* user, u32 ref)
-@@ -3621,7 +4512,9 @@ static void eng_set_stencil_ref(void* user, u32 ref)
+@@ -3621,7 +4517,9 @@ static void eng_set_stencil_ref(void* user, u32 ref)
  static void eng_set_depth_bias(void* user, float slope, float units, u32 depth_bits)
  {
      (void)user;
@@ -17477,7 +17508,7 @@ index ad8db0b..f98eed1 100644
      s_eng_pending.depth_bias  = depth_bits == 16u ? units * 256.0f : units;
  }
  
-@@ -3686,8 +4579,7 @@ static void eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
+@@ -3686,8 +4584,7 @@ static void eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
   * load action, which would clear the whole attachment. */
  static void eng_clear_rect_into(EngRecord* r, u32 x, u32 y, u32 w, u32 h)
  {
@@ -17487,7 +17518,7 @@ index ad8db0b..f98eed1 100644
  }
  
  static void eng_clear_color_rect(void* user, u32 surface, const float rgba[4],
-@@ -3718,6 +4610,14 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+@@ -3718,6 +4615,14 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
  {
      if (!r->pipeline || r->pipeline > s_eng_pipe_count) { s_eng_encoding_failed = 1; return; }
      const EngPipeline* p = &s_eng_pipe[r->pipeline - 1];
@@ -17502,7 +17533,7 @@ index ad8db0b..f98eed1 100644
      if (!p->pso) { s_eng_encoding_failed = 1; return; }
      [enc setRenderPipelineState:p->pso];
      [enc setDepthStencilState:p->ds];
-@@ -3947,8 +4847,9 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3947,8 +4852,9 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              id<MTLTexture> src = eng_obj(r->depth);
              id<MTLTexture> dst = eng_obj(r->resolve_dst);
              /* The destination's format names the conversion. */
@@ -17513,7 +17544,7 @@ index ad8db0b..f98eed1 100644
              if (!src || !pso) { s_eng_encoding_failed = 1; continue; }
              MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
              rp.colorAttachments[0].texture     = dst;
-@@ -3959,6 +4860,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3959,6 +4865,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              s_ft_resolves++;
              [e setRenderPipelineState:pso];
              [e setFragmentTexture:src atIndex:0];
@@ -17521,7 +17552,7 @@ index ad8db0b..f98eed1 100644
              [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
              [e endEncoding];
              continue;
-@@ -4190,23 +5092,203 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -4190,23 +5097,203 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
      return s_eng_fxaa_tex;
  }
  
@@ -17730,7 +17761,7 @@ index ad8db0b..f98eed1 100644
          pd.colorAttachments[0].pixelFormat = [dst pixelFormat];
          NSError* err = nil;
          s_eng_blit_pso = [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
-@@ -4216,6 +5298,7 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+@@ -4216,6 +5303,7 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
              return;
          }
          s_eng_blit_pso_fmt = [dst pixelFormat];
@@ -17738,7 +17769,7 @@ index ad8db0b..f98eed1 100644
      }
      MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
      rp.colorAttachments[0].texture     = dst;
-@@ -4225,15 +5308,34 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+@@ -4225,15 +5313,34 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
      if (!e) return;
      [e setRenderPipelineState:s_eng_blit_pso];
      [e setFragmentTexture:src atIndex:0];
@@ -17778,7 +17809,7 @@ index ad8db0b..f98eed1 100644
      [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
      [e endEncoding];
  }
-@@ -4340,13 +5442,33 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -4340,13 +5447,33 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          }
          s_eng_rec_count  = 0;
          s_eng_stage_used = 0;
@@ -17813,7 +17844,7 @@ index ad8db0b..f98eed1 100644
  {
      const char* path = getenv("PS3RECOMP_METAL_FRAME_DUMP");
      if (!path || !*path) return;
-@@ -4365,6 +5487,17 @@ static void eng_dump_frame(id<MTLTexture> src)
+@@ -4365,6 +5492,17 @@ static void eng_dump_frame(id<MTLTexture> src)
      }
      [src getBytes:rgba bytesPerRow:w * 4
        fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
@@ -17831,7 +17862,7 @@ index ad8db0b..f98eed1 100644
      FILE* f = fopen(path, "wb");
      if (f) {
          fprintf(f, "P6\n%zu %zu\n255\n", w, h);
-@@ -4389,7 +5522,7 @@ static void eng_present(void* user, u32 surface)
+@@ -4389,7 +5527,7 @@ static void eng_present(void* user, u32 surface)
      id<MTLTexture> src = eng_obj(surface);
      if (!src) { eng_encode_and_commit(nil); return; }
      eng_encode_and_commit(src);
@@ -17840,7 +17871,7 @@ index ad8db0b..f98eed1 100644
  }
  
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
-@@ -4398,8 +5531,24 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -4398,8 +5536,24 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      (void)user;
      id<MTLTexture> t = eng_obj(surface);
      if (!t || !out || !out_pitch || !w || !h) return;
@@ -17866,7 +17897,7 @@ index ad8db0b..f98eed1 100644
      [t getBytes:out bytesPerRow:out_pitch
       fromRegion:MTLRegionMake2D(x, y, w, h) mipmapLevel:0];
      if (ft_t0) ps3_ft_span(PS3_FT_READBACK, 0, w, h, ft_t0, ps3_ft_now());
-@@ -4409,8 +5558,29 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -4409,8 +5563,29 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
   * requested rectangle to CPU-coherent shared storage. Resolving only the ROI
   * would rescale the source and change its coordinates. Never expose bytes
   * until both the resolve and the copy have completed successfully. */
@@ -17896,7 +17927,7 @@ index ad8db0b..f98eed1 100644
  {
      id<MTLTexture> src = eng_obj(depth);
      if (!s_dev || !s_queue || !src || !out || !w || !h ||
-@@ -4433,8 +5603,7 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
+@@ -4433,8 +5608,7 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
                                                       options:MTLResourceStorageModeShared];
          id<MTLBuffer> staging = s_eng_depth_staging;
          if (!staging || ![staging contents]) return -1;
@@ -17906,7 +17937,7 @@ index ad8db0b..f98eed1 100644
          if (!snap) return -1;
          eng_encode_and_commit(nil);
          if (!s_eng_checked_completed) { eng_obj_release(user, snap); return -1; }
-@@ -4462,6 +5631,87 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
+@@ -4462,6 +5636,87 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
      }
  }
  
@@ -17994,7 +18025,7 @@ index ad8db0b..f98eed1 100644
  static const rsx_draw_backend s_engine_backend = {
      .user                 = NULL,
      .init                 = eng_init,
-@@ -4500,6 +5750,10 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
+@@ -4500,6 +5755,10 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
      .clear_depth_stencil_rect = eng_clear_depth_stencil_rect,
      .present              = eng_present,
      .readback             = eng_readback,
@@ -18005,7 +18036,7 @@ index ad8db0b..f98eed1 100644
  };
  
  /* ---- public API ---------------------------------------------------------- */
-@@ -4512,6 +5766,10 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -4512,6 +5771,10 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
  
          const char* hl = getenv("PS3RECOMP_METAL_HEADLESS");
          s_headless = (hl && *hl && *hl != '0');
@@ -18016,7 +18047,7 @@ index ad8db0b..f98eed1 100644
  
          s_dev = MTLCreateSystemDefaultDevice();
          if (!s_dev) {
-@@ -4536,7 +5794,7 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -4536,7 +5799,7 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
          s_host = !s_headless && hs && *hs;
          if (s_host) {
              atomic_store(&s_closed, 0);
@@ -18025,7 +18056,7 @@ index ad8db0b..f98eed1 100644
                  fprintf(stderr, "[RSX metal] no host window; opening a window of our own\n");
                  host_detach();
              }
-@@ -4598,6 +5856,33 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -4598,6 +5861,33 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
          } else {
              rsx_set_backend(&s_backend_vtable);
          }
@@ -18059,7 +18090,7 @@ index ad8db0b..f98eed1 100644
          fprintf(stderr, "[RSX metal] %s on %s (%ux%u), guest shaders %s, %s path\n",
                  s_headless ? "headless" : s_host ? "host-surface" : "windowed",
                  [[s_dev name] UTF8String], s_width, s_height,
-@@ -4655,14 +5940,25 @@ void rsx_metal_backend_shutdown(void)
+@@ -4655,14 +5945,25 @@ void rsx_metal_backend_shutdown(void)
          s_depth     = nil;
          s_queue     = nil;
          s_dev       = nil;
@@ -18085,7 +18116,7 @@ index ad8db0b..f98eed1 100644
      @autoreleasepool {
          for (;;) {
              NSEvent* ev = [NSApp nextEventMatchingMask:NSEventMaskAny
-@@ -4682,8 +5978,25 @@ static int pump_messages_impl(void)
+@@ -4682,8 +5983,25 @@ static int pump_messages_impl(void)
                  }
                  continue;
              }
@@ -41468,10 +41499,17 @@ index 0000000..8a239ff
 +  ]
 +}
 diff --git a/tools/host_window/host_window.m b/tools/host_window/host_window.m
-index 6a139ac..b483949 100644
+index 6a139ac..0da534d 100644
 --- a/tools/host_window/host_window.m
 +++ b/tools/host_window/host_window.m
-@@ -18,8 +18,34 @@
+@@ -12,14 +12,40 @@
+  * window never goes away.
+  *
+  *   window closed / Cmd-Q / SIGINT, SIGTERM, SIGHUP here
+- *       -> `closed` in the control page, SIGTERM to the game, SIGKILL 3 s later
++ *       -> `closed` in the control page, SIGTERM to the game, SIGKILL 15 s later
+  *   game exits -> exit with its status (0 after a close asked for here)
+  *
   * The game process has no window and never touches NSApplication, so it gets
   * no Dock icon; this process is the app the user sees.
   *
@@ -41694,7 +41732,7 @@ index 6a139ac..b483949 100644
          [blit endEncoding];
          const uint64_t published = atomic_load(&g.ctl->publish_time[slot]);
          [drawable addPresentedHandler:^(id<MTLDrawable> d) { note_presented(d.presentedTime, published); }];
-@@ -403,6 +553,7 @@ static void begin_close(const char* why)
+@@ -403,11 +553,15 @@ static void begin_close(const char* why)
      if (g.closing) return;
      g.closing = 1;
      fprintf(stderr, "[host window] closing (%s)\n", why);
@@ -41702,7 +41740,16 @@ index 6a139ac..b483949 100644
      if (g.ctl) atomic_store(&g.ctl->closed, 1);
      if (g.child <= 0) exit(0);
      kill(g.child, SIGTERM);
-@@ -462,9 +613,143 @@ - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)app
+     const pid_t pid = g.child;
+-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
++    /* The game quits as the console's Quit Game does (cellSysutil.c ps3_host_quit): up to
++     * PS3_QUIT_GRACE_MS (3 s) for the title, then up to 10 s for a save being written. A 3 s
++     * SIGKILL cut both short. */
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+         if (g.child == pid) {
+             fprintf(stderr, "[host window] pid %d still running; SIGKILL\n", pid);
+             kill(pid, SIGKILL);
+@@ -462,9 +616,143 @@ - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)app
      begin_close("quit");
      return NSTerminateCancel;               /* exit follows the game's */
  }
@@ -41847,7 +41894,7 @@ index 6a139ac..b483949 100644
  static void build_menu(NSString* title)
  {
      NSMenu* bar = [NSMenu new];
-@@ -480,14 +765,34 @@ static void build_menu(NSString* title)
+@@ -480,14 +768,34 @@ static void build_menu(NSString* title)
      NSMenuItem* fs = [view_menu addItemWithTitle:@"Enter Full Screen"
                                            action:@selector(toggleFullScreen:) keyEquivalent:@"f"];
      fs.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagControl;
@@ -41884,7 +41931,7 @@ index 6a139ac..b483949 100644
                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                               NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
                      backing:NSBackingStoreBuffered
-@@ -495,15 +800,48 @@ static void make_window(u_int32_t w, u_int32_t h)
+@@ -495,15 +803,48 @@ static void make_window(u_int32_t w, u_int32_t h)
      g.window.releasedWhenClosed = NO;
      g.window.title = g.title;
      g.window.collectionBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
@@ -41933,7 +41980,7 @@ index 6a139ac..b483949 100644
  }
  
  static int usage(const char* self)
-@@ -518,6 +856,13 @@ int main(int argc, char** argv)
+@@ -518,6 +859,13 @@ int main(int argc, char** argv)
          const char* title = getenv("PS3_TITLE");
          if (!title || !*title) title = HOST_WINDOW_TITLE;
          u_int32_t w = 1280, h = 720;
@@ -41947,7 +41994,7 @@ index 6a139ac..b483949 100644
          int i = 1;
          for (; i < argc; i++) {
              if (!strcmp(argv[i], "--")) { i++; break; }
-@@ -595,6 +940,17 @@ int main(int argc, char** argv)
+@@ -595,6 +943,17 @@ int main(int argc, char** argv)
          dispatch_source_set_event_handler(proc, ^{ child_exited(); });
          dispatch_resume(proc);
  
