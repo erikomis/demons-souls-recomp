@@ -9,6 +9,7 @@ whatever SETUP.bat would ask, this either decides the same way or stops with a m
       game/PS3_GAME/USRDIR/EBOOT.elf against setup.py's EBOOT_ELF_SHA256 (--any: a warning only)
   python mac/setup_steps.py toolkit     setup.step_ps3recomp(): deps/ps3recomp + this port's patch
   python mac/setup_steps.py lift        setup.step_lift(): port/recompiled, port/spu + lifted-code.patch
+  python mac/setup_steps.py sync        update existing patches before an incremental build
 """
 import os
 import subprocess
@@ -19,6 +20,7 @@ sys.path.insert(0, os.path.join(ROOT, 'setup'))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 os.chdir(ROOT)
 import setup  # noqa: E402  (setup/setup.py; its main() is not run)
+import patch_sync  # noqa: E402
 import iso_extract  # noqa: E402
 
 
@@ -127,6 +129,12 @@ def main(argv):
         if not setup.find_eboot_elf():
             fail('no game/PS3_GAME/USRDIR/EBOOT.elf: run the decrypt step first')
         setup.step_lift()
+    elif cmd == 'sync':
+        runtime = patch_sync.sync_runtime(setup.PS3RECOMP_COMMIT)
+        lifted = patch_sync.sync_lifted(setup.lift_inputs())
+        if runtime not in ('current', 'updated') or lifted not in ('current', 'updated'):
+            fail('the toolkit or lifted code is incomplete or needs regenerating; '
+                 'run mac/rebuild.sh toolkit lift build')
     else:
         print(__doc__)
         return 2
