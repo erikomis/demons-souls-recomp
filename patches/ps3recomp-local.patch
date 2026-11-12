@@ -20682,7 +20682,7 @@ index a55afb0..e041889 100644
      /* A guest that called sys_process_exit never reaches this line: that path
       * ends in the host exit(). Getting here means the entry function returned
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 5fc5020..6409f5f 100644
+index 5fc5020..5fcbe8d 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -57,6 +57,9 @@ static uint64_t spu_host_ns(void)
@@ -20708,9 +20708,34 @@ index 5fc5020..6409f5f 100644
  /* SPU_LS_WATCH=0x1BE80[,0x927D80...]: watch up to 4 16-byte LS lines (reads
   * and writes) in every SPU image. See spu_ls_watch_hit2 for the fast path. */
  #define SPU_WATCH_MAX 4
-@@ -233,6 +239,12 @@ void spu_stop(spu_context* ctx)
-      * A/B experiments (it makes the kernel terminate, which the game restarts). */
-     static int s_halt = -1;
+@@ -214,27 +220,23 @@ void spu_dbg_e60(spu_context* ctx)
+     fflush(stderr);
+ }
+ 
+-/* SPU `stop` / stop-and-signal. A real SPU stop HALTS the core; the previous
+- * lifted emission only did `status=...; return;`, which unwound ONE frame and
+- * let the caller's service loop keep running -- so a SPURS policy doing
+- * stop-and-signal in a loop spun millions of times instead of yielding. Halt the
+- * host SPU thread (longjmp to spu_run_with_halt) so the job stops AT the stop,
+- * with ctx->status + the outbound mailbox value available for the dispatcher to
+- * service. Env YDKJ_STOP_NOHALT restores the old (looping) behavior for A/B. */
++/* An ordinary lifted program must leave its entire host call chain at stop.
++ * Returning only to a nested drain can repeatedly redispatch the stopped PC.
++ * Resident task/policy emulation retains its existing stop-and-resume contract;
++ * serviced lv2 receive-event stops below also resume normally. */
+ void spu_stop(spu_context* ctx)
+ {
+-    /* A lifted `stop` sets status and RETURNS to its caller -- for a SPURS
+-     * policy this is stop-and-signal: it returns up into the kernel/policy
+-     * service loop, which continues (i.e. the SPU "resumes" past the stop). That
+-     * resume-by-return behavior is correct; the previous spin was caused by the
+-     * lack of (a) a PPU listener for the outbound mailbox and (b) mailbox
+-     * backpressure -- both handled in the channel write path, not here. So by
+-     * default DO NOT halt. Env YDKJ_STOP_HALT forces a hard halt (longjmp) for
+-     * A/B experiments (it makes the kernel terminate, which the game restarts). */
+-    static int s_halt = -1;
++    /* Cache per host thread: several independent SPUs may stop concurrently. */
++    static SPU_THREAD_LOCAL int s_halt = -1;
      if (s_halt < 0) s_halt = getenv("YDKJ_STOP_HALT") ? 1 : 0;
 +    /* sys_spu_thread_receive_event / tryreceive_event of an lv2 SPU thread: lv2 answers in the
 +     * in-mailbox and the SPU carries on past the stop (lv2_register.c). */
@@ -20719,9 +20744,12 @@ index 5fc5020..6409f5f 100644
 +        if (lv2_spu_receive_event(ctx, ctx->stop_code == 0x111)) { ctx->status = SPU_STATUS_RUNNING; return; }
 +    }
      ctx->status = SPU_STATUS_STOPPED_BY_STOP;
-     if (s_halt) spu_halt(ctx);
+-    if (s_halt) spu_halt(ctx);
++    if (s_halt || (!ctx->policy_mode && !ctx->resident_task)) spu_halt(ctx);
  }
-@@ -410,7 +422,7 @@ static DWORD WINAPI spu_pcsample_thread(LPVOID p)
+ 
+ /* SPU_FLOAT_RZ=1: SPU code runs with FPCR at round toward zero with flush-to-zero, so the
+@@ -410,7 +412,7 @@ static DWORD WINAPI spu_pcsample_thread(LPVOID p)
      }
  }
  
@@ -20730,7 +20758,7 @@ index 5fc5020..6409f5f 100644
   * Engines remain registry-owned, not host-thread or physical-SPU-owned. A hit
   * borrows exactly the same pointer as the locked path; both require the owner
   * to stop before release/range cleanup. No context layout or memory is touched.
-@@ -432,8 +444,11 @@ static int spu_mfc_cache_enabled(void)
+@@ -432,8 +434,11 @@ static int spu_mfc_cache_enabled(void)
      static atomic_int cached;
      int value = atomic_load_explicit(&cached, memory_order_relaxed);
      if (!value) {
@@ -20743,7 +20771,7 @@ index 5fc5020..6409f5f 100644
          atomic_store_explicit(&cached, value, memory_order_relaxed);
      }
      return value == 2;
-@@ -453,7 +468,27 @@ static void spu_mfc_cache_invalidate(void)
+@@ -453,7 +458,27 @@ static void spu_mfc_cache_invalidate(void)
          atomic_store_explicit(&s_mfc_cache_generation, generation + 1, memory_order_release);
  }
  
@@ -20772,7 +20800,7 @@ index 5fc5020..6409f5f 100644
  {
      int cache_enabled = spu_mfc_cache_enabled();
      if (cache_enabled) {
-@@ -577,22 +612,81 @@ volatile unsigned g_spu_putllc_sync_hit = 0;
+@@ -577,22 +602,81 @@ volatile unsigned g_spu_putllc_sync_hit = 0;
  #define SPU_JOB_RETURN_LS   0x3FF00u
  
  /* Returns 1 if `cmd` is an atomic line op and was handled here, else 0. */
@@ -20868,7 +20896,7 @@ index 5fc5020..6409f5f 100644
      { static int s_t = -1; if (s_t < 0) s_t = getenv("SPU_POLLTRACE") ? 1 : 0;
        if (s_t) { static uint64_t s_n = 0; static uint32_t s_lastea = 0;
          if ((++s_n % 2000000) == 0 || ea != s_lastea) {
-@@ -634,25 +728,13 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -634,25 +718,13 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
              #undef TW
          }
        } }
@@ -20900,7 +20928,7 @@ index 5fc5020..6409f5f 100644
      /* SPU_ATOM_EA=<hex>: log every lock-line atomic touching that EA`s 128B line.
       * SPU_ATOM_FULL=1 additionally dumps 32 bytes of the line before and after.
       *
-@@ -694,6 +776,186 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -694,6 +766,186 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
                fprintf(stderr, "%s\n", buf); fflush(stderr);
            }
        } }
@@ -21087,7 +21115,7 @@ index 5fc5020..6409f5f 100644
      /* Bink sync-line atomic trace (armed by the PPU-side producer probe). */
      { extern uint32_t g_barrier_sync_watch;
        uint32_t b = g_barrier_sync_watch;
-@@ -711,8 +973,10 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -711,8 +963,10 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
           * (all gotos), so it never crosses the SPU_DRAIN tick site -- without a
           * tick here a polling SPU would hold the run token forever while the
           * peer that must WRITE the line waits for it (canersaka ticks the
@@ -21100,7 +21128,7 @@ index 5fc5020..6409f5f 100644
          /* A registered holder re-reading an already marked line -- every
           * policy-module poll -- publishes its reservation and copies without
           * the lock; any write the copy misses ends that reservation (see
-@@ -760,6 +1024,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -760,6 +1014,7 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
           * GETLLAR until that bit is set, and spun forever on 0. PUTLLUC is 2. */
          if (!llar_fast) { ctx->resv_ea = ea; ctx->resv_valid = 1; }   /* the fast path published it already */
          ctx->atomic_stat = 4;
@@ -21108,7 +21136,7 @@ index 5fc5020..6409f5f 100644
          ctx->dbg_getllar++;
          /* A GETLLAR re-issued millions of times on one line is an SPU spin-wait
           * that nobody is releasing (a ticket lock, a counter barrier). Say so
-@@ -775,65 +1040,14 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -775,65 +1030,14 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
                        m[0],m[1],m[2],m[3], m[4],m[5],m[6],m[7], m[8],m[9],m[10],m[11], m[12],m[13],m[14],m[15]);
            } }
          if (!llar_fast) spu_lockline_unlock();
@@ -21179,7 +21207,7 @@ index 5fc5020..6409f5f 100644
          { extern uint32_t g_barrier_sync_watch;
            uint32_t b = g_barrier_sync_watch;
            if (b && (ea & ~127u) == (b & ~127u)) g_spu_putllc_sync_hit++; }
-@@ -841,7 +1055,8 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -841,7 +1045,8 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
          if (ctx->resv_valid && ctx->resv_ea == ea &&
              memcmp(mem, ctx->resv_line, MFC_ATOMIC_LINE) == 0) {
              { extern void spu_lockguard_check(spu_context*, uint32_t, const uint8_t*, uint32_t, const char*);
@@ -21189,7 +21217,7 @@ index 5fc5020..6409f5f 100644
              memcpy(mem, ls, MFC_ATOMIC_LINE);          /* commit local store */
              /* A committing PUTLLC is a line write like any other, so every
               * PEER reservation on it is lost and its SPU takes SPU_EVENT_LR.
-@@ -856,50 +1071,14 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -856,50 +1061,14 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
               * successful PUTLLC, it does not report it lost. Already under the
               * lock-line lock, which is what spu_coh_notify_write expects. */
              ctx->resv_valid = 0;
@@ -21244,7 +21272,7 @@ index 5fc5020..6409f5f 100644
          }
          { extern uint32_t g_barrier_sync_watch;
            uint32_t b = g_barrier_sync_watch;
-@@ -916,20 +1095,13 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -916,20 +1085,13 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
                            (r[10]<<8)|r[11],(r[12]<<8)|r[13],(r[14]<<8)|r[15]);
                }
            } }
@@ -21269,7 +21297,7 @@ index 5fc5020..6409f5f 100644
              if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
          }
          return 1;
-@@ -938,7 +1110,8 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -938,7 +1100,8 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
      case MFC_PUTQLLUC_CMD:
          spu_lockline_lock();
          { extern void spu_lockguard_check(spu_context*, uint32_t, const uint8_t*, uint32_t, const char*);
@@ -21279,7 +21307,7 @@ index 5fc5020..6409f5f 100644
          memcpy(mem, ls, MFC_ATOMIC_LINE);              /* unconditional store */
          /* Unconditional, so it invalidates EVERY reservation on the line --
           * this SPU's included, which is why the notify runs before the
-@@ -947,8 +1120,10 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
+@@ -947,8 +1110,10 @@ static int spu_mfc_atomic(spu_context* ctx, uint32_t cmd)
           * has already overwritten. */
          spu_coh_notify_write(ea);
          ctx->resv_valid = 0; ctx->atomic_stat = 2;   /* PUTLLUC complete */
@@ -21291,7 +21319,7 @@ index 5fc5020..6409f5f 100644
          if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
          return 1;
  
-@@ -971,10 +1146,9 @@ static int channel_is_mfc(uint32_t ch)
+@@ -971,10 +1136,9 @@ static int channel_is_mfc(uint32_t ch)
      }
  }
  
@@ -21305,7 +21333,7 @@ index 5fc5020..6409f5f 100644
  {
      /* SPU_CHHIST=1: which channels a job actually touches, and how often. A
       * worker that never issues an MFC command is either not being handed its
-@@ -986,7 +1160,68 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+@@ -986,7 +1150,68 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
            if ((++n % (unsigned long long)s_c) == 0) { fprintf(stderr, "[chw] %llu writes:%c", n, 10);
                for (int i = 0; i < 128; i++) if (w[i])
                    fprintf(stderr, "   wrch ch%-3d %llu%c", i, w[i], 10); } } }
@@ -21374,7 +21402,7 @@ index 5fc5020..6409f5f 100644
  
      if (channel_is_mfc(channel)) {
          /* Atomic line ops (GETLLAR/PUTLLC/...) need real reservation semantics,
-@@ -1052,16 +1287,21 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+@@ -1052,16 +1277,21 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
      case SPU_WrDec:          ctx->decrementer = v;
                               ctx->dec_base_ns = spu_host_ns();              break;
      case SPU_WrEventMask:    ctx->event_mask = v;                           break; /* WrEventMask */
@@ -21406,7 +21434,7 @@ index 5fc5020..6409f5f 100644
          SPU_EVENT_CLEAR(ctx, v);
          /* A stall-and-notify nobody has read yet stays pending. We run a
           * resumed list inline, inside the MFC_WrListStallAck that resumes it,
-@@ -1071,8 +1311,8 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
+@@ -1071,8 +1301,8 @@ void spu_wrch(spu_context* ctx, uint32_t channel, u128 value)
           * (list_stall_stat set, Sn clear). */
          if ((v & 0x2u) && ctx->list_stall_stat)
              SPU_EVENT_SET(ctx, 0x2u);
@@ -21417,7 +21445,7 @@ index 5fc5020..6409f5f 100644
      case SPU_WrSRR0:         ctx->srr0 = v;                                 break;
      default:
          /* Unknown / unhandled channel write -- ignore (matches a no-op SPU). */
-@@ -1131,6 +1371,7 @@ static void spu_resv_lost_poll(spu_context* ctx)
+@@ -1131,6 +1361,7 @@ static void spu_resv_lost_poll(spu_context* ctx)
      if (!vm_base || ctx->resv_ea == 0) return;
      if (memcmp(vm_base + ctx->resv_ea, ctx->resv_line, 128) != 0) {
          ctx->resv_valid = 0;
@@ -21425,7 +21453,7 @@ index 5fc5020..6409f5f 100644
          SPU_EVENT_SET(ctx, 0x400u);
      }
  }
-@@ -1234,6 +1475,40 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
+@@ -1234,6 +1465,40 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
       * raise above), but only block it when the SPU has actually enabled events
       * (event_mask != 0) -- a masked-off read must return 0 immediately, not
       * park forever. RdInMbox/RdSigNotify park on their PPU producers. */
@@ -21466,7 +21494,7 @@ index 5fc5020..6409f5f 100644
      if (channel == SPU_RdInMbox || channel == SPU_RdSigNotify1 || channel == SPU_RdSigNotify2)
          spu_ch_wait(ctx, channel, "rdch");
      else if (channel == SPU_RdEventStat && ctx->event_mask != 0)
-@@ -1298,7 +1573,20 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
+@@ -1298,7 +1563,20 @@ u128 spu_rdch(spu_context* ctx, uint32_t channel)
          break;
      }
      case SPU_RdEventMask:   v = ctx->event_mask;                        break;
@@ -21488,7 +21516,7 @@ index 5fc5020..6409f5f 100644
      /* CBEA 9.8: numeric bit 0 is interrupt-enable, independent of run status.
       * This runtime models nonisolated SPUs, so the isolation bit stays clear. */
      case SPU_RdMachStat:    v = ctx->int_enable & 1u; break;
-@@ -1887,14 +2175,35 @@ static int spu_ovl_ea_known(uint32_t ea)
+@@ -1887,14 +2165,35 @@ static int spu_ovl_ea_known(uint32_t ea)
      return 1;   /* full (cannot happen): never filter */
  }
  
@@ -21525,7 +21553,7 @@ index 5fc5020..6409f5f 100644
      }
  }
  
-@@ -2067,11 +2376,13 @@ static int spu_taskset_resident_image(const spu_context* ctx)
+@@ -2067,11 +2366,13 @@ static int spu_taskset_resident_image(const spu_context* ctx)
  void spu_overlay_register_sig(const uint8_t sig[16], int image_id)
  {
      if (s_ovl_src_count < SPU_OVL_SRC_MAX) {
@@ -21540,7 +21568,7 @@ index 5fc5020..6409f5f 100644
      }
  }
  
-@@ -2083,13 +2394,14 @@ void spu_overlay_register_sig(const uint8_t sig[16], int image_id)
+@@ -2083,13 +2384,14 @@ void spu_overlay_register_sig(const uint8_t sig[16], int image_id)
   * keeps in its own data can be lifted. A body larger than one DMA arrives as
   * consecutive GETs (contiguous EA and LS); those are appended to the same
   * file. One file per source EA: ovl_<ea>.bin. */
@@ -21559,7 +21587,7 @@ index 5fc5020..6409f5f 100644
      static uint32_t s_seen[256]; static unsigned s_n;
      static SPU_TLS uint32_t t_src, t_next_ea, t_next_lsa;
      FILE* f = NULL; char path[512];
-@@ -2115,7 +2427,9 @@ static void spu_ovl_dump(spu_context* ctx, uint32_t ea, uint32_t lsa, const uint
+@@ -2115,7 +2417,9 @@ static void spu_ovl_dump(spu_context* ctx, uint32_t ea, uint32_t lsa, const uint
  void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint32_t size, const char* what)
  {
      static int64_t s_g = -2;
@@ -21570,7 +21598,7 @@ index 5fc5020..6409f5f 100644
      if (s_g < 0 || !vm_base) return;
      uint32_t g = (uint32_t)s_g;
      if (g < ea || g + 4 > ea + size) return;
-@@ -2148,6 +2462,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -2148,6 +2452,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
          }
      }
      int nsrc = __atomic_load_n(&s_ovl_src_count, __ATOMIC_ACQUIRE);

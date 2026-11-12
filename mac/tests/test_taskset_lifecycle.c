@@ -214,6 +214,70 @@ static void test_rejected_launch(void)
     assert(spu_taskset_join(address(0)) == 0);
     free(vm_base);
 }
+static unsigned stop_visits, stop_continued, stop_caller_continued;
+static int receive_expected, receive_result, receive_calls, receive_try;
+int lv2_spu_receive_event(spu_context* ctx, int try_only)
+{
+    assert(receive_expected && ctx->spu_group_id == 1 && try_only == receive_try);
+    ++receive_calls;
+    return receive_result;
+}
+extern void spu_halt(spu_context*);
+extern void spu_stop(spu_context*);
+extern void spu_begin_image(int);
+extern void spu_register_function(uint32_t, void (*)(spu_context*));
+extern int spu_run_with_halt(void (*)(spu_context*), spu_context*);
+static void lifted_stop(spu_context* ctx)
+{
+    // Bound the old redispatch bug so the negative control fails without hanging.
+    if (++stop_visits > 1) { spu_halt(ctx); return; }
+    ctx->pc = 0x400;
+    ctx->stop_code = ctx->gpr[12]._u32[0];
+    spu_stop(ctx);
+    ++stop_continued;
+}
+static void nested_stop_entry(spu_context* ctx)
+{
+    ctx->host_depth++;
+    ctx->pc = 0x400;
+    g_spu_trampoline_fn = lifted_stop;
+    spu_drain_call(ctx, 0x208);
+    ctx->host_depth--;
+    ++stop_caller_continued;
+}
+static void test_stop(const char* mode)
+{
+    unsetenv("YDKJ_STOP_HALT");
+    spu_context* ctx = calloc(1, sizeof *ctx);
+    assert(ctx);
+    spu_context_init(ctx, 0);
+    ctx->status = SPU_STATUS_RUNNING;
+    ctx->image_id = 77;
+    spu_begin_image(77);
+    spu_register_function(0x400, lifted_stop);
+    const int nested = !strcmp(mode, "stop_nested");
+    const int policy = !strcmp(mode, "stop_policy");
+    const int resident = !strcmp(mode, "stop_resident");
+    const int receive = !strncmp(mode, "stop_receive", 12);
+    receive_try = !strcmp(mode, "stop_receive_try");
+    receive_expected = receive;
+    receive_result = receive && strcmp(mode, "stop_receive_empty");
+    ctx->spu_group_id = receive ? 1 : 0;
+    ctx->policy_mode = policy;
+    ctx->resident_task = resident ? 77 : 0;
+    ctx->gpr[12]._u32[0] = !strcmp(mode, "stop_code") ? 0x102u : 0;
+    if (receive) ctx->gpr[12]._u32[0] = receive_try ? 0x111 : 0x110;
+    const int halted = spu_run_with_halt(nested ? nested_stop_entry : lifted_stop, ctx);
+    assert(stop_visits == 1);
+    assert(halted == !(policy || resident || receive_result));
+    assert(stop_continued == (unsigned)(policy || resident || receive_result));
+    assert(!stop_caller_continued);
+    assert(ctx->status == (receive_result ? SPU_STATUS_RUNNING : SPU_STATUS_STOPPED_BY_STOP));
+    assert(receive_calls == receive);
+    assert(ctx->stop_code == ctx->gpr[12]._u32[0]);
+    assert(!g_spu_trampoline_fn);
+    free(ctx);
+}
 int main(int argc, char** argv)
 {
     assert(argc == 2);
@@ -222,6 +286,7 @@ int main(int argc, char** argv)
     else if (!strcmp(argv[1], "join_wait")) test_queued_join(1);
     else if (!strcmp(argv[1], "exit_codes")) test_exit_codes();
     else if (!strcmp(argv[1], "rejected")) test_rejected_launch();
+    else if (!strncmp(argv[1], "stop_", 5)) test_stop(argv[1]);
     else abort();
     return 0;
 }

@@ -30,20 +30,36 @@ add_test(NAME interrupted_lift COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_
 set(SPU "${PS3RECOMP_DIR}/runtime/spu")
 add_executable(test_taskset_lifecycle test_taskset_lifecycle.c
     "${PS3RECOMP_DIR}/runtime/platform/win32_compat.c")
+add_executable(test_spu_thread_group test_spu_thread_group.c
+    "${SPU}/spu_workload.c" "${SPU}/spu_lifted_thread.c"
+    "${PS3RECOMP_DIR}/runtime/syscalls/spu_fallback.c"
+    "${PS3RECOMP_DIR}/runtime/syscalls/sdk_version_weak.c"
+    "${PS3RECOMP_DIR}/runtime/platform/win32_compat.c")
 foreach(unit spu_channels spu_drain spu_lockstep spu_coherency spurs_policy spurs_job
              spu_tsp_weak spu_vm_pagemap spurs_policy_blob_weak spu_interp)
     target_sources(test_taskset_lifecycle PRIVATE "${SPU}/${unit}.c")
+    target_sources(test_spu_thread_group PRIVATE "${SPU}/${unit}.c")
 endforeach()
-target_include_directories(test_taskset_lifecycle PRIVATE "${PS3RECOMP_DIR}/include"
-    "${PS3RECOMP_DIR}/tests" "${SPU}" "${PS3RECOMP_DIR}/runtime/platform")
-target_compile_options(test_taskset_lifecycle PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
-target_link_libraries(test_taskset_lifecycle PRIVATE Threads::Threads m)
-if(APPLE)
-    target_link_options(test_taskset_lifecycle PRIVATE -Wl,-dead_strip)
-else()
-    target_link_options(test_taskset_lifecycle PRIVATE -Wl,--gc-sections)
-endif()
+foreach(target test_taskset_lifecycle test_spu_thread_group)
+    target_include_directories(${target} PRIVATE "${PS3RECOMP_DIR}/include"
+        "${PS3RECOMP_DIR}/tests" "${SPU}/tests" "${SPU}" "${PS3RECOMP_DIR}/runtime/platform")
+    target_compile_options(${target} PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
+    target_link_libraries(${target} PRIVATE Threads::Threads m)
+    if(APPLE)
+        target_link_options(${target} PRIVATE -Wl,-dead_strip)
+    else()
+        target_link_options(${target} PRIVATE -Wl,--gc-sections)
+    endif()
+endforeach()
+add_test(NAME spu_thread_group COMMAND test_spu_thread_group)
+set_tests_properties(spu_thread_group PROPERTIES TIMEOUT 30)
 foreach(scenario shutdown queued rejected exit_codes join_wait)
     add_test(NAME taskset_${scenario} COMMAND test_taskset_lifecycle ${scenario})
     set_tests_properties(taskset_${scenario} PROPERTIES TIMEOUT 15)
+endforeach()
+
+foreach(scenario stop_plain stop_code stop_nested stop_policy stop_resident
+                 stop_receive stop_receive_try stop_receive_empty)
+    add_test(NAME spu_${scenario} COMMAND test_taskset_lifecycle ${scenario})
+    set_tests_properties(spu_${scenario} PROPERTIES TIMEOUT 15)
 endforeach()
