@@ -49,9 +49,24 @@ static void worker()
     for (int i = 0; i < 1000; ++i) protected_call(&ctx);
 }
 
+__attribute__((noinline)) static void deep_protected_call(ppu_context* ctx, unsigned level)
+{
+    ctx->gpr[1] = 0x100000 - level * 0x100;
+    ctx->gpr[3] = 0x1000 + level * 16;
+    void* env = ds_sj_arm(ctx, __builtin_frame_address(0));
+    if (!_setjmp(*(jmp_buf*)env)) {
+        if (level < 1023) deep_protected_call(ctx, level + 1);
+        else jump(ctx, 0x1000); // The first buffer must survive growth past 256.
+    } else {
+        assert(level == 0 && ctx->gpr[3] == 7 && !g_trampoline_fn);
+    }
+}
+
 int main()
 {
     std::thread a(worker), b(worker);
     a.join(); b.join();
     worker();
+    ppu_context ctx{};
+    deep_protected_call(&ctx, 0);
 }

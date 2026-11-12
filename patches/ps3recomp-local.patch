@@ -16165,7 +16165,7 @@ index 2579117..9e1341d 100644
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
 diff --git a/libs/video/rsx_metal_backend.m b/libs/video/rsx_metal_backend.m
-index ad8db0b..bf4520d 100644
+index ad8db0b..2ccacdc 100644
 --- a/libs/video/rsx_metal_backend.m
 +++ b/libs/video/rsx_metal_backend.m
 @@ -52,8 +52,21 @@
@@ -16680,7 +16680,16 @@ index ad8db0b..bf4520d 100644
  static EngPipeline s_eng_pipe[ENG_MAX_PIPES];
  static u32 s_eng_pipe_count;
  
-@@ -2584,8 +2972,9 @@ static void release_surfaces(void)
+@@ -2521,6 +2909,8 @@ static void release_surfaces(void)
+ typedef struct { u64 key; id<MTLSamplerState> samp; } EngSampler;
+ static EngSampler s_eng_samp[ENG_MAX_SAMPLERS];
+ static u32 s_eng_samp_count;
++#define ENG_SAMPLER_BUCKETS (ENG_MAX_SAMPLERS * 2u)
++static u16 s_eng_samp_index[ENG_SAMPLER_BUCKETS]; // slot + 1; zero is empty
+ 
+ typedef struct { u32 surface, remap, format, view; } EngView;
+ static EngView s_eng_view[ENG_MAX_VIEWS];
+@@ -2584,8 +2974,9 @@ static void release_surfaces(void)
  static id<MTLRenderPipelineState> s_eng_blit_pso;
  static MTLPixelFormat             s_eng_blit_pso_fmt;
  static id<MTLRenderPipelineState> s_eng_depth_pso;
@@ -16692,7 +16701,7 @@ index ad8db0b..bf4520d 100644
  static int                        s_eng_depth_color_failed;
  static id<MTLSamplerState>        s_eng_point_sampler;
  static id<MTLSamplerState>        s_eng_linear_sampler;   /* FXAA's taps */
-@@ -2601,14 +2990,54 @@ static void release_surfaces(void)
+@@ -2601,14 +2992,54 @@ static void release_surfaces(void)
   * sample (and gamma) it always was.
   *   PS3_AA=fxaa        FXAA 3.11 (quality preset 29) on the display buffer,
   *                      at the guest's resolution, before the present
@@ -16748,7 +16757,7 @@ index ad8db0b..bf4520d 100644
  
  static float eng_sharpen_from(const char* e)
  {
-@@ -2616,20 +3045,205 @@ static float eng_sharpen_from(const char* e)
+@@ -2616,20 +3047,205 @@ static float eng_sharpen_from(const char* e)
      const double v = strtod(e, NULL);
      return !(v > 0.0) ? 0.0f : v > 1.0 ? 1.0f : (float)v;
  }
@@ -16959,7 +16968,7 @@ index ad8db0b..bf4520d 100644
  }
  
  static NSString* const kEngHelperMSL = @
-@@ -2658,9 +3272,10 @@ static void eng_post_options(void)
+@@ -2658,9 +3274,10 @@ static void eng_post_options(void)
  "}\n"
  /* The present: optional contrast-adaptive sharpening (AMD FidelityFX CAS,
   * the non-scaling form: a cross whose negative weight grows where the 3x3
@@ -16973,7 +16982,7 @@ index ad8db0b..bf4520d 100644
  "fragment float4 eng_present_fs(BOut i [[stage_in]],\n"
  "                               texture2d<float> src [[texture(0)]],\n"
  "                               sampler s [[sampler(0)]],\n"
-@@ -2685,6 +3300,73 @@ static void eng_post_options(void)
+@@ -2685,6 +3302,73 @@ static void eng_post_options(void)
  "        float3 w = amp * (-1.0 / mix(8.0, 5.0, saturate(p.sharp)));\n"
  "        c.rgb = saturate((b * w + l * w + r * w + h * w + e) / (1.0 + 4.0 * w));\n"
  "    }\n"
@@ -17047,7 +17056,7 @@ index ad8db0b..bf4520d 100644
  "    if (p.gamma != 1.0) c.rgb = pow(max(c.rgb, 0.0), float3(p.gamma));\n"
  "    return c;\n"
  "}\n"
-@@ -2815,6 +3497,23 @@ static void eng_post_options(void)
+@@ -2815,6 +3499,23 @@ static void eng_post_options(void)
  "fragment float4 eng_depth_d16_fs(AOut i [[stage_in]],\n"
  "                                 depth2d<float> src [[texture(0)]]) {\n"
  "    return float4(float(eng_depth_round(src.read(uint2(i.pos.xy)), 16u)) / 65535.0, 0.0, 0.0, 1.0);\n"
@@ -17071,7 +17080,7 @@ index ad8db0b..bf4520d 100644
  "}\n";
  
  static u32 eng_obj_add(id<MTLTexture> t)
-@@ -2828,6 +3527,7 @@ static u32 eng_obj_add(id<MTLTexture> t)
+@@ -2828,6 +3529,7 @@ static u32 eng_obj_add(id<MTLTexture> t)
          slot = s_eng_obj_count++;
      }
      s_eng_obj[slot] = t;
@@ -17079,7 +17088,7 @@ index ad8db0b..bf4520d 100644
      return slot + 1;
  }
  
-@@ -2836,6 +3536,71 @@ static u32 eng_obj_add(id<MTLTexture> t)
+@@ -2836,6 +3538,71 @@ static u32 eng_obj_add(id<MTLTexture> t)
      return (handle && handle <= s_eng_obj_count) ? s_eng_obj[handle - 1] : nil;
  }
  
@@ -17151,7 +17160,7 @@ index ad8db0b..bf4520d 100644
  /* Recorded commands resolve numeric handles during encoding. Do not recycle
   * a released slot until those commands have acquired their Metal resources.
   * Submitted command buffers retain the objects for the GPU's remaining work. */
-@@ -2927,6 +3692,7 @@ static void eng_stage_hand_off(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -2927,6 +3694,7 @@ static void eng_stage_hand_off(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
      s_eng_stage_cap = 0;
  }
  
@@ -17159,7 +17168,7 @@ index ad8db0b..bf4520d 100644
  static int eng_stage_reserve(u32 bytes, u32* out_off)
  {
      const u32 start = (s_eng_stage_used + ENG_ALIGN - 1u) & ~(ENG_ALIGN - 1u);
-@@ -2937,7 +3703,13 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
+@@ -2937,7 +3705,13 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
          return eng_stage_reserve(bytes, out_off);
      }
      if (start + bytes > s_eng_stage_cap) {
@@ -17173,7 +17182,7 @@ index ad8db0b..bf4520d 100644
          while (start + bytes > cap) cap *= 2u;
          /* A pool of its own: the caller is the FIFO walker, a PPU host thread
           * with no autorelease pool, and the driver's -contents autoreleases
-@@ -2957,6 +3729,7 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
+@@ -2957,6 +3731,7 @@ static int eng_stage_reserve(u32 bytes, u32* out_off)
      }
      *out_off = start;
      s_eng_stage_used = start + bytes;
@@ -17181,7 +17190,15 @@ index ad8db0b..bf4520d 100644
      return 1;
  }
  
-@@ -3022,6 +3795,7 @@ static void eng_shutdown(void* user)
+@@ -3009,6 +3784,7 @@ static void eng_shutdown(void* user)
+     }
+     for (u32 i = 0; i < s_eng_func_count; i++) s_eng_func[i].fn = nil;
+     for (u32 i = 0; i < s_eng_samp_count; i++) s_eng_samp[i].samp = nil;
++    memset(s_eng_samp_index, 0, sizeof s_eng_samp_index);
+     s_eng_obj_count = s_eng_obj_free_count = 0;
+     memset(s_eng_obj_retired, 0, sizeof s_eng_obj_retired);
+     s_eng_pipe_count = s_eng_func_count = s_eng_samp_count = s_eng_view_count = 0;
+@@ -3022,6 +3798,7 @@ static void eng_shutdown(void* user)
      s_eng_blit_pso = nil;
      s_eng_depth_pso = nil;
      s_eng_depth_color_pso[0] = s_eng_depth_color_pso[1] = nil;
@@ -17189,7 +17206,7 @@ index ad8db0b..bf4520d 100644
      s_eng_depth_color_failed = 0;
      for (u32 k = 0; k < s_eng_clear_pso_count; k++) s_eng_clear_pso[k].pso = nil;
      s_eng_clear_pso_count = 0;
-@@ -3031,6 +3805,15 @@ static void eng_shutdown(void* user)
+@@ -3031,6 +3808,15 @@ static void eng_shutdown(void* user)
      s_eng_linear_sampler = nil;
      s_eng_fxaa_pso = nil;
      s_eng_fxaa_tex = nil;
@@ -17205,7 +17222,7 @@ index ad8db0b..bf4520d 100644
      s_eng_active = 0;
      s_eng_encoding_failed = 0;
      s_eng_checked_completed = 0;
-@@ -3126,9 +3909,10 @@ static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
+@@ -3126,9 +3912,10 @@ static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
  {
      (void)user;
      if (!s_dev || !w || !h) return 0;
@@ -17217,7 +17234,7 @@ index ad8db0b..bf4520d 100644
                                                         mipmapped:NO];
      /* PixelFormatView because a unit sampling this target wears its own
       * TEXTURE_CONTROL1 crossbar as a view swizzle. */
-@@ -3136,10 +3920,19 @@ static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
+@@ -3136,10 +3923,19 @@ static u32 eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
                 MTLTextureUsagePixelFormatView;
      id<MTLTexture> t = [s_dev newTextureWithDescriptor:td];
      if (!t) return 0;
@@ -17239,7 +17256,7 @@ index ad8db0b..bf4520d 100644
  }
  
  static u32 eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_format)
-@@ -3162,7 +3955,7 @@ static u32 eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_format)
+@@ -3162,7 +3958,7 @@ static u32 eng_surface_view(void* user, u32 surface, u32 remap, u32 rsx_format)
                                   swizzle:MTLTextureSwizzleChannelsMake(
                                               swizzle_sel(sel[1]), swizzle_sel(sel[2]),
                                               swizzle_sel(sel[3]), swizzle_sel(sel[0]))];
@@ -17248,7 +17265,7 @@ index ad8db0b..bf4520d 100644
      if (!handle) return 0;
      s_eng_view[s_eng_view_count].surface = surface;
      s_eng_view[s_eng_view_count].remap   = remap;
-@@ -3185,7 +3978,7 @@ static u32 eng_color_snapshot(void* user, u32 surface)
+@@ -3185,7 +3981,7 @@ static u32 eng_color_snapshot(void* user, u32 surface)
                           width:[src width] height:[src height] mipmapped:NO];
      td.storageMode = MTLStorageModePrivate;
      td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
@@ -17257,7 +17274,7 @@ index ad8db0b..bf4520d 100644
      if (!copy) { s_eng_dropped++; return 0; }
      EngRecord* r = &s_eng_rec[s_eng_rec_count++];
      memset(r, 0, sizeof *r);
-@@ -3201,21 +3994,21 @@ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
+@@ -3201,21 +3997,21 @@ static u32 eng_depth_target_create(void* user, u32 w, u32 h)
      if (!s_dev || !w || !h) return 0;
      MTLTextureDescriptor* td =
          [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTL_DEPTH_FORMAT
@@ -17284,7 +17301,7 @@ index ad8db0b..bf4520d 100644
      if (!eng_obj(depth) || !s_eng_helper_lib) return 0;
      if (s_eng_rec_count >= ENG_MAX_RECORDS) { s_eng_dropped++; return 0; }
      if (!s_eng_depth_pso) {
-@@ -3236,7 +4029,7 @@ static u32 eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+@@ -3236,7 +4032,7 @@ static u32 eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
                                                             width:w height:h
                                                         mipmapped:NO];
      td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
@@ -17293,7 +17310,7 @@ index ad8db0b..bf4520d 100644
      if (!dst) return 0;
  
      EngRecord* r = &s_eng_rec[s_eng_rec_count++];
-@@ -3247,15 +4040,33 @@ static u32 eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+@@ -3247,15 +4043,33 @@ static u32 eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
      return dst;
  }
  
@@ -17330,7 +17347,7 @@ index ad8db0b..bf4520d 100644
      if (!s_eng_depth_color_pso[k]) {
          NSError* err = nil;
          id<MTLLibrary> lib = [s_dev newLibraryWithSource:
-@@ -3263,7 +4074,7 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
+@@ -3263,7 +4077,7 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
                                                   options:nil error:&err];
          MTLRenderPipelineDescriptor* pd = [MTLRenderPipelineDescriptor new];
          pd.vertexFunction   = [lib newFunctionWithName:@"eng_depth_color_vs"];
@@ -17339,7 +17356,7 @@ index ad8db0b..bf4520d 100644
          pd.colorAttachments[0].pixelFormat = formats[k];
          if (lib) s_eng_depth_color_pso[k] = [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
          if (!s_eng_depth_color_pso[k]) {
-@@ -3294,8 +4105,19 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
+@@ -3294,8 +4108,19 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
  
  /* ---- pipelines ----------------------------------------------------------- */
  
@@ -17359,7 +17376,7 @@ index ad8db0b..bf4520d 100644
  {
      const u64 hash = fnv1a64(hlsl, (u32)strlen(hlsl), 1469598103934665603ull);
      for (u32 i = 0; i < s_eng_func_count; i++)
-@@ -3321,21 +4143,20 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
+@@ -3321,21 +4146,20 @@ static u32 eng_depth_as_color(void* user, u32 depth, u32 w, u32 h, u32 rsx_fmt)
      return fn;
  }
  
@@ -17392,7 +17409,7 @@ index ad8db0b..bf4520d 100644
  
      /* Attribute index is the layout SLOT, not the guest's ATTRn number.
       * glslang numbers an HLSL input struct's members in DECLARATION order --
-@@ -3411,10 +4232,51 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+@@ -3411,10 +4235,51 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
      NSError* err = nil;
      id<MTLRenderPipelineState> pso =
          [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
@@ -17446,7 +17463,7 @@ index ad8db0b..bf4520d 100644
      }
  
      /* Depth and stencil are pipeline state in D3D12 and an encoder object in
-@@ -3452,6 +4314,7 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+@@ -3452,6 +4317,7 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
      const u32 slot = s_eng_pipe_count++;
      s_eng_pipe[slot].pso = pso;
      s_eng_pipe[slot].ds  = ds;
@@ -17454,7 +17471,7 @@ index ad8db0b..bf4520d 100644
      /* CULL_FACE FRONT=0x0404 BACK=0x0405 FRONT_AND_BACK=0x0408 (front here,
       * as in the D3D12 engine); FRONT_FACE CW=0x0900 CCW=0x0901. */
      s_eng_pipe[slot].cull = MTLCullModeNone;
-@@ -3463,6 +4326,29 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
+@@ -3463,6 +4329,29 @@ static u32 eng_pipeline_create(void* user, const char* vs_hlsl, const char* ps_h
      s_eng_pipe[slot].winding = (rs->front_face == 0x0901u)
                                     ? MTLWindingCounterClockwise
                                     : MTLWindingClockwise;
@@ -17484,7 +17501,49 @@ index ad8db0b..bf4520d 100644
      return slot + 1;
  }
  
-@@ -3598,15 +4484,25 @@ static void eng_bind_vertex_textures(void* user, const u32* textures,
+@@ -3500,17 +4389,29 @@ static int eng_aniso(void)
+     return a;
+ }
+ 
+-static int eng_sampler_slot(const rsx_be_sampler_desc* d)
++static u64 eng_sampler_key(const rsx_be_sampler_desc* d)
+ {
+-    const u64 key = (u64)d->min_linear | ((u64)d->mag_linear << 1)
++    return (u64)d->min_linear | ((u64)d->mag_linear << 1)
+                   | ((u64)d->mip_linear << 2) | ((u64)d->mip_present << 3)
+                   | ((u64)d->wrap_s << 4) | ((u64)d->wrap_t << 8)
+                   | ((u64)d->wrap_r << 12)
+                   | ((u64)(u32)(d->min_lod * 256.0f) << 16)
+                   | ((u64)(u32)(d->max_lod * 256.0f) << 32)
+                   | ((u64)(d->border & 3u) << 56);
+-    for (u32 i = 0; i < s_eng_samp_count; i++)
+-        if (s_eng_samp[i].key == key) return (int)i;
++}
++
++static int eng_sampler_slot(const rsx_be_sampler_desc* d)
++{
++    const u64 key = eng_sampler_key(d);
++    u64 hash = key ^ (key >> 33);
++    hash *= 0xff51afd7ed558ccdull;
++    hash ^= hash >> 33;
++    u32 bucket = (u32)hash & (ENG_SAMPLER_BUCKETS - 1u);
++    while (s_eng_samp_index[bucket]) {
++        const u32 slot = s_eng_samp_index[bucket] - 1u;
++        if (s_eng_samp[slot].key == key) return (int)slot;
++        bucket = (bucket + 1u) & (ENG_SAMPLER_BUCKETS - 1u);
++    }
+     if (s_eng_samp_count >= ENG_MAX_SAMPLERS) return -1;
+     MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
+     sd.minFilter = d->min_linear ? MTLSamplerMinMagFilterLinear
+@@ -3544,6 +4445,7 @@ static int eng_sampler_slot(const rsx_be_sampler_desc* d)
+     const int slot = (int)s_eng_samp_count++;
+     s_eng_samp[slot].key  = key;
+     s_eng_samp[slot].samp = s;
++    s_eng_samp_index[bucket] = (u16)(slot + 1);
+     return slot;
+ }
+ 
+@@ -3598,15 +4500,25 @@ static void eng_bind_vertex_textures(void* user, const u32* textures,
  static void eng_set_viewport(void* user, float x, float y, float w, float h)
  {
      (void)user;
@@ -17514,7 +17573,7 @@ index ad8db0b..bf4520d 100644
  }
  
  static void eng_set_stencil_ref(void* user, u32 ref)
-@@ -3621,7 +4517,9 @@ static void eng_set_stencil_ref(void* user, u32 ref)
+@@ -3621,7 +4533,9 @@ static void eng_set_stencil_ref(void* user, u32 ref)
  static void eng_set_depth_bias(void* user, float slope, float units, u32 depth_bits)
  {
      (void)user;
@@ -17525,7 +17584,7 @@ index ad8db0b..bf4520d 100644
      s_eng_pending.depth_bias  = depth_bits == 16u ? units * 256.0f : units;
  }
  
-@@ -3686,8 +4584,7 @@ static void eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
+@@ -3686,8 +4600,7 @@ static void eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
   * load action, which would clear the whole attachment. */
  static void eng_clear_rect_into(EngRecord* r, u32 x, u32 y, u32 w, u32 h)
  {
@@ -17535,7 +17594,7 @@ index ad8db0b..bf4520d 100644
  }
  
  static void eng_clear_color_rect(void* user, u32 surface, const float rgba[4],
-@@ -3718,6 +4615,14 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
+@@ -3718,6 +4631,14 @@ static void eng_encode_draw(id<MTLRenderCommandEncoder> enc, const EngRecord* r,
  {
      if (!r->pipeline || r->pipeline > s_eng_pipe_count) { s_eng_encoding_failed = 1; return; }
      const EngPipeline* p = &s_eng_pipe[r->pipeline - 1];
@@ -17550,7 +17609,7 @@ index ad8db0b..bf4520d 100644
      if (!p->pso) { s_eng_encoding_failed = 1; return; }
      [enc setRenderPipelineState:p->pso];
      [enc setDepthStencilState:p->ds];
-@@ -3947,8 +4852,9 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3947,8 +4868,9 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              id<MTLTexture> src = eng_obj(r->depth);
              id<MTLTexture> dst = eng_obj(r->resolve_dst);
              /* The destination's format names the conversion. */
@@ -17561,7 +17620,7 @@ index ad8db0b..bf4520d 100644
              if (!src || !pso) { s_eng_encoding_failed = 1; continue; }
              MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
              rp.colorAttachments[0].texture     = dst;
-@@ -3959,6 +4865,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -3959,6 +4881,7 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
              s_ft_resolves++;
              [e setRenderPipelineState:pso];
              [e setFragmentTexture:src atIndex:0];
@@ -17569,7 +17628,7 @@ index ad8db0b..bf4520d 100644
              [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
              [e endEncoding];
              continue;
-@@ -4190,23 +5097,203 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
+@@ -4190,23 +5113,203 @@ static void eng_encode_records(id<MTLCommandBuffer> cb, id<MTLBuffer> stage)
      return s_eng_fxaa_tex;
  }
  
@@ -17778,7 +17837,7 @@ index ad8db0b..bf4520d 100644
          pd.colorAttachments[0].pixelFormat = [dst pixelFormat];
          NSError* err = nil;
          s_eng_blit_pso = [s_dev newRenderPipelineStateWithDescriptor:pd error:&err];
-@@ -4216,6 +5303,7 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+@@ -4216,6 +5319,7 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
              return;
          }
          s_eng_blit_pso_fmt = [dst pixelFormat];
@@ -17786,7 +17845,7 @@ index ad8db0b..bf4520d 100644
      }
      MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
      rp.colorAttachments[0].texture     = dst;
-@@ -4225,15 +5313,34 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
+@@ -4225,15 +5329,34 @@ static void eng_blit_to_display(id<MTLCommandBuffer> cb, id<MTLTexture> src,
      if (!e) return;
      [e setRenderPipelineState:s_eng_blit_pso];
      [e setFragmentTexture:src atIndex:0];
@@ -17826,7 +17885,7 @@ index ad8db0b..bf4520d 100644
      [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
      [e endEncoding];
  }
-@@ -4340,13 +5447,33 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
+@@ -4340,13 +5463,33 @@ static void eng_encode_and_commit(id<MTLTexture> present_dst)
          }
          s_eng_rec_count  = 0;
          s_eng_stage_used = 0;
@@ -17861,7 +17920,7 @@ index ad8db0b..bf4520d 100644
  {
      const char* path = getenv("PS3RECOMP_METAL_FRAME_DUMP");
      if (!path || !*path) return;
-@@ -4365,6 +5492,17 @@ static void eng_dump_frame(id<MTLTexture> src)
+@@ -4365,6 +5508,17 @@ static void eng_dump_frame(id<MTLTexture> src)
      }
      [src getBytes:rgba bytesPerRow:w * 4
        fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
@@ -17879,7 +17938,7 @@ index ad8db0b..bf4520d 100644
      FILE* f = fopen(path, "wb");
      if (f) {
          fprintf(f, "P6\n%zu %zu\n255\n", w, h);
-@@ -4389,7 +5527,7 @@ static void eng_present(void* user, u32 surface)
+@@ -4389,7 +5543,7 @@ static void eng_present(void* user, u32 surface)
      id<MTLTexture> src = eng_obj(surface);
      if (!src) { eng_encode_and_commit(nil); return; }
      eng_encode_and_commit(src);
@@ -17888,7 +17947,7 @@ index ad8db0b..bf4520d 100644
  }
  
  static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
-@@ -4398,8 +5536,24 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -4398,8 +5552,24 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      (void)user;
      id<MTLTexture> t = eng_obj(surface);
      if (!t || !out || !out_pitch || !w || !h) return;
@@ -17914,7 +17973,7 @@ index ad8db0b..bf4520d 100644
      [t getBytes:out bytesPerRow:out_pitch
       fromRegion:MTLRegionMake2D(x, y, w, h) mipmapLevel:0];
      if (ft_t0) ps3_ft_span(PS3_FT_READBACK, 0, w, h, ft_t0, ps3_ft_now());
-@@ -4409,8 +5563,29 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -4409,8 +5579,29 @@ static void eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
   * requested rectangle to CPU-coherent shared storage. Resolving only the ROI
   * would rescale the source and change its coordinates. Never expose bytes
   * until both the resolve and the copy have completed successfully. */
@@ -17944,7 +18003,7 @@ index ad8db0b..bf4520d 100644
  {
      id<MTLTexture> src = eng_obj(depth);
      if (!s_dev || !s_queue || !src || !out || !w || !h ||
-@@ -4433,8 +5608,7 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
+@@ -4433,8 +5624,7 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
                                                       options:MTLResourceStorageModeShared];
          id<MTLBuffer> staging = s_eng_depth_staging;
          if (!staging || ![staging contents]) return -1;
@@ -17954,7 +18013,7 @@ index ad8db0b..bf4520d 100644
          if (!snap) return -1;
          eng_encode_and_commit(nil);
          if (!s_eng_checked_completed) { eng_obj_release(user, snap); return -1; }
-@@ -4462,6 +5636,87 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
+@@ -4462,6 +5652,87 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
      }
  }
  
@@ -18042,7 +18101,7 @@ index ad8db0b..bf4520d 100644
  static const rsx_draw_backend s_engine_backend = {
      .user                 = NULL,
      .init                 = eng_init,
-@@ -4500,6 +5755,10 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
+@@ -4500,6 +5771,10 @@ static int eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32 h,
      .clear_depth_stencil_rect = eng_clear_depth_stencil_rect,
      .present              = eng_present,
      .readback             = eng_readback,
@@ -18053,7 +18112,7 @@ index ad8db0b..bf4520d 100644
  };
  
  /* ---- public API ---------------------------------------------------------- */
-@@ -4512,6 +5771,10 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -4512,6 +5787,10 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
  
          const char* hl = getenv("PS3RECOMP_METAL_HEADLESS");
          s_headless = (hl && *hl && *hl != '0');
@@ -18064,7 +18123,7 @@ index ad8db0b..bf4520d 100644
  
          s_dev = MTLCreateSystemDefaultDevice();
          if (!s_dev) {
-@@ -4536,7 +5799,7 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -4536,7 +5815,7 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
          s_host = !s_headless && hs && *hs;
          if (s_host) {
              atomic_store(&s_closed, 0);
@@ -18073,7 +18132,7 @@ index ad8db0b..bf4520d 100644
                  fprintf(stderr, "[RSX metal] no host window; opening a window of our own\n");
                  host_detach();
              }
-@@ -4598,6 +5861,33 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
+@@ -4598,6 +5877,33 @@ int rsx_metal_backend_init(u32 width, u32 height, const char* title)
          } else {
              rsx_set_backend(&s_backend_vtable);
          }
@@ -18107,7 +18166,7 @@ index ad8db0b..bf4520d 100644
          fprintf(stderr, "[RSX metal] %s on %s (%ux%u), guest shaders %s, %s path\n",
                  s_headless ? "headless" : s_host ? "host-surface" : "windowed",
                  [[s_dev name] UTF8String], s_width, s_height,
-@@ -4655,14 +5945,25 @@ void rsx_metal_backend_shutdown(void)
+@@ -4655,14 +5961,25 @@ void rsx_metal_backend_shutdown(void)
          s_depth     = nil;
          s_queue     = nil;
          s_dev       = nil;
@@ -18133,7 +18192,7 @@ index ad8db0b..bf4520d 100644
      @autoreleasepool {
          for (;;) {
              NSEvent* ev = [NSApp nextEventMatchingMask:NSEventMaskAny
-@@ -4682,8 +5983,25 @@ static int pump_messages_impl(void)
+@@ -4682,8 +5999,25 @@ static int pump_messages_impl(void)
                  }
                  continue;
              }
@@ -19278,7 +19337,7 @@ index 0000000..7451cc1
 +
 +#endif
 diff --git a/libs/video/rsx_vertex_compact.c b/libs/video/rsx_vertex_compact.c
-index e31b611..0e08db7 100644
+index e31b611..81e7e56 100644
 --- a/libs/video/rsx_vertex_compact.c
 +++ b/libs/video/rsx_vertex_compact.c
 @@ -5,6 +5,9 @@
@@ -19400,54 +19459,53 @@ index e31b611..0e08db7 100644
  
  static u64 rsx_vertex_remap_hash(u64 value)
  {
-@@ -425,6 +498,62 @@ int rsx_vertex_remap_build(
+@@ -425,6 +498,61 @@ int rsx_vertex_remap_build(
          remap->occurrence_capacity = count;
      }
  
 +#if defined(__aarch64__)
 +    /* NOTES fix 135: indices of one base over a dense range (nearly every indexed draw) need no
-+     * hash table: a stamped array over the range, one thread only (the RSX thread on this host).
++     * hash table: a stamped array over the range, owned by this remap object, so independent renderers do not share stamps.
 +     * Same output as the table below, in the same order. */
 +    {
-+        static u32* s_dense_stamp;
-+        static u32* s_dense_value;
-+        static u32 s_dense_cap, s_dense_gen;
 +        u32 lo = UINT_MAX, hi = 0, base = refs[0].base_index, same = 1;
 +        for (u32 o = 0; o < count; o++) {
 +            const u32 id = refs[o].vertex_id;
 +            if (id < lo) lo = id;
 +            if (id > hi) hi = id;
-+            same &= refs[o].base_index == base;
++            if (refs[o].base_index != base || (u64)hi - lo >= (1u << 20)) {
++                same = 0; break; // The hash fallback is already certain.
++            }
 +        }
 +        const u32 span = hi - lo + 1u;
 +        if (same && hi >= lo && span && span <= (1u << 20)) {
-+            if (span > s_dense_cap) {
-+                u32 cap = s_dense_cap ? s_dense_cap : 4096u;
++            if (span > remap->dense_capacity) {
++                u32 cap = remap->dense_capacity ? remap->dense_capacity : 4096u;
 +                while (cap < span) cap *= 2u;
-+                u32* st = (u32*)realloc(s_dense_stamp, (size_t)cap * sizeof(u32));
-+                if (st) s_dense_stamp = st;
-+                u32* va = (u32*)realloc(s_dense_value, (size_t)cap * sizeof(u32));
-+                if (va) s_dense_value = va;
++                u32* st = (u32*)realloc(remap->dense_stamp, (size_t)cap * sizeof(u32));
++                if (st) remap->dense_stamp = st;
++                u32* va = (u32*)realloc(remap->dense_value, (size_t)cap * sizeof(u32));
++                if (va) remap->dense_value = va;
 +                if (st && va) {
-+                    memset(s_dense_stamp, 0, (size_t)cap * sizeof(u32));
-+                    s_dense_cap = cap;
-+                    s_dense_gen = 0;
++                    memset(remap->dense_stamp, 0, (size_t)cap * sizeof(u32));
++                    remap->dense_capacity = cap;
++                    remap->dense_generation = 0;
 +                }
 +            }
-+            if (span <= s_dense_cap) {
-+                if (!++s_dense_gen) {
-+                    memset(s_dense_stamp, 0, (size_t)s_dense_cap * sizeof(u32));
-+                    s_dense_gen = 1;
++            if (span <= remap->dense_capacity) {
++                if (!++remap->dense_generation) {
++                    memset(remap->dense_stamp, 0, (size_t)remap->dense_capacity * sizeof(u32));
++                    remap->dense_generation = 1;
 +                }
 +                u32 unique = 0;
 +                for (u32 o = 0; o < count; o++) {
 +                    const rsx_vertex_ref ref = refs[o];
 +                    const u32 at = ref.vertex_id - lo;
-+                    if (s_dense_stamp[at] == s_dense_gen) {
-+                        remap->occurrence_to_unique[o] = s_dense_value[at];
++                    if (remap->dense_stamp[at] == remap->dense_generation) {
++                        remap->occurrence_to_unique[o] = remap->dense_value[at];
 +                    } else {
-+                        s_dense_stamp[at] = s_dense_gen;
-+                        s_dense_value[at] = unique;
++                        remap->dense_stamp[at] = remap->dense_generation;
++                        remap->dense_value[at] = unique;
 +                        refs[unique] = ref;
 +                        remap->occurrence_to_unique[o] = unique;
 +                        unique++;
@@ -19463,6 +19521,30 @@ index e31b611..0e08db7 100644
      if (count > UINT_MAX / 2u)
          return 0;
      u32 slot_capacity = 16u;
+@@ -494,6 +622,8 @@ void rsx_vertex_remap_destroy(rsx_vertex_remap* remap)
+         return;
+     free(remap->occurrence_to_unique);
+     free(remap->slots);
++    free(remap->dense_stamp);
++    free(remap->dense_value);
+     memset(remap, 0, sizeof(*remap));
+ }
+ 
+diff --git a/libs/video/rsx_vertex_compact.h b/libs/video/rsx_vertex_compact.h
+index 6a12f6f..929b33a 100644
+--- a/libs/video/rsx_vertex_compact.h
++++ b/libs/video/rsx_vertex_compact.h
+@@ -44,6 +44,10 @@ typedef struct rsx_vertex_remap {
+     rsx_vertex_remap_slot* slots;
+     u32 slot_capacity;
+     u32 generation;
++    /* ARM64 dense remapping belongs to this draw-engine instance. */
++    u32* dense_stamp;
++    u32* dense_value;
++    u32 dense_capacity, dense_generation;
+ } rsx_vertex_remap;
+ 
+ typedef struct rsx_vertex_fetch_attr {
 diff --git a/libs/video/rsx_vertex_fetch.c b/libs/video/rsx_vertex_fetch.c
 index bd31518..4a130f1 100644
 --- a/libs/video/rsx_vertex_fetch.c
@@ -20682,7 +20764,7 @@ index a55afb0..e041889 100644
      /* A guest that called sys_process_exit never reaches this line: that path
       * ends in the host exit(). Getting here means the entry function returned
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 5fc5020..5fcbe8d 100644
+index 5fc5020..0391a2e 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -57,6 +57,9 @@ static uint64_t spu_host_ns(void)
@@ -21292,7 +21374,7 @@ index 5fc5020..5fcbe8d 100644
          spu_lockline_unlock();
          if (ctx->atomic_stat == 0) {
 -            spu_taskset_line_committed(ea & ~127u);
-+            if (__atomic_load_n(&g_spu_parked_count, __ATOMIC_RELAXED))   /* fix 77 */
++            if (__atomic_load_n(&g_spu_parked_count, __ATOMIC_ACQUIRE))   /* fix 77 */
 +                spu_taskset_line_committed(ea & ~127u);
              if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
          }
@@ -21314,7 +21396,7 @@ index 5fc5020..5fcbe8d 100644
 +        spu_coh_release(ctx);                        /* fix 67 */
          spu_lockline_unlock();
 -        spu_taskset_line_committed(ea & ~127u);
-+        if (__atomic_load_n(&g_spu_parked_count, __ATOMIC_RELAXED))   /* fix 77 */
++        if (__atomic_load_n(&g_spu_parked_count, __ATOMIC_ACQUIRE))   /* fix 77 */
 +            spu_taskset_line_committed(ea & ~127u);
          if (g_spu_line_commit_hook) g_spu_line_commit_hook(ea & ~127u);
          return 1;
@@ -23523,7 +23605,7 @@ index f04fda6..b34f4da 100644
 +
  #endif /* SPU_HELPERS_H */
 diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
-index 3ce8d0d..7cc0d1f 100644
+index 3ce8d0d..1e0bc75 100644
 --- a/runtime/spu/spu_workload.c
 +++ b/runtime/spu/spu_workload.c
 @@ -6,6 +6,7 @@
@@ -23916,10 +23998,43 @@ index 3ce8d0d..7cc0d1f 100644
  #include "spu_coherency.h"
  
  #ifdef _WIN32
-@@ -1124,6 +1386,15 @@ static pthread_mutex_t s_sig_lock = PTHREAD_MUTEX_INITIALIZER;
+@@ -1124,63 +1386,60 @@ static pthread_mutex_t s_sig_lock = PTHREAD_MUTEX_INITIALIZER;
  static pthread_cond_t  s_sig_cv   = PTHREAD_COND_INITIALIZER;
  #endif
  
+-/* Which (taskset, task) pairs are currently parked in WAIT_SIGNAL.
+- *
+- * A PPU->SPU event-flag Set must be able to reach a task that parked WITHOUT
+- * registering a wait slot in the flag: our Set path only signalled tasks listed
+- * in the flag`s `used` bitmask, so such a task slept forever while the producer`s
+- * memory looked perfectly intact. Same failure class canersaka documented for
+- * SPURS queues in Yakuza Dead Souls ("the HLE previously woke only its host
+- * condvar, which lifted SPU consumer tasks never wait on").
+- *
+- * ponytail: deliberately lock-free and racy. A missed entry costs one 1s poll
+- * timeout in the waiter; a stale entry costs one spurious signal, which is safe
+- * because signals are LATCHED in guest state (CSTS_SIGNALLED) and every wait
+- * loop re-checks its own predicate. Add a lock only if this ever needs to be
+- * authoritative rather than a hint. */
+-void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId);  /* defined below */
+-
+-#define SPU_PARKED_MAX 64
+-static volatile uint64_t s_parked[SPU_PARKED_MAX];   /* (taskset<<32)|(taskId+1), 0 = free */
+-static volatile uint32_t s_parked_obj[SPU_PARKED_MAX];  /* LS[0x2FD0] wait object, 0 = unknown */
+-/* Bounds for spu_taskset_line_committed, which runs after every successful
+- * PUTLLC/PUTLLUC on every SPU. Both are hints in the same racy sense as the
+- * table, but err only towards visiting more:
+- *  - s_parked_count: entries published and not yet removed. Raised after the
+- *    key is stored and lowered only by the remove that clears that key, so a
+- *    task that is parked is always counted. (Two adds racing for one free slot
+- *    lose a key and leave the count one high for good; that costs scans, not
+- *    wakes.)
+- *  - s_parked_hw: one past the highest slot ever used. Raised before the key
+- *    is stored and never lowered, so every parked task is below it whatever
+- *    else is being parked or unparked at the same time. Slots are taken
+- *    first-free, so it stays at the peak number of tasks parked at once. */
+-static volatile int s_parked_count;
+-static volatile int s_parked_hw;
 +static void spu_taskset_wake_all(void)
 +{
 +#ifdef _WIN32
@@ -23929,56 +24044,264 @@ index 3ce8d0d..7cc0d1f 100644
 +#endif
 +}
 +
- /* Which (taskset, task) pairs are currently parked in WAIT_SIGNAL.
-  *
-  * A PPU->SPU event-flag Set must be able to reach a task that parked WITHOUT
-@@ -1146,7 +1417,7 @@ static volatile uint32_t s_parked_obj[SPU_PARKED_MAX];  /* LS[0x2FD0] wait objec
- /* Bounds for spu_taskset_line_committed, which runs after every successful
-  * PUTLLC/PUTLLUC on every SPU. Both are hints in the same racy sense as the
-  * table, but err only towards visiting more:
-- *  - s_parked_count: entries published and not yet removed. Raised after the
-+ *  - g_spu_parked_count: entries published and not yet removed. Raised after the
-  *    key is stored and lowered only by the remove that clears that key, so a
-  *    task that is parked is always counted. (Two adds racing for one free slot
-  *    lose a key and leave the count one high for good; that costs scans, not
-@@ -1155,7 +1426,8 @@ static volatile uint32_t s_parked_obj[SPU_PARKED_MAX];  /* LS[0x2FD0] wait objec
-  *    is stored and never lowered, so every parked task is below it whatever
-  *    else is being parked or unparked at the same time. Slots are taken
-  *    first-free, so it stays at the peak number of tasks parked at once. */
--static volatile int s_parked_count;
-+extern volatile int g_spu_parked_count;
-+volatile int g_spu_parked_count;   /* not static: spu_channels.c tests it inline (fix 77) */
- static volatile int s_parked_hw;
++/* Parked identities and pending wake latches share one lock. Never hold it
++ * while acquiring lock-line or s_sig_lock: DMA notifications arrive with the
++ * lock-line lock already held. Snapshots are signalled after releasing it. */
++void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId);
++typedef struct { uint64_t key; uint32_t obj; } spu_parked_entry;
++static spu_parked_entry* s_parked;
++static size_t s_parked_cap, s_parked_hi;
++static SRWLOCK s_parked_lock = SRWLOCK_INIT;
++volatile int g_spu_parked_count;
++static int spu_taskset_consume_wake_locked(uint32_t taskset_ea);
  
  void spu_taskset_parked_add(uint32_t taskset_ea, uint32_t taskId, uint32_t wait_obj)
-@@ -1167,7 +1439,7 @@ void spu_taskset_parked_add(uint32_t taskset_ea, uint32_t taskId, uint32_t wait_
-             while (hw <= i && !__atomic_compare_exchange_n(&s_parked_hw, &hw, i + 1, 1,
-                                                            __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
-             s_parked_obj[i] = wait_obj; s_parked[i] = key;
+ {
+-    uint64_t key = ((uint64_t)taskset_ea << 32) | (uint64_t)(taskId + 1);
+-    for (int i = 0; i < SPU_PARKED_MAX; i++)
+-        if (s_parked[i] == 0) {
+-            int hw = __atomic_load_n(&s_parked_hw, __ATOMIC_RELAXED);
+-            while (hw <= i && !__atomic_compare_exchange_n(&s_parked_hw, &hw, i + 1, 1,
+-                                                           __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+-            s_parked_obj[i] = wait_obj; s_parked[i] = key;
 -            __atomic_fetch_add(&s_parked_count, 1, __ATOMIC_RELAXED);
-+            __atomic_fetch_add(&g_spu_parked_count, 1, __ATOMIC_RELAXED);
-             return;
-         }
+-            return;
+-        }
++    if (!taskset_ea || taskId >= 128) return;
++    const uint64_t key = ((uint64_t)taskset_ea << 32) | (taskId + 1u);
++    AcquireSRWLockExclusive(&s_parked_lock);
++    size_t slot = s_parked_hi;
++    for (size_t i = 0; i < s_parked_hi; i++) {
++        if (s_parked[i].key == key) { slot = i; break; }
++        if (!s_parked[i].key && slot == s_parked_hi) slot = i;
++    }
++    if (slot == s_parked_cap)
++        s_parked = (spu_parked_entry*)ts_grow_table(s_parked, &s_parked_cap, sizeof(*s_parked));
++    if (!s_parked[slot].key)
++        __atomic_add_fetch(&g_spu_parked_count, 1, __ATOMIC_RELEASE);
++    s_parked[slot] = (spu_parked_entry){key, wait_obj};
++    if (slot >= s_parked_hi) s_parked_hi = slot + 1;
++    const int latched = spu_taskset_consume_wake_locked(taskset_ea);
++    ReleaseSRWLockExclusive(&s_parked_lock);
++    if (latched) spu_taskset_signal_task(taskset_ea, taskId);
  }
-@@ -1178,7 +1450,7 @@ void spu_taskset_parked_del(uint32_t taskset_ea, uint32_t taskId)
-     for (int i = 0; i < SPU_PARKED_MAX; i++)
-         if (s_parked[i] == key) {
-             s_parked[i] = 0;
+ 
+ void spu_taskset_parked_del(uint32_t taskset_ea, uint32_t taskId)
+ {
+-    uint64_t key = ((uint64_t)taskset_ea << 32) | (uint64_t)(taskId + 1);
+-    for (int i = 0; i < SPU_PARKED_MAX; i++)
+-        if (s_parked[i] == key) {
+-            s_parked[i] = 0;
 -            __atomic_fetch_sub(&s_parked_count, 1, __ATOMIC_RELAXED);
-+            __atomic_fetch_sub(&g_spu_parked_count, 1, __ATOMIC_RELAXED);
-             return;
-         }
+-            return;
+-        }
++    if (!taskset_ea || taskId >= 128) return;
++    const uint64_t key = ((uint64_t)taskset_ea << 32) | (taskId + 1u);
++    AcquireSRWLockExclusive(&s_parked_lock);
++    for (size_t i = 0; i < s_parked_hi; i++) {
++        if (s_parked[i].key != key) continue;
++        s_parked[i] = (spu_parked_entry){0, 0};
++        __atomic_sub_fetch(&g_spu_parked_count, 1, __ATOMIC_RELEASE);
++        while (s_parked_hi && !s_parked[s_parked_hi - 1].key) s_parked_hi--;
++        break;
++    }
++    ReleaseSRWLockExclusive(&s_parked_lock);
  }
-@@ -1361,7 +1633,7 @@ void spu_taskset_line_committed(uint32_t line)
-      * task -- costs one load instead of a 64-slot scan; otherwise only the
-      * slots below the high-water mark can hold a parked task. Slot order, and
-      * so the first match, is that of the full scan. */
+ 
+ /* Event bits owed to a task, keyed by the OBJECT it waits on (flag - 0x80).
+@@ -1190,30 +1449,40 @@ void spu_taskset_parked_del(uint32_t taskset_ea, uint32_t taskId)
+  * path was never parked for the Set to target. So the Set only RECORDS what is
+  * owed, and the WAIT_SIGNAL handler writes it into guest memory just before it
+  * hands control back -- at which point the guest cannot yet have read it. */
+-#define SPU_EFBITS_MAX 16
+-static volatile uint32_t s_efbits_obj[SPU_EFBITS_MAX];
+-static volatile uint32_t s_efbits_val[SPU_EFBITS_MAX];
++typedef struct { uint32_t obj; uint16_t bits; } spu_ef_pending;
++static spu_ef_pending* s_efbits;
++static size_t s_efbits_cap;
++static SRWLOCK s_efbits_lock = SRWLOCK_INIT;
+ 
+ void spu_ef_bits_post(uint32_t obj, uint16_t bits)
+ {
+-    if (!obj) return;
+-    for (int i = 0; i < SPU_EFBITS_MAX; i++)
+-        if (s_efbits_obj[i] == obj) { s_efbits_val[i] |= bits; return; }
+-    for (int i = 0; i < SPU_EFBITS_MAX; i++)
+-        if (s_efbits_obj[i] == 0) { s_efbits_val[i] = bits; s_efbits_obj[i] = obj; return; }
++    if (!obj || !bits) return;
++    AcquireSRWLockExclusive(&s_efbits_lock);
++    size_t slot = s_efbits_cap;
++    for (size_t i = 0; i < s_efbits_cap; i++) {
++        if (s_efbits[i].obj == obj) { slot = i; break; }
++        if (!s_efbits[i].obj && slot == s_efbits_cap) slot = i;
++    }
++    if (slot == s_efbits_cap)
++        s_efbits = (spu_ef_pending*)ts_grow_table(s_efbits, &s_efbits_cap, sizeof(*s_efbits));
++    s_efbits[slot].obj = obj;
++    s_efbits[slot].bits |= bits;
++    ReleaseSRWLockExclusive(&s_efbits_lock);
+ }
+ 
+-/* Take (and clear) whatever is owed to `obj`. 0 = nothing pending. */
+ uint16_t spu_ef_bits_take(uint32_t obj)
+ {
+     if (!obj) return 0;
+-    for (int i = 0; i < SPU_EFBITS_MAX; i++)
+-        if (s_efbits_obj[i] == obj) {
+-            uint16_t v = (uint16_t)s_efbits_val[i];
+-            s_efbits_obj[i] = 0; s_efbits_val[i] = 0;
+-            return v;
+-        }
+-    return 0;
++    uint16_t bits = 0;
++    AcquireSRWLockExclusive(&s_efbits_lock);
++    for (size_t i = 0; i < s_efbits_cap; i++) {
++        if (s_efbits[i].obj != obj) continue;
++        bits = s_efbits[i].bits;
++        s_efbits[i] = (spu_ef_pending){0, 0};
++        break;
++    }
++    ReleaseSRWLockExclusive(&s_efbits_lock);
++    return bits;
+ }
+ 
+ /* A direction-2 Set that finds NOBODY parked yet is a lost wakeup: the task
+@@ -1221,44 +1490,62 @@ uint16_t spu_ef_bits_take(uint32_t obj)
+  * one pending wake per taskset; the next task to park consumes it instead of
+  * sleeping. One bit, not a counter -- SPURS signals are latched, not queued, so
+  * two Sets before a park must not buy two passes through the wait. */
+-#define SPU_WAKE_LATCH_MAX 16
+-static volatile uint32_t s_wake_latch[SPU_WAKE_LATCH_MAX];   /* taskset EA, 0 = free */
++static uint32_t* s_wake_latch;
++static size_t s_wake_latch_cap;
++
++static int spu_taskset_consume_wake_locked(uint32_t taskset_ea)
++{
++    for (size_t i = 0; i < s_wake_latch_cap; i++)
++        if (s_wake_latch[i] == taskset_ea) { s_wake_latch[i] = 0; return 1; }
++    return 0;
++}
+ 
+ void spu_taskset_latch_wake(uint32_t taskset_ea)
+ {
+     if (!taskset_ea) return;
+-    for (int i = 0; i < SPU_WAKE_LATCH_MAX; i++)
+-        if (s_wake_latch[i] == taskset_ea) return;          /* already latched */
+-    for (int i = 0; i < SPU_WAKE_LATCH_MAX; i++)
+-        if (s_wake_latch[i] == 0) { s_wake_latch[i] = taskset_ea; return; }
++    uint32_t tasks[128]; size_t n = 0;
++    AcquireSRWLockExclusive(&s_parked_lock);
++    // Recheck after the producer's earlier scan: a consumer may have parked.
++    for (size_t i = 0; i < s_parked_hi; i++)
++        if ((uint32_t)(s_parked[i].key >> 32) == taskset_ea)
++            tasks[n++] = (uint32_t)s_parked[i].key - 1u;
++    if (!n) {
++        size_t slot = s_wake_latch_cap;
++        for (size_t i = 0; i < s_wake_latch_cap; i++) {
++            if (s_wake_latch[i] == taskset_ea) { slot = i; break; }
++            if (!s_wake_latch[i] && slot == s_wake_latch_cap) slot = i;
++        }
++        if (slot == s_wake_latch_cap)
++            s_wake_latch = (uint32_t*)ts_grow_table(s_wake_latch, &s_wake_latch_cap, sizeof(*s_wake_latch));
++        s_wake_latch[slot] = taskset_ea;
++    }
++    ReleaseSRWLockExclusive(&s_parked_lock);
++    for (size_t i = 0; i < n; i++) spu_taskset_signal_task(taskset_ea, tasks[i]);
+ }
+ 
+-/* Consume a latched wake for this taskset. Returns 1 if one was pending. */
+ int spu_taskset_consume_wake(uint32_t taskset_ea)
+ {
+     if (!taskset_ea) return 0;
+-    for (int i = 0; i < SPU_WAKE_LATCH_MAX; i++)
+-        if (s_wake_latch[i] == taskset_ea) { s_wake_latch[i] = 0; return 1; }
+-    return 0;
++    AcquireSRWLockExclusive(&s_parked_lock);
++    const int result = spu_taskset_consume_wake_locked(taskset_ea);
++    ReleaseSRWLockExclusive(&s_parked_lock);
++    return result;
+ }
+ 
+-/* Signal every task of `taskset_ea` currently parked. Returns how many. */
+-/* Wake only the task parked on `wait_obj` (0 = any task of the taskset).
+- * The guest names its wait object in the WAIT_SIGNAL argument, and for YDKJ`s
+- * CRI tasks the flag the PPU sets is exactly wait_obj + 0x80 -- so a Set can
+- * address the one task that was waiting for it instead of every parked task. */
+ int spu_taskset_signal_parked_obj(uint32_t taskset_ea, uint32_t wait_obj)
+ {
+     if (!taskset_ea) return 0;
+-    int n = 0;
+-    for (int i = 0; i < SPU_PARKED_MAX; i++) {
+-        uint64_t k = s_parked[i];
+-        if (!k || (uint32_t)(k >> 32) != taskset_ea) continue;
+-        if (wait_obj && s_parked_obj[i] && s_parked_obj[i] != wait_obj) continue;
+-        spu_taskset_signal_task(taskset_ea, (uint32_t)(k & 0xFFFFFFFFu) - 1u);
+-        n++;
++    uint32_t tasks[128]; size_t n = 0;
++    AcquireSRWLockShared(&s_parked_lock);
++    for (size_t i = 0; i < s_parked_hi; i++) {
++        const spu_parked_entry entry = s_parked[i];
++        if ((uint32_t)(entry.key >> 32) != taskset_ea) continue;
++        if (wait_obj && entry.obj && entry.obj != wait_obj) continue;
++        tasks[n++] = (uint32_t)entry.key - 1u;
+     }
+-    return n;
++    ReleaseSRWLockShared(&s_parked_lock);
++    for (size_t i = 0; i < n; i++) spu_taskset_signal_task(taskset_ea, tasks[i]);
++    return (int)n;
+ }
+ 
+ /* Set or clear a task's bit in the guest `signalled` bitset from a host thread.
+@@ -1321,10 +1608,10 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
+         fprintf(stderr, "[spu_workload] signal task %u (taskset 0x%08X)\n",
+                 taskId, taskset_ea); fflush(stderr); }
+     /* SPU_SIG_STATS=1: signals per second per (taskset, task, caller). */
+-    { static int s_on = -1; if (s_on < 0) s_on = getenv("SPU_SIG_STATS") ? 1 : 0;
++    { static SPU_THREAD_LOCAL int s_on = -1; if (s_on < 0) s_on = getenv("SPU_SIG_STATS") ? 1 : 0;
+       if (s_on) {
+-          static uint32_t ts[32], tk[32]; static uintptr_t ca[32]; static unsigned cnt[32];
+-          static unsigned long long t0;
++          static SPU_THREAD_LOCAL uint32_t ts[32], tk[32]; static SPU_THREAD_LOCAL uintptr_t ca[32]; static SPU_THREAD_LOCAL unsigned cnt[32];
++          static SPU_THREAD_LOCAL unsigned long long t0;
+           extern unsigned long long ps3_ms_now(void);
+           const uintptr_t c = (uintptr_t)__builtin_return_address(0);
+           for (int i = 0; i < 32; i++) {
+@@ -1357,26 +1644,15 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
+  * re-checks. */
+ void spu_taskset_line_committed(uint32_t line)
+ {
+-    /* Nothing parked -- the whole run, for a title that never parks a taskset
+-     * task -- costs one load instead of a 64-slot scan; otherwise only the
+-     * slots below the high-water mark can hold a parked task. Slot order, and
+-     * so the first match, is that of the full scan. */
 -    if (!__atomic_load_n(&s_parked_count, __ATOMIC_RELAXED)) return;
-+    if (!__atomic_load_n(&g_spu_parked_count, __ATOMIC_RELAXED)) return;
-     const int n = __atomic_load_n(&s_parked_hw, __ATOMIC_RELAXED);
-     for (int i = 0; i < n; i++) {
-         const uint64_t k = s_parked[i];
-@@ -1392,9 +1664,15 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+-    const int n = __atomic_load_n(&s_parked_hw, __ATOMIC_RELAXED);
+-    for (int i = 0; i < n; i++) {
+-        const uint64_t k = s_parked[i];
+-        if (!k || (((uint32_t)(k >> 32) + CSTS_SIGNALLED) & ~127u) != line) continue;
+-#ifdef _WIN32
+-        AcquireSRWLockExclusive(&s_sig_lock);
+-        WakeAllConditionVariable(&s_sig_cv);
+-        ReleaseSRWLockExclusive(&s_sig_lock);
+-#else
+-        pthread_mutex_lock(&s_sig_lock);
+-        pthread_cond_broadcast(&s_sig_cv);
+-        pthread_mutex_unlock(&s_sig_lock);
+-#endif
+-        return;
++    if (!__atomic_load_n(&g_spu_parked_count, __ATOMIC_ACQUIRE)) return;
++    int found = 0;
++    AcquireSRWLockShared(&s_parked_lock);
++    for (size_t i = 0; i < s_parked_hi; i++) {
++        const uint64_t key = s_parked[i].key;
++        if (key && (((uint32_t)(key >> 32) + CSTS_SIGNALLED) & ~127u) == line) { found = 1; break; }
+     }
++    ReleaseSRWLockShared(&s_parked_lock);
++    if (found) spu_taskset_wake_written(NULL);
+ }
+ 
+ /* WAIT_SIGNAL from the task side (runs ON the task's host thread, called by
+@@ -1392,9 +1668,15 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
      { extern unsigned long long ps3_ms_now(void);
        unsigned long long _now = ps3_ms_now();
        static unsigned _n = 0; if (_n++ < 200 || (_n % 500) == 0)   /* unsigned: periodic, wrapping is defined */
@@ -23996,7 +24319,7 @@ index 3ce8d0d..7cc0d1f 100644
      /* LBP_SYNC_ACK: taskset sync-lane bookkeeping. On real SPURS the taskset
       * POLICY MODULE advances the per-SPU progress lanes (sync+0x40+16*row:
       * ticket u16 @+0, consumer lanes @+2..) as tasks are processed; our HLE
-@@ -1445,6 +1723,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1445,6 +1727,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
  #ifdef _WIN32
      AcquireSRWLockExclusive(&s_sig_lock);
      while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
@@ -24004,7 +24327,7 @@ index 3ce8d0d..7cc0d1f 100644
          if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, 1000, 0)) {
              static int _n = 0;
              if (++secs && _n < 16) { _n++;
-@@ -1457,6 +1736,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1457,6 +1740,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
  #else
      pthread_mutex_lock(&s_sig_lock);
      while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
@@ -24012,7 +24335,7 @@ index 3ce8d0d..7cc0d1f 100644
          struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
          if (pthread_cond_timedwait(&s_sig_cv, &s_sig_lock, &ts) != 0) {
              static int _n = 0;
-@@ -1482,6 +1762,22 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1482,6 +1766,22 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
      return 0;
  }
  
@@ -24035,7 +24358,7 @@ index 3ce8d0d..7cc0d1f 100644
  int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
                                  uint32_t args_ea)
  {
-@@ -1529,7 +1825,18 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1529,7 +1829,18 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * the next CreateTask overwriting the single-slot globals -- with two audio
       * tasks that made both run task 1's descriptor. */
      { extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
@@ -24055,7 +24378,7 @@ index 3ce8d0d..7cc0d1f 100644
      /* Mark the task running NOW, not when its thread starts: in that gap another
       * task's exit saw it ready-but-not-running and started it a second time
       * (Twisted Metal's level-load inflate tasks each ran twice, concurrently). */
-@@ -1548,7 +1855,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1548,7 +1859,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
          if ((j->r3[0] >> 16) == 0x40) j->have_r3 = 1;   /* valid marker */
      }
  
@@ -24064,7 +24387,7 @@ index 3ce8d0d..7cc0d1f 100644
          "[spu_workload] dispatch HIT (async) fp=0x%016llX args=0x%08X image=%d -> spawning thread\n",
          (unsigned long long)fp, args_ea, image_id);
      if (args_ea) { extern uint8_t* vm_base; const uint8_t* c = vm_base + args_ea;
-@@ -1577,6 +1884,10 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1577,6 +1888,10 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
                  fprintf(stderr, "\n");
              } } }
  
@@ -24075,7 +24398,7 @@ index 3ce8d0d..7cc0d1f 100644
  #ifdef _WIN32
      /* 256MB RESERVE (not commit): the Bink SPU decoder's per-macroblock brsl
       * chains are deep host call chains with fat lifted frames -- a 1MB stack
-@@ -1584,7 +1895,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1584,7 +1899,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * process death) the moment the real decode path first executed. */
      HANDLE th = CreateThread(NULL, 256u << 20, spu_async_thread, j,
                               STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
@@ -24084,7 +24407,7 @@ index 3ce8d0d..7cc0d1f 100644
      CloseHandle(th);   /* detached */
  #else
      /* Same 256 MB reservation, for the same reason: pthread stacks are
-@@ -1603,7 +1914,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1603,7 +1918,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * beats never dispatching at all. */
      if (prc != 0)
          prc = pthread_create(&th, NULL, spu_async_thread, j);
@@ -42398,7 +42721,7 @@ index d7f11d6..8c3448e 100644
  static _Alignas(128) uint8_t memory[0x10000];
  #define PTR(type, ea) ((type*)(uintptr_t)(ea))
 diff --git a/libs/video/tests/test_metal_poly_offset.m b/libs/video/tests/test_metal_poly_offset.m
-index ab7f5fe..a88c346 100644
+index ab7f5fe..19a090b 100644
 --- a/libs/video/tests/test_metal_poly_offset.m
 +++ b/libs/video/tests/test_metal_poly_offset.m
 @@ -26,6 +26,8 @@
@@ -42410,3 +42733,55 @@ index ab7f5fe..a88c346 100644
  float cellAvconfExt_display_gamma(void) { return 1.0f; }
  /* The backend's own (non-engine) draw path, which this test never takes. */
  u32 cellGcmResolveOffset(u32 offset) { return offset; }
+@@ -98,12 +100,51 @@ static float draw_depth(u32 zfmt, int fill, float factor, float bias)
+     return out;
+ }
+ 
++static void test_sampler_cache(void)
++{
++    rsx_be_sampler_desc desc[ENG_MAX_SAMPLERS];
++    for (u32 i = 0; i < ENG_MAX_SAMPLERS; i++) {
++        desc[i] = (rsx_be_sampler_desc){0};
++        desc[i].min_linear = i & 1u; desc[i].mag_linear = (i >> 1) & 1u;
++        desc[i].mip_linear = (i >> 2) & 1u; desc[i].mip_present = 1;
++        desc[i].wrap_s = 1 + i % 8; desc[i].wrap_t = 1 + (i / 8) % 8; desc[i].wrap_r = 1;
++        desc[i].border = (i >> 6) & 3u; desc[i].max_lod = (float)i / 16.0f;
++        CHECK(eng_sampler_slot(&desc[i]) == (int)i, "sampler %u retains first-use slot", i);
++    }
++    int stable = 1;
++    for (u32 i = 0; i < 10000; i++) {
++        const u32 index = (i * 73u) % ENG_MAX_SAMPLERS;
++        if (eng_sampler_slot(&desc[index]) != (int)index) stable = 0;
++    }
++    CHECK(stable && s_eng_samp_count == ENG_MAX_SAMPLERS, "sampler hits reuse all 256 states");
++    rsx_be_sampler_desc extra = desc[0]; extra.max_lod = 31.0f;
++    CHECK(eng_sampler_slot(&extra) == -1, "full sampler cache preserves fallback");
++    volatile u64 sink = 0;
++    const u32 iterations = 1000000;
++    const double before = CACurrentMediaTime();
++    for (u32 i = 0; i < iterations; i++) {
++        const u64 key = eng_sampler_key(&desc[(i * 73u) % ENG_MAX_SAMPLERS]);
++        for (u32 slot = 0; slot < s_eng_samp_count; slot++)
++            if (s_eng_samp[slot].key == key) { sink += slot; break; }
++    }
++    const double middle = CACurrentMediaTime();
++    for (u32 i = 0; i < iterations; i++) sink += eng_sampler_slot(&desc[(i * 73u) % ENG_MAX_SAMPLERS]);
++    const double after = CACurrentMediaTime();
++    printf("sampler lookup microbenchmark: linear %.3f ms, indexed %.3f ms (%u hits, checksum %llu)\n",
++           (middle - before) * 1000, (after - middle) * 1000, iterations, (unsigned long long)sink);
++    eng_shutdown(NULL);
++    CHECK(eng_sampler_slot(&desc[200]) == 0, "sampler cache resets with backend lifetime");
++    CHECK(eng_sampler_slot(&desc[0]) == 1, "no stale bucket survives a backend reset");
++    eng_shutdown(NULL);
++}
++
+ int main(void)
+ {
+     @autoreleasepool {
+         s_dev = MTLCreateSystemDefaultDevice();
+         if (!s_dev) { puts("no Metal device: skipped"); return 0; }
+         s_queue = [s_dev newCommandQueue];
++        test_sampler_cache();
+         s_headless = 1; s_guest_shaders = 1;
+         vm_base = calloc(1, 1u << 20); ppu_vm_size = 1u << 20;
+         rsx_draw_engine_set_backend(&s_engine_backend);

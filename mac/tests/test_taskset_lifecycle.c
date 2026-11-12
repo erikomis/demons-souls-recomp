@@ -215,6 +215,88 @@ static void test_rejected_launch(void)
     free(vm_base);
 }
 static unsigned stop_visits, stop_continued, stop_caller_continued;
+static void* post_bits(void* arg)
+{
+    const uint16_t bit = (uint16_t)(1u << (uintptr_t)arg);
+    for (unsigned i = 0; i < 2000; ++i) spu_ef_bits_post(0x1000, bit);
+    return NULL;
+}
+static void test_pending_bits(void)
+{
+    for (unsigned i = 0; i < 513; ++i) spu_ef_bits_post(address(i), 0x1234);
+    for (unsigned i = 0; i < 513; ++i) {
+        assert(spu_ef_bits_take(address(i)) == 0x1234);
+        assert(spu_ef_bits_take(address(i)) == 0);
+    }
+    pthread_t threads[8];
+    for (uintptr_t i = 0; i < 8; ++i) assert(!pthread_create(&threads[i], NULL, post_bits, (void*)i));
+    for (unsigned i = 0; i < 8; ++i) assert(!pthread_join(threads[i], NULL));
+    assert(spu_ef_bits_take(0x1000) == 0xFF);
+}
+static atomic_int consumed_wakes;
+static void* consume_latch(void* unused)
+{
+    (void)unused;
+    atomic_fetch_add(&consumed_wakes, spu_taskset_consume_wake(0x1000));
+    return NULL;
+}
+static void test_wake_latches(void)
+{
+    for (unsigned i = 0; i < 513; ++i) {
+        spu_taskset_latch_wake(address(i)); spu_taskset_latch_wake(address(i));
+    }
+    for (unsigned i = 0; i < 513; ++i) {
+        assert(spu_taskset_consume_wake(address(i)) == 1);
+        assert(spu_taskset_consume_wake(address(i)) == 0);
+    }
+    spu_taskset_latch_wake(0x1000);
+    pthread_t threads[8];
+    for (unsigned i = 0; i < 8; ++i) assert(!pthread_create(&threads[i], NULL, consume_latch, NULL));
+    for (unsigned i = 0; i < 8; ++i) assert(!pthread_join(threads[i], NULL));
+    assert(atomic_load(&consumed_wakes) == 1);
+}
+static void test_wake_handshake(void)
+{
+    vm_base = calloc(1, ppu_vm_size); assert(vm_base);
+    // Producer scanned before publication, then resumes after the consumer parks.
+    assert(spu_taskset_signal_parked_obj(0x1000, 0) == 0);
+    spu_taskset_parked_add(0x1000, 7, 0x8000);
+    spu_taskset_latch_wake(0x1000);
+    assert(vm_read32(0x1000 + CSTS_SIGNALLED) == 0x01000000);
+    assert(!spu_taskset_consume_wake(0x1000));
+    spu_taskset_parked_del(0x1000, 7);
+    vm_write32(0x1000 + CSTS_SIGNALLED, 0);
+    // The opposite ordering converts a pending latch into the guest signal bit.
+    spu_taskset_latch_wake(0x1000);
+    spu_taskset_parked_add(0x1000, 7, 0x8000);
+    assert(vm_read32(0x1000 + CSTS_SIGNALLED) == 0x01000000);
+    assert(!spu_taskset_consume_wake(0x1000));
+    spu_taskset_parked_del(0x1000, 7);
+    free(vm_base);
+}
+static void* churn_parked(void* arg)
+{
+    const uint32_t ts = 0x1000 + (uint32_t)(uintptr_t)arg * 0x2000;
+    for (unsigned i = 0; i < 2000; ++i) {
+        spu_taskset_parked_add(ts, 3, 0x8000);
+        spu_taskset_line_committed((ts + CSTS_SIGNALLED) & ~127u);
+        spu_taskset_parked_del(ts, 3);
+    }
+    return NULL;
+}
+static void test_parked_registry(void)
+{
+    for (unsigned i = 0; i < 513; ++i) {
+        spu_taskset_parked_add(address(i), 3, 0x8000);
+        spu_taskset_parked_add(address(i), 3, 0x8000); // Idempotent registration.
+    }
+    assert(__atomic_load_n(&g_spu_parked_count, __ATOMIC_ACQUIRE) == 513);
+    for (unsigned i = 0; i < 513; ++i) spu_taskset_parked_del(address(i), 3);
+    pthread_t threads[8];
+    for (uintptr_t i = 0; i < 8; ++i) assert(!pthread_create(&threads[i], NULL, churn_parked, (void*)i));
+    for (unsigned i = 0; i < 8; ++i) assert(!pthread_join(threads[i], NULL));
+    assert(__atomic_load_n(&g_spu_parked_count, __ATOMIC_ACQUIRE) == 0);
+}
 static int receive_expected, receive_result, receive_calls, receive_try;
 int lv2_spu_receive_event(spu_context* ctx, int try_only)
 {
@@ -287,6 +369,10 @@ int main(int argc, char** argv)
     else if (!strcmp(argv[1], "exit_codes")) test_exit_codes();
     else if (!strcmp(argv[1], "rejected")) test_rejected_launch();
     else if (!strncmp(argv[1], "stop_", 5)) test_stop(argv[1]);
+    else if (!strcmp(argv[1], "pending_bits")) test_pending_bits();
+    else if (!strcmp(argv[1], "wake_latches")) test_wake_latches();
+    else if (!strcmp(argv[1], "wake_handshake")) test_wake_handshake();
+    else if (!strcmp(argv[1], "parked_registry")) test_parked_registry();
     else abort();
     return 0;
 }
