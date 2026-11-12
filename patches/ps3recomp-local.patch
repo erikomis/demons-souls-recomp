@@ -23605,7 +23605,7 @@ index f04fda6..b34f4da 100644
 +
  #endif /* SPU_HELPERS_H */
 diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
-index 3ce8d0d..1e0bc75 100644
+index 3ce8d0d..89e46a2 100644
 --- a/runtime/spu/spu_workload.c
 +++ b/runtime/spu/spu_workload.c
 @@ -6,6 +6,7 @@
@@ -23624,6 +23624,15 @@ index 3ce8d0d..1e0bc75 100644
  
  static void spu_workload_report_miss(const char* path, uint64_t fp, uint32_t size,
                                       uint32_t owner_ea);   /* below */
+@@ -447,7 +449,7 @@ static int spu_persist_ls_enabled(void)
+  * a single SPU's task scheduling; with LBP_WS_DRAIN a genuinely unsignalled
+  * task drains and releases. Opt-in; default keeps concurrent per-thread SPU. */
+ static int spu_serial_enabled(void)
+-{ static int _s = -1; if (_s < 0) _s = getenv("LBP_SPU_SERIAL") ? 1 : 0; return _s; }
++{ static SPU_THREAD_LOCAL int _s = -1; if (_s < 0) _s = getenv("LBP_SPU_SERIAL") ? 1 : 0; return _s; }
+ #ifdef _WIN32
+ static SRWLOCK s_spu_serial = SRWLOCK_INIT;
+ void spu_serial_acquire(void){ if (spu_serial_enabled()) AcquireSRWLockExclusive(&s_spu_serial); }
 @@ -508,15 +510,54 @@ static spu_ts_ls_slot* ts_ls_get(uint32_t taskset_ea, uint32_t taskid)
   * Taskset layout: bitsets of 16 bytes at +0x10 ready, +0x20 pending,
   * +0x30 enabled (task 0 = MSB of byte 0); task_info[t] at +0x80 + 0x30*t with
@@ -23998,7 +24007,7 @@ index 3ce8d0d..1e0bc75 100644
  #include "spu_coherency.h"
  
  #ifdef _WIN32
-@@ -1124,63 +1386,60 @@ static pthread_mutex_t s_sig_lock = PTHREAD_MUTEX_INITIALIZER;
+@@ -1124,63 +1386,89 @@ static pthread_mutex_t s_sig_lock = PTHREAD_MUTEX_INITIALIZER;
  static pthread_cond_t  s_sig_cv   = PTHREAD_COND_INITIALIZER;
  #endif
  
@@ -24035,13 +24044,42 @@ index 3ce8d0d..1e0bc75 100644
 - *    first-free, so it stays at the peak number of tasks parked at once. */
 -static volatile int s_parked_count;
 -static volatile int s_parked_hw;
-+static void spu_taskset_wake_all(void)
++static uint64_t s_sig_epoch; // Protected by s_sig_lock, including the wait snapshot.
++static void spu_signal_lock(void)
 +{
 +#ifdef _WIN32
-+    AcquireSRWLockExclusive(&s_sig_lock); WakeAllConditionVariable(&s_sig_cv); ReleaseSRWLockExclusive(&s_sig_lock);
++    AcquireSRWLockExclusive(&s_sig_lock);
 +#else
-+    pthread_mutex_lock(&s_sig_lock); pthread_cond_broadcast(&s_sig_cv); pthread_mutex_unlock(&s_sig_lock);
++    pthread_mutex_lock(&s_sig_lock);
 +#endif
++}
++static void spu_signal_unlock(void)
++{
++#ifdef _WIN32
++    ReleaseSRWLockExclusive(&s_sig_lock);
++#else
++    pthread_mutex_unlock(&s_sig_lock);
++#endif
++}
++static int spu_signal_wait(void)
++{
++#ifdef _WIN32
++    return !SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, 1000, 0);
++#else
++    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
++    return pthread_cond_timedwait(&s_sig_cv, &s_sig_lock, &ts) != 0;
++#endif
++}
++static void spu_taskset_wake_all(void)
++{
++    spu_signal_lock();
++    ++s_sig_epoch;
++#ifdef _WIN32
++    WakeAllConditionVariable(&s_sig_cv);
++#else
++    pthread_cond_broadcast(&s_sig_cv);
++#endif
++    spu_signal_unlock();
 +}
 +
 +/* Parked identities and pending wake latches share one lock. Never hold it
@@ -24109,7 +24147,7 @@ index 3ce8d0d..1e0bc75 100644
  }
  
  /* Event bits owed to a task, keyed by the OBJECT it waits on (flag - 0x80).
-@@ -1190,30 +1449,40 @@ void spu_taskset_parked_del(uint32_t taskset_ea, uint32_t taskId)
+@@ -1190,30 +1478,40 @@ void spu_taskset_parked_del(uint32_t taskset_ea, uint32_t taskId)
   * path was never parked for the Set to target. So the Set only RECORDS what is
   * owed, and the WAIT_SIGNAL handler writes it into guest memory just before it
   * hands control back -- at which point the guest cannot yet have read it. */
@@ -24166,7 +24204,7 @@ index 3ce8d0d..1e0bc75 100644
  }
  
  /* A direction-2 Set that finds NOBODY parked yet is a lost wakeup: the task
-@@ -1221,44 +1490,62 @@ uint16_t spu_ef_bits_take(uint32_t obj)
+@@ -1221,44 +1519,62 @@ uint16_t spu_ef_bits_take(uint32_t obj)
   * one pending wake per taskset; the next task to park consumes it instead of
   * sleeping. One bit, not a counter -- SPURS signals are latched, not queued, so
   * two Sets before a park must not buy two passes through the wait. */
@@ -24252,7 +24290,48 @@ index 3ce8d0d..1e0bc75 100644
  }
  
  /* Set or clear a task's bit in the guest `signalled` bitset from a host thread.
-@@ -1321,10 +1608,10 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
+@@ -1298,15 +1614,26 @@ static void spu_signalled_update(uint32_t taskset_ea, uint32_t taskId, int set)
+ static void spu_taskset_wake_written(void* opaque)
+ {
+     (void)opaque;
+-#ifdef _WIN32
+-    AcquireSRWLockExclusive(&s_sig_lock);
+-    WakeAllConditionVariable(&s_sig_cv);
+-    ReleaseSRWLockExclusive(&s_sig_lock);
+-#else
+-    pthread_mutex_lock(&s_sig_lock);
+-    pthread_cond_broadcast(&s_sig_cv);
+-    pthread_mutex_unlock(&s_sig_lock);
+-#endif
++    spu_taskset_wake_all();
++}
++
++/* Consume under the same lock that guest atomic/host signal stores use.
++ * The signal mutex must NOT be held here: coherence notifies its condition
++ * variable while holding lock-line, so the reverse nesting would deadlock. */
++static int spu_signalled_take(uint32_t taskset_ea, uint32_t taskId)
++{
++    const uint32_t word = taskset_ea + CSTS_SIGNALLED + (taskId / 32u) * 4u;
++    const uint32_t mask = (1u << 31) >> (taskId % 32u);
++    uint8_t* p = vm_base + word;
++    spu_lockline_lock();
++    uint32_t value = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
++    if (!(value & mask)) { spu_lockline_unlock(); return 0; }
++    value &= ~mask;
++    p[0] = (uint8_t)(value >> 24); p[1] = (uint8_t)(value >> 16);
++    p[2] = (uint8_t)(value >> 8); p[3] = (uint8_t)value;
++    spu_coh_notify_write(word);
++    spu_lockline_unlock();
++    return 1;
+ }
+ 
+ /* Deliver a signal to a task (callable from any PPU/host thread). */
+@@ -1317,14 +1644,14 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
+      * lock-line and take s_sig_lock, so lock-line must never nest inside it. */
+     spu_signalled_update(taskset_ea, taskId, 1);
+     spu_taskset_wake_written(NULL);
+-    { static int _n = 0; if (PS3_LOG_FIRST(_n, 24))
++    if (ps3_log_verbose()) { static SPU_THREAD_LOCAL int _n = 0; if (PS3_LOG_FIRST(_n, 24))
          fprintf(stderr, "[spu_workload] signal task %u (taskset 0x%08X)\n",
                  taskId, taskset_ea); fflush(stderr); }
      /* SPU_SIG_STATS=1: signals per second per (taskset, task, caller). */
@@ -24266,7 +24345,7 @@ index 3ce8d0d..1e0bc75 100644
            extern unsigned long long ps3_ms_now(void);
            const uintptr_t c = (uintptr_t)__builtin_return_address(0);
            for (int i = 0; i < 32; i++) {
-@@ -1357,26 +1644,15 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
+@@ -1357,26 +1684,15 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
   * re-checks. */
  void spu_taskset_line_committed(uint32_t line)
  {
@@ -24301,11 +24380,17 @@ index 3ce8d0d..1e0bc75 100644
  }
  
  /* WAIT_SIGNAL from the task side (runs ON the task's host thread, called by
-@@ -1392,9 +1668,15 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
-     { extern unsigned long long ps3_ms_now(void);
+@@ -1389,12 +1705,19 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+      * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
+      * task runs on its own host thread. */
+     static _Thread_local unsigned long long s_wait_exit_ms;
+-    { extern unsigned long long ps3_ms_now(void);
++    const int verbose = ps3_log_verbose();
++    if (verbose) { extern unsigned long long ps3_ms_now(void);
        unsigned long long _now = ps3_ms_now();
-       static unsigned _n = 0; if (_n++ < 200 || (_n % 500) == 0)   /* unsigned: periodic, wrapping is defined */
+-      static unsigned _n = 0; if (_n++ < 200 || (_n % 500) == 0)   /* unsigned: periodic, wrapping is defined */
 -        fprintf(stderr, "[spu_workload] WAIT_SIGNAL#%u enter task=%u taskset=0x%08X ran=%llums\n",
++      static SPU_THREAD_LOCAL unsigned _n = 0; if (_n++ < 200 || (_n % 500) == 0)   /* unsigned: periodic, wrapping is defined */
 +        fprintf(stderr, "[spu_workload] WAIT_SIGNAL#%u enter task=%u taskset=0x%08X ran=%llums t%lu\n",
                  _n, taskId, taskset_ea,
 -                s_wait_exit_ms ? (_now - s_wait_exit_ms) : 0ull); }
@@ -24319,23 +24404,67 @@ index 3ce8d0d..1e0bc75 100644
      /* LBP_SYNC_ACK: taskset sync-lane bookkeeping. On real SPURS the taskset
       * POLICY MODULE advances the per-SPU progress lanes (sync+0x40+16*row:
       * ticket u16 @+0, consumer lanes @+2..) as tasks are processed; our HLE
-@@ -1445,6 +1727,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
- #ifdef _WIN32
-     AcquireSRWLockExclusive(&s_sig_lock);
-     while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
-+        if (spu_taskset_is_down(taskset_ea)) { drained = 1; break; }   /* shut down: go stop at the next atomic */
-         if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, 1000, 0)) {
-             static int _n = 0;
-             if (++secs && _n < 16) { _n++;
-@@ -1457,6 +1740,7 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
- #else
-     pthread_mutex_lock(&s_sig_lock);
-     while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
-+        if (spu_taskset_is_down(taskset_ea)) { drained = 1; break; }   /* shut down: go stop at the next atomic */
-         struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
-         if (pthread_cond_timedwait(&s_sig_cv, &s_sig_lock, &ts) != 0) {
-             static int _n = 0;
-@@ -1482,6 +1766,22 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1442,46 +1765,56 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+     spu_lockline_lock();
+     spu_coh_watch_add(&watch, taskset_ea + CSTS_SIGNALLED, spu_taskset_wake_written, NULL);
+     spu_lockline_unlock();
+-#ifdef _WIN32
+-    AcquireSRWLockExclusive(&s_sig_lock);
+-    while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+-        if (!SleepConditionVariableSRW(&s_sig_cv, &s_sig_lock, 1000, 0)) {
+-            static int _n = 0;
+-            if (++secs && _n < 16) { _n++;
+-                fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) sleeping "
+-                        "%us in WAIT_SIGNAL\n", taskId, taskset_ea, secs); fflush(stderr); }
+-            if (drain && secs >= drain) { drained = 1; break; }
+-        }
+-    }
+-    ReleaseSRWLockExclusive(&s_sig_lock);
+-#else
+-    pthread_mutex_lock(&s_sig_lock);
+-    while (!spurs_bitset_test(taskset_ea + CSTS_SIGNALLED, taskId)) {
+-        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
+-        if (pthread_cond_timedwait(&s_sig_cv, &s_sig_lock, &ts) != 0) {
+-            static int _n = 0;
+-            if (++secs && _n < 16) { _n++;
+-                fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) sleeping "
+-                        "%us in WAIT_SIGNAL\n", taskId, taskset_ea, secs); fflush(stderr); }
++    spu_signal_lock();
++    for (;;) {
++        const uint64_t epoch = s_sig_epoch;
++        spu_signal_unlock();
++        const int signalled = spu_signalled_take(taskset_ea, taskId);
++        const int down = !signalled && spu_taskset_is_down(taskset_ea);
++        spu_signal_lock();
++        if (signalled) break;
++        if (down) { drained = 1; break; }
++        /* A notification between the predicate check and reacquiring the
++         * mutex requires a recheck, not a sleep that could miss that wake. */
++        if (epoch != s_sig_epoch) continue;
++        if (spu_signal_wait()) {
++            static SPU_THREAD_LOCAL int shown;
++            ++secs;
++            if (PS3_LOG_FIRST(shown, 16))
++                fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) sleeping %us in WAIT_SIGNAL\n",
++                        taskId, taskset_ea, secs);
+             if (drain && secs >= drain) { drained = 1; break; }
+         }
+     }
+-    pthread_mutex_unlock(&s_sig_lock);
+-#endif
++    spu_signal_unlock();
+     spu_lockline_lock();
+     spu_coh_watch_remove(&watch);
+     spu_lockline_unlock();
+-    /* Signals coalesce in the bit, so consuming it outside s_sig_lock loses none. */
+-    if (!drained) spu_signalled_update(taskset_ea, taskId, 0);
+     if (drained) { static int _d = 0; if (PS3_LOG_FIRST(_d, 24))
+         fprintf(stderr, "[spu_workload] task %u (taskset 0x%08X) WS_DRAIN resume "
+                 "after %us (no signal)\n", taskId, taskset_ea, secs); fflush(stderr); }
+     spu_serial_acquire();       /* resume: re-take the serial lock */
+-    { extern unsigned long long ps3_ms_now(void);
++    if (verbose) { extern unsigned long long ps3_ms_now(void);
+       s_wait_exit_ms = ps3_ms_now(); }   /* stamp for the next entry's ran= */
      return 0;
  }
  
@@ -24358,7 +24487,7 @@ index 3ce8d0d..1e0bc75 100644
  int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
                                  uint32_t args_ea)
  {
-@@ -1529,7 +1829,18 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1529,7 +1862,18 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * the next CreateTask overwriting the single-slot globals -- with two audio
       * tasks that made both run task 1's descriptor. */
      { extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
@@ -24378,7 +24507,7 @@ index 3ce8d0d..1e0bc75 100644
      /* Mark the task running NOW, not when its thread starts: in that gap another
       * task's exit saw it ready-but-not-running and started it a second time
       * (Twisted Metal's level-load inflate tasks each ran twice, concurrently). */
-@@ -1548,7 +1859,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1548,7 +1892,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
          if ((j->r3[0] >> 16) == 0x40) j->have_r3 = 1;   /* valid marker */
      }
  
@@ -24387,7 +24516,7 @@ index 3ce8d0d..1e0bc75 100644
          "[spu_workload] dispatch HIT (async) fp=0x%016llX args=0x%08X image=%d -> spawning thread\n",
          (unsigned long long)fp, args_ea, image_id);
      if (args_ea) { extern uint8_t* vm_base; const uint8_t* c = vm_base + args_ea;
-@@ -1577,6 +1888,10 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1577,6 +1921,10 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
                  fprintf(stderr, "\n");
              } } }
  
@@ -24398,7 +24527,7 @@ index 3ce8d0d..1e0bc75 100644
  #ifdef _WIN32
      /* 256MB RESERVE (not commit): the Bink SPU decoder's per-macroblock brsl
       * chains are deep host call chains with fat lifted frames -- a 1MB stack
-@@ -1584,7 +1899,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1584,7 +1932,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * process death) the moment the real decode path first executed. */
      HANDLE th = CreateThread(NULL, 256u << 20, spu_async_thread, j,
                               STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
@@ -24407,7 +24536,7 @@ index 3ce8d0d..1e0bc75 100644
      CloseHandle(th);   /* detached */
  #else
      /* Same 256 MB reservation, for the same reason: pthread stacks are
-@@ -1603,7 +1918,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1603,7 +1951,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * beats never dispatching at all. */
      if (prc != 0)
          prc = pthread_create(&th, NULL, spu_async_thread, j);
@@ -42785,3 +42914,48 @@ index ab7f5fe..19a090b 100644
          s_headless = 1; s_guest_shaders = 1;
          vm_base = calloc(1, 1u << 20); ppu_vm_size = 1u << 20;
          rsx_draw_engine_set_backend(&s_engine_backend);
+diff --git a/runtime/ps3_log.h b/runtime/ps3_log.h
+index 4b7df8c..2252ff3 100644
+--- a/runtime/ps3_log.h
++++ b/runtime/ps3_log.h
+@@ -11,6 +11,11 @@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#ifdef __cplusplus
++#include <atomic>
++#else
++#include <stdatomic.h>
++#endif
+ #ifdef _WIN32
+ #include <io.h>
+ #define PS3_ISATTY_STDERR() _isatty(_fileno(stderr))
+@@ -36,13 +41,23 @@ static __inline int ps3_log_verbose(void)
+      * 40 s with the log discarded and one with it redirected to a file -- the
+      * logging changes what the title does. Measure timing-sensitive behaviour
+      * with PS3_VERBOSE=0. */
+-    static int v = -1;
+-    if (v < 0) {
++#ifdef __cplusplus
++    static std::atomic<int> v{-1};
++    int value = v.load(std::memory_order_relaxed);
++#else
++    static atomic_int v = -1;
++    int value = atomic_load_explicit(&v, memory_order_relaxed);
++#endif
++    if (value < 0) {
+         const char* e = getenv("PS3_VERBOSE");
+-        if (e) v = (e[0] && e[0] != '0') ? 1 : 0;
+-        else   v = !PS3_ISATTY_STDERR();
++        value = e ? ((e[0] && e[0] != '0') ? 1 : 0) : !PS3_ISATTY_STDERR();
++#ifdef __cplusplus
++        v.store(value, std::memory_order_relaxed);
++#else
++        atomic_store_explicit(&v, value, memory_order_relaxed);
++#endif
+     }
+-    return v;
++    return value;
+ }
+ 
+ #endif /* PS3_LOG_H */

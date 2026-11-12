@@ -10,6 +10,7 @@
 
 static atomic_int release_worker, worker_waiting, worker_done, reject_threads;
 static atomic_int fast_join_wait, join_polls;
+static atomic_uint clock_reads;
 static void lifecycle_sleep(DWORD ms)
 {
     // Exercise more than the former 3,000-poll deadline without wall-clock sleeps.
@@ -51,8 +52,15 @@ static int delayed_create(pthread_t* thread, const pthread_attr_t* attr,
 // Reuse the SDK's link stubs. The invalid manufactured ELF below never enters
 // the lifted runner; any unexpected execution through a stub aborts the test.
 #define main sdk_dispatch_miss_main
+#define ps3_ms_now fixture_ms_now
 #include "test_spu_dispatch_miss.c"
+#undef ps3_ms_now
 #undef main
+unsigned long long ps3_ms_now(void)
+{
+    atomic_fetch_add(&clock_reads, 1);
+    return fixture_ms_now();
+}
 
 extern int spu_taskset_is_down(uint32_t);
 extern void spu_taskset_shutdown(uint32_t);
@@ -215,6 +223,40 @@ static void test_rejected_launch(void)
     free(vm_base);
 }
 static unsigned stop_visits, stop_continued, stop_caller_continued;
+static atomic_uint wait_rounds[2];
+static void* repeated_waiter(void* arg)
+{
+    const unsigned task = (unsigned)(uintptr_t)arg;
+    for (unsigned round = 0; round < 300; ++round) {
+        assert(spu_taskset_wait_signal(0x1000, task) == 0);
+        atomic_fetch_add(&wait_rounds[task], 1);
+    }
+    return NULL;
+}
+static void test_signal_wait(void)
+{
+    setenv("PS3_VERBOSE", "0", 1);
+    unsetenv("SPU_SIG_STATS"); unsetenv("LBP_SYNC_ACK");
+    unsetenv("LBP_WS_DRAIN"); unsetenv("LBP_SPU_SERIAL");
+    vm_base = calloc(1, ppu_vm_size); assert(vm_base);
+    pthread_t threads[2];
+    for (uintptr_t i = 0; i < 2; ++i) assert(!pthread_create(&threads[i], NULL, repeated_waiter, (void*)i));
+    for (unsigned round = 1; round <= 300; ++round) {
+        spu_taskset_signal_task(0x1000, 0);
+        spu_taskset_signal_task(0x1000, 1);
+        unsigned spins;
+        for (spins = 0; spins < 10000; ++spins) {
+            if (atomic_load(&wait_rounds[0]) == round && atomic_load(&wait_rounds[1]) == round) break;
+            usleep(100);
+        }
+        assert(spins < 10000);
+    }
+    for (unsigned i = 0; i < 2; ++i) assert(!pthread_join(threads[i], NULL));
+    assert(vm_read32(0x1000 + CSTS_SIGNALLED) == 0);
+    // Quiet mode must avoid both formatted per-event output and debug clock reads.
+    assert(atomic_load(&clock_reads) == 0);
+    free(vm_base);
+}
 static void* post_bits(void* arg)
 {
     const uint16_t bit = (uint16_t)(1u << (uintptr_t)arg);
@@ -373,6 +415,7 @@ int main(int argc, char** argv)
     else if (!strcmp(argv[1], "wake_latches")) test_wake_latches();
     else if (!strcmp(argv[1], "wake_handshake")) test_wake_handshake();
     else if (!strcmp(argv[1], "parked_registry")) test_parked_registry();
+    else if (!strcmp(argv[1], "signal_wait")) test_signal_wait();
     else abort();
     return 0;
 }
