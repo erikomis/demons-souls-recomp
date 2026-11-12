@@ -30,9 +30,23 @@ D=$(cd "$(dirname "$0")/.." && pwd)
 cd "$D"
 die() { echo "error: $*" >&2; exit 1; }
 
-BIN="$D/port/build_mac/DemonsSoulsRecomp"
-WIN="$D/port/build_mac/DemonsSoulsRecomp_window"
-[ -x "$BIN" ] && [ -x "$WIN" ] || die "the macOS build is not there yet (port/build_mac). Build it first (docs/MACOS.md)."
+BUILD=${DES_BUILD:-$D/port/build_mac}
+case "$BUILD" in /*) ;; *) BUILD="$D/$BUILD" ;; esac
+BIN="$BUILD/DemonsSoulsRecomp"
+WIN="$BUILD/DemonsSoulsRecomp_window"
+[ -x "$BIN" ] && [ -x "$WIN" ] || die "the macOS build is not there yet ($BUILD). Build it first (docs/MACOS.md)."
+
+# Reject malformed sizes before creating directories or rotating existing logs.
+SIZE=${DES_SIZE:-1280x720}
+valid_dimension() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" -gt 0 ] 2>/dev/null && [ "$1" -le 16384 ] 2>/dev/null
+}
+case "$SIZE" in
+  *x*) valid_dimension "${SIZE%x*}" && valid_dimension "${SIZE#*x}" ||
+         die "DES_SIZE=$SIZE: give positive dimensions up to 16384x16384, e.g. 1920x1080." ;;
+  *) die "DES_SIZE=$SIZE: give the window size as <width>x<height>, e.g. 1920x1080." ;;
+esac
 
 DES_GAME=${DES_GAME:-game}
 EBOOT="$D/$DES_GAME/PS3_GAME/USRDIR/EBOOT.elf"
@@ -41,8 +55,8 @@ EBOOT="$D/$DES_GAME/PS3_GAME/USRDIR/EBOOT.elf"
 export PS3_TITLE="Demon's Souls (ps3recomp)"
 [ "$DES_GAME" = game_remaster ] && PS3_TITLE="Demon's Souls (ps3recomp) - PC Remaster mod"
 LOGS=${DES_LOG_DIR:-$D/logs}
-mkdir -p "$D/hdd0" "$D/hdd1" "$D/no_flash" "$LOGS"
-export PS3_HDD0_ROOT="$D/hdd0" PS3_HDD1_ROOT="$D/hdd1" PS3_DEV_FLASH="$D/no_flash"
+export PS3_HDD0_ROOT="${PS3_HDD0_ROOT:-$D/hdd0}" PS3_HDD1_ROOT="${PS3_HDD1_ROOT:-$D/hdd1}" PS3_DEV_FLASH="${PS3_DEV_FLASH:-$D/no_flash}"
+mkdir -p "$PS3_HDD0_ROOT" "$PS3_HDD1_ROOT" "$PS3_DEV_FLASH" "$LOGS"
 export GCM_NO_TITLE_RECYCLE=1 PS3_NP_STRICT_OFFLINE=1 SPU_INTERP_UNLIFTED=1 SPURS_JC_EVENTS=0
 export PS3_INPUT_MAP="${PS3_INPUT_MAP:-$D/mac/input.toml}"
 # Translated shaders (HLSL -> SPIR-V -> MSL) kept on disk, as deadpool-recomp's run.sh does: a new
@@ -75,11 +89,6 @@ if [ "${DES_LOG:-0}" = 1 ]; then export PS3_VERBOSE=1; else export PS3_VERBOSE="
 for f in out err; do
   [ -f "$LOGS/last_run_$f.txt" ] && mv -f "$LOGS/last_run_$f.txt" "$LOGS/last_run_${f}_prev.txt"
 done
-SIZE=${DES_SIZE:-1280x720}
-case "$SIZE" in
-  [0-9]*x[0-9]*) ;;
-  *) die "DES_SIZE=$SIZE: give the window size as <width>x<height>, e.g. 1920x1080." ;;
-esac
 echo "Demon's Souls: game log in $LOGS/last_run_err.txt"
 set +e
 "$WIN" --title "$PS3_TITLE" --size "$SIZE" -- "$BIN" "$EBOOT" \

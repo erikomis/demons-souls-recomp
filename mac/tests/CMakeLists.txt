@@ -27,6 +27,7 @@ foreach(target test_vertex_fetch test_subchannels)
 endforeach()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME interrupted_lift COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_patch_sync.py")
+add_test(NAME play_configuration COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_play.py")
 
 set(SPU "${PS3RECOMP_DIR}/runtime/spu")
 add_executable(test_taskset_lifecycle test_taskset_lifecycle.c
