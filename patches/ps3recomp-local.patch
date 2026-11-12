@@ -23657,7 +23657,7 @@ index f04fda6..3265380 100644
 +
  #endif /* SPU_HELPERS_H */
 diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
-index 3ce8d0d..89e46a2 100644
+index 3ce8d0d..eaa2f11 100644
 --- a/runtime/spu/spu_workload.c
 +++ b/runtime/spu/spu_workload.c
 @@ -6,6 +6,7 @@
@@ -23676,7 +23676,145 @@ index 3ce8d0d..89e46a2 100644
  
  static void spu_workload_report_miss(const char* path, uint64_t fp, uint32_t size,
                                       uint32_t owner_ea);   /* below */
-@@ -447,7 +449,7 @@ static int spu_persist_ls_enabled(void)
+@@ -167,82 +169,71 @@ static uint32_t rd_be32(const uint8_t* p)
+     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
+ }
+ 
+-int spu_elf_load_to_ls(const uint8_t* image, size_t image_size, uint8_t* ls, uint32_t* entry_out)
++/* Validate every load segment before writing any byte of local store. */
++static int spu_elf_headers_valid(const uint8_t* image, size_t available)
+ {
+-    if (!image || !ls || image_size < 0x34) return 0;
+-
+-    /* ELF ident: 0x7F 'E' 'L' 'F', ELFCLASS32 (1), ELFDATA2MSB (2). */
+-    if (!(image[0] == 0x7F && image[1] == 'E' && image[2] == 'L' && image[3] == 'F'))
+-        return 0;
+-    if (image[4] != 1 /*ELFCLASS32*/ || image[5] != 2 /*ELFDATA2MSB*/)
+-        return 0;
++    if (!image || available < 0x34 || memcmp(image, "\177ELF", 4) ||
++        image[4] != 1 || image[5] != 2) return 0;
++    const uint32_t entry = rd_be32(image + 0x18);
++    const uint32_t off = rd_be32(image + 0x1C);
++    const uint16_t stride = rd_be16(image + 0x2A), count = rd_be16(image + 0x2C);
++    if (entry >= SPU_LS_SIZE || (entry & 3) || !count || stride < 0x20 ||
++        off < 0x34 || (uint64_t)off + (uint64_t)count * stride > available) return 0;
++    int loaded = 0;
++    for (unsigned i = 0; i < count; ++i) {
++        const uint8_t* ph = image + off + (size_t)i * stride;
++        if (rd_be32(ph) != 1) continue;
++        const uint32_t file = rd_be32(ph + 4), addr = rd_be32(ph + 8);
++        const uint32_t filesz = rd_be32(ph + 0x10), memsz = rd_be32(ph + 0x14);
++        if (filesz > memsz || (uint64_t)addr + memsz > SPU_LS_SIZE ||
++            (uint64_t)file + filesz > available) return 0;
++        loaded |= memsz != 0;
++    }
++    return loaded;
++}
+ 
+-    uint32_t e_entry     = rd_be32(image + 0x18);
+-    uint32_t e_phoff     = rd_be32(image + 0x1C);
+-    uint16_t e_phentsize = rd_be16(image + 0x2A);
+-    uint16_t e_phnum     = rd_be16(image + 0x2C);
+-    if (e_phentsize < 0x20) e_phentsize = 0x20;
+-
+-    for (uint16_t i = 0; i < e_phnum; i++) {
+-        size_t po = (size_t)e_phoff + (size_t)i * e_phentsize;
+-        if (po + 0x20 > image_size) break;
+-        const uint8_t* ph = image + po;
+-
+-        uint32_t p_type   = rd_be32(ph + 0x00);
+-        if (p_type != 1 /*PT_LOAD*/) continue;
+-        uint32_t p_offset = rd_be32(ph + 0x04);
+-        uint32_t p_vaddr  = rd_be32(ph + 0x08);
+-        uint32_t p_filesz = rd_be32(ph + 0x10);
+-        uint32_t p_memsz  = rd_be32(ph + 0x14);
+-
+-        /* bounds: segment must fit in local store and in the image */
+-        if ((uint64_t)p_vaddr + p_memsz > SPU_LS_SIZE)            return 0;
+-        if ((uint64_t)p_offset + p_filesz > image_size)          return 0;
+-
+-        if (p_filesz) memcpy(ls + p_vaddr, image + p_offset, p_filesz);
+-        if (p_memsz > p_filesz)
+-            memset(ls + p_vaddr + p_filesz, 0, p_memsz - p_filesz);
++int spu_elf_load_to_ls(const uint8_t* image, size_t image_size, uint8_t* ls, uint32_t* entry_out)
++{
++    if (!ls || !spu_elf_headers_valid(image, image_size)) return 0;
++    const uint32_t off = rd_be32(image + 0x1C);
++    const uint16_t stride = rd_be16(image + 0x2A), count = rd_be16(image + 0x2C);
++    for (unsigned i = 0; i < count; ++i) {
++        const uint8_t* ph = image + off + (size_t)i * stride;
++        if (rd_be32(ph) != 1) continue;
++        const uint32_t file = rd_be32(ph + 4), addr = rd_be32(ph + 8);
++        const uint32_t filesz = rd_be32(ph + 0x10), memsz = rd_be32(ph + 0x14);
++        if (filesz) memcpy(ls + addr, image + file, filesz);
++        if (memsz > filesz) memset(ls + addr + filesz, 0, memsz - filesz);
+     }
+-    if (entry_out) *entry_out = e_entry;
++    if (entry_out) *entry_out = rd_be32(image + 0x18);
+     return 1;
+ }
+ 
+ size_t spu_elf_image_size(const uint8_t* image, size_t max_avail)
+ {
+-    if (!image || max_avail < 0x34) return 0;
+-    if (!(image[0] == 0x7F && image[1] == 'E' && image[2] == 'L' && image[3] == 'F'))
+-        return 0;
+-    if (image[4] != 1 || image[5] != 2) return 0;     /* ELFCLASS32, ELFDATA2MSB */
+-
+-    uint32_t e_phoff     = rd_be32(image + 0x1C);
+-    uint32_t e_shoff     = rd_be32(image + 0x20);
+-    uint16_t e_phentsize = rd_be16(image + 0x2A);
+-    uint16_t e_phnum     = rd_be16(image + 0x2C);
+-    uint16_t e_shentsize = rd_be16(image + 0x2E);
+-    uint16_t e_shnum     = rd_be16(image + 0x30);
+-
+-    uint64_t end = (uint64_t)e_shoff + (uint64_t)e_shnum * e_shentsize;
+-
+-    for (uint16_t k = 0; k < e_phnum; k++) {           /* program headers */
+-        size_t po = (size_t)e_phoff + (size_t)k * e_phentsize;
+-        if (po + 0x14 > max_avail) break;
+-        uint32_t p_offset = rd_be32(image + po + 0x04);
+-        uint32_t p_filesz = rd_be32(image + po + 0x10);
+-        uint64_t e = (uint64_t)p_offset + p_filesz;
+-        if (e > end) end = e;
++    if (!spu_elf_headers_valid(image, max_avail)) return 0;
++    const uint32_t phoff = rd_be32(image + 0x1C), shoff = rd_be32(image + 0x20);
++    const uint16_t phstride = rd_be16(image + 0x2A), phnum = rd_be16(image + 0x2C);
++    const uint16_t shstride = rd_be16(image + 0x2E), shnum = rd_be16(image + 0x30);
++    uint64_t end = (uint64_t)phoff + (uint64_t)phnum * phstride;
++    if (shnum) {
++        const uint64_t table_end = (uint64_t)shoff + (uint64_t)shnum * shstride;
++        if (shstride < 0x28 || shoff < 0x34 || table_end > max_avail) return 0;
++        if (table_end > end) end = table_end;
+     }
+-    for (uint16_t k = 0; k < e_shnum; k++) {           /* section headers */
+-        size_t so = (size_t)e_shoff + (size_t)k * e_shentsize;
+-        if (so + 0x18 > max_avail) break;
+-        uint32_t sh_type   = rd_be32(image + so + 0x04);
+-        uint32_t sh_offset = rd_be32(image + so + 0x10);
+-        uint32_t sh_size   = rd_be32(image + so + 0x14);
+-        if (sh_type != 8 /*SHT_NOBITS*/) {
+-            uint64_t e = (uint64_t)sh_offset + sh_size;
+-            if (e > end) end = e;
+-        }
++    for (unsigned i = 0; i < phnum; ++i) {
++        const uint8_t* ph = image + phoff + (size_t)i * phstride;
++        const uint64_t file_end = (uint64_t)rd_be32(ph + 4) + rd_be32(ph + 0x10);
++        if (file_end > max_avail) return 0;
++        if (file_end > end) end = file_end;
++    }
++    for (unsigned i = 0; i < shnum; ++i) {
++        const uint8_t* sh = image + shoff + (size_t)i * shstride;
++        if (rd_be32(sh + 4) == 8 /* SHT_NOBITS */) continue;
++        const uint64_t file_end = (uint64_t)rd_be32(sh + 0x10) + rd_be32(sh + 0x14);
++        if (file_end > max_avail) return 0;
++        if (file_end > end) end = file_end;
+     }
+-    if (end > max_avail) end = max_avail;
+     return (size_t)end;
+ }
+ 
+@@ -447,7 +438,7 @@ static int spu_persist_ls_enabled(void)
   * a single SPU's task scheduling; with LBP_WS_DRAIN a genuinely unsignalled
   * task drains and releases. Opt-in; default keeps concurrent per-thread SPU. */
  static int spu_serial_enabled(void)
@@ -23685,7 +23823,7 @@ index 3ce8d0d..89e46a2 100644
  #ifdef _WIN32
  static SRWLOCK s_spu_serial = SRWLOCK_INIT;
  void spu_serial_acquire(void){ if (spu_serial_enabled()) AcquireSRWLockExclusive(&s_spu_serial); }
-@@ -508,15 +510,54 @@ static spu_ts_ls_slot* ts_ls_get(uint32_t taskset_ea, uint32_t taskid)
+@@ -508,15 +499,54 @@ static spu_ts_ls_slot* ts_ls_get(uint32_t taskset_ea, uint32_t taskid)
   * Taskset layout: bitsets of 16 bytes at +0x10 ready, +0x20 pending,
   * +0x30 enabled (task 0 = MSB of byte 0); task_info[t] at +0x80 + 0x30*t with
   * the ELF EA at +0x14 and the context save EA at +0x1C. */
@@ -23745,7 +23883,7 @@ index 3ce8d0d..89e46a2 100644
  }
  static void ts_lock(void)   { while (InterlockedExchange(&s_ts_lock, 1)) Sleep(0); }
  static void ts_unlock(void) { InterlockedExchange(&s_ts_lock, 0); }
-@@ -544,16 +585,16 @@ void spu_taskset_mark_running(uint32_t taskset_ea, uint32_t t)
+@@ -544,16 +574,16 @@ void spu_taskset_mark_running(uint32_t taskset_ea, uint32_t t)
       * it when a task exits; nothing here did, so a task that joins its workers
       * (Havok's master SPU task does) retried forever and the PPU waited on it.
       * Only Taskset2s have the array -- a v1 taskset ends at 0x1900. */
@@ -23770,7 +23908,7 @@ index 3ce8d0d..89e46a2 100644
  }
  void spu_taskset2_set_exit(uint32_t taskset_ea, uint32_t task, int exited, uint32_t code)
  {
-@@ -573,6 +614,14 @@ void spu_taskset2_set_exit(uint32_t taskset_ea, uint32_t task, int exited, uint3
+@@ -573,6 +603,14 @@ void spu_taskset2_set_exit(uint32_t taskset_ea, uint32_t task, int exited, uint3
      spu_lockline_unlock();
  }
  
@@ -23785,7 +23923,7 @@ index 3ce8d0d..89e46a2 100644
  static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
  {
      extern uint8_t* vm_base;
-@@ -600,6 +649,13 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
+@@ -600,6 +638,13 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
          ts[0x30 + done_task / 8] &= (uint8_t)~m;
          if (run) run[done_task / 8] &= (uint8_t)~m;
      }
@@ -23799,7 +23937,7 @@ index 3ce8d0d..89e46a2 100644
      for (uint32_t t = 0; t < 128 && run; t++) {
          uint8_t m = (uint8_t)(0x80u >> (t & 7));
          if (!(ts[0x30 + t / 8] & m) || (run[t / 8] & m)) continue;
-@@ -624,9 +680,13 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
+@@ -624,9 +669,13 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
      spu_coh_notify_write(taskset_ea);
      spu_lockline_unlock();
      for (int i = 0; i < n_start; i++) {
@@ -23815,7 +23953,7 @@ index 3ce8d0d..89e46a2 100644
          spu_workload_dispatch_async(vm_base + start_elf[i], (uint32_t)start_sz[i], start_ctx[i]);
      }
      s_ts_held = 0; ts_unlock();
-@@ -640,8 +700,209 @@ void spu_taskset_start_pending(uint32_t taskset_ea)
+@@ -640,8 +689,209 @@ void spu_taskset_start_pending(uint32_t taskset_ea)
      if (taskset_ea) spu_taskset_task_exited(taskset_ea, 0xFFFFFFFFu);
  }
  
@@ -24025,7 +24163,7 @@ index 3ce8d0d..89e46a2 100644
      spu_taskset_mark(j->taskset_ea, j->taskid, 1);
      /* Persistent per-taskset LS: acquire (+serialize) the taskset's LS, or fall
       * back to a fresh per-dispatch LS when disabled / no taskset. */
-@@ -839,9 +1100,10 @@ static void spu_async_run(spu_async_job* j)
+@@ -839,9 +1089,10 @@ static void spu_async_run(spu_async_job* j)
                   * both audio tasks run task 1's descriptor). */
                  if (j->taskset_ea) {
                      spurs_pm_build_context(ls, j->taskset_ea, j->taskid, 0, 0);
@@ -24039,7 +24177,7 @@ index 3ce8d0d..89e46a2 100644
                  }
              }
              /* ---- Bink-layer probe + real-policy A/B (image 3 = binkspu) ----
-@@ -979,8 +1241,9 @@ static void spu_async_run(spu_async_job* j)
+@@ -979,8 +1230,9 @@ static void spu_async_run(spu_async_job* j)
                    FILE* f = fopen(path, "wb");
                    if (f) { fwrite(ls, 1, SPU_LS_SIZE, f); fclose(f);
                        fprintf(stderr, "[spu_workload] wrote local store -> %s\n", path); } } }
@@ -24051,7 +24189,7 @@ index 3ce8d0d..89e46a2 100644
              spu_serial_release();
              if (j->taskset_ea) spu_taskset_task_exited(j->taskset_ea, j->taskid);
          }
-@@ -1113,7 +1376,6 @@ int spu_workload_dispatch_job(const uint8_t* image, uint32_t image_size,
+@@ -1113,7 +1365,6 @@ int spu_workload_dispatch_job(const uint8_t* image, uint32_t image_size,
   *     the guest bit is set under the same lock the waiter checks it).
   * The bitset is guest state (SPU-visible); the host lock/condvar exist only
   * to block and wake the task's host thread. */
@@ -24059,7 +24197,7 @@ index 3ce8d0d..89e46a2 100644
  #include "spu_coherency.h"
  
  #ifdef _WIN32
-@@ -1124,63 +1386,89 @@ static pthread_mutex_t s_sig_lock = PTHREAD_MUTEX_INITIALIZER;
+@@ -1124,63 +1375,89 @@ static pthread_mutex_t s_sig_lock = PTHREAD_MUTEX_INITIALIZER;
  static pthread_cond_t  s_sig_cv   = PTHREAD_COND_INITIALIZER;
  #endif
  
@@ -24199,7 +24337,7 @@ index 3ce8d0d..89e46a2 100644
  }
  
  /* Event bits owed to a task, keyed by the OBJECT it waits on (flag - 0x80).
-@@ -1190,30 +1478,40 @@ void spu_taskset_parked_del(uint32_t taskset_ea, uint32_t taskId)
+@@ -1190,30 +1467,40 @@ void spu_taskset_parked_del(uint32_t taskset_ea, uint32_t taskId)
   * path was never parked for the Set to target. So the Set only RECORDS what is
   * owed, and the WAIT_SIGNAL handler writes it into guest memory just before it
   * hands control back -- at which point the guest cannot yet have read it. */
@@ -24256,7 +24394,7 @@ index 3ce8d0d..89e46a2 100644
  }
  
  /* A direction-2 Set that finds NOBODY parked yet is a lost wakeup: the task
-@@ -1221,44 +1519,62 @@ uint16_t spu_ef_bits_take(uint32_t obj)
+@@ -1221,44 +1508,62 @@ uint16_t spu_ef_bits_take(uint32_t obj)
   * one pending wake per taskset; the next task to park consumes it instead of
   * sleeping. One bit, not a counter -- SPURS signals are latched, not queued, so
   * two Sets before a park must not buy two passes through the wait. */
@@ -24342,7 +24480,7 @@ index 3ce8d0d..89e46a2 100644
  }
  
  /* Set or clear a task's bit in the guest `signalled` bitset from a host thread.
-@@ -1298,15 +1614,26 @@ static void spu_signalled_update(uint32_t taskset_ea, uint32_t taskId, int set)
+@@ -1298,15 +1603,26 @@ static void spu_signalled_update(uint32_t taskset_ea, uint32_t taskId, int set)
  static void spu_taskset_wake_written(void* opaque)
  {
      (void)opaque;
@@ -24378,7 +24516,7 @@ index 3ce8d0d..89e46a2 100644
  }
  
  /* Deliver a signal to a task (callable from any PPU/host thread). */
-@@ -1317,14 +1644,14 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
+@@ -1317,14 +1633,14 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
       * lock-line and take s_sig_lock, so lock-line must never nest inside it. */
      spu_signalled_update(taskset_ea, taskId, 1);
      spu_taskset_wake_written(NULL);
@@ -24397,7 +24535,7 @@ index 3ce8d0d..89e46a2 100644
            extern unsigned long long ps3_ms_now(void);
            const uintptr_t c = (uintptr_t)__builtin_return_address(0);
            for (int i = 0; i < 32; i++) {
-@@ -1357,26 +1684,15 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
+@@ -1357,26 +1673,15 @@ void spu_taskset_signal_task(uint32_t taskset_ea, uint32_t taskId)
   * re-checks. */
  void spu_taskset_line_committed(uint32_t line)
  {
@@ -24432,7 +24570,7 @@ index 3ce8d0d..89e46a2 100644
  }
  
  /* WAIT_SIGNAL from the task side (runs ON the task's host thread, called by
-@@ -1389,12 +1705,19 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1389,12 +1694,19 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
       * per round) -- decisive for "is the Bink decode CPU-bound". TLS: each
       * task runs on its own host thread. */
      static _Thread_local unsigned long long s_wait_exit_ms;
@@ -24456,7 +24594,7 @@ index 3ce8d0d..89e46a2 100644
      /* LBP_SYNC_ACK: taskset sync-lane bookkeeping. On real SPURS the taskset
       * POLICY MODULE advances the per-SPU progress lanes (sync+0x40+16*row:
       * ticket u16 @+0, consumer lanes @+2..) as tasks are processed; our HLE
-@@ -1442,46 +1765,56 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
+@@ -1442,46 +1754,56 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
      spu_lockline_lock();
      spu_coh_watch_add(&watch, taskset_ea + CSTS_SIGNALLED, spu_taskset_wake_written, NULL);
      spu_lockline_unlock();
@@ -24539,7 +24677,7 @@ index 3ce8d0d..89e46a2 100644
  int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
                                  uint32_t args_ea)
  {
-@@ -1529,7 +1862,18 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1529,7 +1851,18 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * the next CreateTask overwriting the single-slot globals -- with two audio
       * tasks that made both run task 1's descriptor. */
      { extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
@@ -24559,7 +24697,7 @@ index 3ce8d0d..89e46a2 100644
      /* Mark the task running NOW, not when its thread starts: in that gap another
       * task's exit saw it ready-but-not-running and started it a second time
       * (Twisted Metal's level-load inflate tasks each ran twice, concurrently). */
-@@ -1548,7 +1892,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1548,7 +1881,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
          if ((j->r3[0] >> 16) == 0x40) j->have_r3 = 1;   /* valid marker */
      }
  
@@ -24568,7 +24706,7 @@ index 3ce8d0d..89e46a2 100644
          "[spu_workload] dispatch HIT (async) fp=0x%016llX args=0x%08X image=%d -> spawning thread\n",
          (unsigned long long)fp, args_ea, image_id);
      if (args_ea) { extern uint8_t* vm_base; const uint8_t* c = vm_base + args_ea;
-@@ -1577,6 +1921,10 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1577,6 +1910,10 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
                  fprintf(stderr, "\n");
              } } }
  
@@ -24579,7 +24717,7 @@ index 3ce8d0d..89e46a2 100644
  #ifdef _WIN32
      /* 256MB RESERVE (not commit): the Bink SPU decoder's per-macroblock brsl
       * chains are deep host call chains with fat lifted frames -- a 1MB stack
-@@ -1584,7 +1932,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1584,7 +1921,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * process death) the moment the real decode path first executed. */
      HANDLE th = CreateThread(NULL, 256u << 20, spu_async_thread, j,
                               STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
@@ -24588,7 +24726,7 @@ index 3ce8d0d..89e46a2 100644
      CloseHandle(th);   /* detached */
  #else
      /* Same 256 MB reservation, for the same reason: pthread stacks are
-@@ -1603,7 +1951,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+@@ -1603,7 +1940,7 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
       * beats never dispatching at all. */
      if (prc != 0)
          prc = pthread_create(&th, NULL, spu_async_thread, j);
@@ -43081,3 +43219,110 @@ index 4b7df8c..2252ff3 100644
  }
  
  #endif /* PS3_LOG_H */
+diff --git a/runtime/spu/spurs_job.c b/runtime/spu/spurs_job.c
+index bb8f122..60a452c 100644
+--- a/runtime/spu/spurs_job.c
++++ b/runtime/spu/spurs_job.c
+@@ -45,6 +45,13 @@
+ #include "ps3emu/log_first.h"
+ 
+ extern uint8_t* vm_base;
++extern uint32_t ppu_vm_size;
++
++static int job_guest_span(uint32_t ea, uint32_t size)
++{
++    const uint64_t end = (uint64_t)ea + size;
++    return vm_base && end <= 0x100000000ull && (!ppu_vm_size || end <= ppu_vm_size);
++}
+ extern int spu_run_with_halt(void (*)(spu_context*), spu_context*);
+ 
+ /* ---- guest reads (big-endian) ------------------------------------------ */
+@@ -158,7 +165,13 @@ void spurs_job_set_spu_num(uint32_t n) { g_spurs_job_spu_num = n; }
+ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
+                       uint32_t job_ea, uint32_t job_desc_size)
+ {
+-    if (!entry || !job_ea) return -1;
++    const uint32_t dsz = job_desc_size ? job_desc_size : 256u;
++    const uint32_t desc_ls = SPU_LS_SIZE - 0x400;
++    const uint32_t ctx_ls = desc_ls - 0x40;
++    g_spurs_job_mbox_valid = 0;
++    g_spurs_job_cmd = 0;
++    if (!entry || !job_ea || (dsz != 64 && (dsz < 128 || (dsz & 127))) ||
++        dsz > 1024 || !job_guest_span(job_ea, dsz)) return -1;
+ 
+     /* ---- descriptor ---------------------------------------------------- */
+     uint32_t ea_bin   = (uint32_t)(g64(job_ea + JH_EA_BINARY) & ~1ull);
+@@ -171,7 +184,12 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
+     uint32_t size_scr = (uint32_t)g16(job_ea + JH_SIZE_SCRATCH) << 4;
+     uint32_t n_cache  = g32(job_ea + JH_SIZE_CACHE_DMA_LIST) / 8u;
+ 
+-    if (n_cache > 4) n_cache = 4;                    /* jm2 caps at 4 */
++    const uint32_t dma_bytes = g16(job_ea + JH_SIZE_DMA_LIST);
++    const uint32_t cache_bytes = g32(job_ea + JH_SIZE_CACHE_DMA_LIST);
++    if ((dma_bytes & 7) || (cache_bytes & 7) || n_cache > 4 ||
++        (uint64_t)JH_SIZE + dma_bytes + cache_bytes > dsz ||
++        g32(job_ea + JH_EA_BINARY) || g32(job_ea + JH_EA_HIGH_INPUT) ||
++        g32(job_ea + JH_EA_HIGH_CACHE)) return -1;
+     if (!size_stk) size_stk = JOB_STACK_DEFAULT;
+     if (!size_bin || size_bin > SPU_LS_SIZE) {
+         fprintf(stderr, "[spurs-job] job 0x%08X: bad sizeBinary=%u -- not run\n",
+@@ -179,6 +197,32 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
+         return -1;
+     }
+ 
++    /* Check the complete layout and every guest transfer before allocating or
++     * copying. Do the alignment in 64 bits: UINT32_MAX used to wrap to zero. */
++    uint64_t required = (((uint64_t)size_bin + 1023) & ~1023ull) +
++                        (((uint64_t)size_io + 1023) & ~1023ull) +
++                        (((uint64_t)size_out + 1023) & ~1023ull) +
++                        (((uint64_t)size_scr + size_stk + 1023) & ~1023ull);
++    if (required > ctx_ls || size_stk < 32 || !job_guest_span(ea_bin, size_bin)) return -1;
++    const uint32_t input_base = job_ea + JH_SIZE;
++    const uint32_t cached_base = input_base + dma_bytes;
++    for (uint32_t i = 0; i < n_cache; ++i) {
++        const uint64_t item = g64(cached_base + i * 8);
++        const uint32_t size = (uint32_t)(item >> 32), ea = (uint32_t)item;
++        if (!size || !ea) continue;
++        required += ((uint64_t)size + 1023) & ~1023ull;
++        if (required > ctx_ls || !job_guest_span(ea, size)) return -1;
++    }
++    uint32_t input_used = 0;
++    for (uint32_t i = 0; i < n_dma; ++i) {
++        const uint64_t item = g64(input_base + i * 8);
++        const uint32_t size = (uint32_t)((item >> 32) & 0x7FFFu), ea = (uint32_t)item;
++        if (!size || !ea) continue;
++        if (input_used > size_io || size > size_io - input_used ||
++            !job_guest_span(ea, size)) return -1;
++        input_used += (size + 15u) & ~15u;
++    }
++
+     uint8_t* ls = (uint8_t*)calloc(1, SPU_LS_SIZE);
+     if (!ls) return -1;
+ 
+@@ -239,13 +283,6 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
+     /* ---- context + descriptor, parked above the job's memory region ------
+      * jm2 keeps these in its own bss (outside job memory); we load the job at
+      * LS 0, so the top of LS is the equivalent free space. */
+-    uint32_t desc_ls = SPU_LS_SIZE - 0x400;     /* descriptors are <= 1024 B */
+-    uint32_t ctx_ls  = desc_ls - 0x40;          /* CellSpursJobContext2, 48 B */
+-    uint32_t dsz     = job_desc_size ? job_desc_size : 256u;
+-    if (dsz > 0x400) dsz = 0x400;
+-    if (p > ctx_ls)
+-        fprintf(stderr, "[spurs-job] job 0x%08X: WARNING regions reach 0x%X, "
+-                        "past the context at 0x%X\n", job_ea, p, ctx_ls);
+     memcpy(ls + desc_ls, vm_base + job_ea, dsz);
+ 
+     ls32(ls, ctx_ls + JC_IO_BUFFER, io_ls);
+@@ -425,8 +462,10 @@ int spu_run_spurs_job(spu_lifted_entry_fn entry, int image_id,
+     g_spurs_job_mbox_intr = spu_channel_has_data(&ctx.ch_out_intr_mbox)
+                           ? ctx.ch_out_intr_mbox.value : 0;
+     g_spurs_job_mbox_valid = g_spurs_job_mbox || g_spurs_job_mbox_intr;
+-    { uint32_t _cb = g32(job_ea + 0x4C);
+-      g_spurs_job_cmd = _cb ? (g32(_cb) >> 16) : 0; }
++    if (dsz >= 0x50) {
++        const uint32_t cb = g32(job_ea + 0x4C);
++        if (cb && job_guest_span(cb, 4)) g_spurs_job_cmd = g32(cb) >> 16;
++    }
+     { static int s_t = -1; if (s_t < 0) s_t = getenv("SPURS_JOB_MBOX") ? 1 : 0;
+       static int n = 0;
+       if (s_t && PS3_LOG_FIRST(n, 16) && g_spurs_job_mbox_valid)

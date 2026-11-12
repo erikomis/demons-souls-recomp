@@ -128,6 +128,24 @@ Keyboard and mouse use the Windows layout (`mac/input.toml`):
 
 Esc or Cmd releases the mouse.
 
+## Native regression tests
+
+After the toolkit step, run `mac/test.sh`. It builds and runs the synthetic CPU/runtime
+regressions in `port/build_mac_tests`; no game files or saves are needed. The command checks
+that the SDK matches this checkout's runtime patch before testing it. Python 3.10 or newer,
+CMake, Ninja and the Xcode command-line tools are required.
+
+An existing patched SDK can be selected with `PS3RECOMP_DIR=/path/to/ps3recomp mac/test.sh`.
+CTest filters are forwarded, for example `mac/test.sh -R 'spu_elf|spu_job'`.
+For memory and undefined-behavior checks, use a separate build:
+
+```sh
+DES_TEST_SANITIZERS=ON DES_TEST_BUILD=port/build_mac_tests_sanitized mac/test.sh
+```
+
+These tests cover manufactured SPU images, job descriptors, synchronization and import
+failures. Gameplay stability, frame times and rendering still need testing with the game.
+
 ## Mac-specific fixes so far (in `patches/`)
 
 - **The guest runs off the main thread** (`boot_main.cpp`, as in ps3recomp's `templates/project/main.cpp`).
