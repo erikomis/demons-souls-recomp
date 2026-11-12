@@ -23428,7 +23428,7 @@ index 8c4ccaa..eac2f00 100644
      /* Mark tag as completed -- EXCEPT a list parked at a stall-and-notify
       * element: its tag group stays incomplete until MFC_WrListStallAck resumes
 diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
-index f04fda6..b34f4da 100644
+index f04fda6..3265380 100644
 --- a/runtime/spu/spu_helpers.h
 +++ b/runtime/spu/spu_helpers.h
 @@ -465,7 +465,10 @@ static inline u128 spu_selb(u128 a, u128 b, u128 c) { return spu_selb_ref(a, b,
@@ -23527,7 +23527,7 @@ index f04fda6..b34f4da 100644
  SPU__X8_INLINE u128 spu_fma(u128 a, u128 b, u128 c)  { return spu__x8_fma(a, b, c, 0, 0); }            /* a*b + c */
  SPU__X8_INLINE u128 spu_fms(u128 a, u128 b, u128 c)  { return spu__x8_fma(a, b, c, 0, 0x80000000u); }  /* a*b - c */
  SPU__X8_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return spu__x8_fma(a, b, c, 0x80000000u, 0); }  /* c - a*b */
-@@ -1673,6 +1746,64 @@ SPU__XE_INLINE u128 spu_cuflt(u128 a, int i8) {
+@@ -1673,6 +1746,86 @@ SPU__XE_INLINE u128 spu_cuflt(u128 a, int i8) {
      const __m128i nz = _mm_xor_si128(_mm_cmpeq_epi32(v, _mm_setzero_si128()), _mm_set1_epi32(-1));
      return spu__xe_st(spu__xe_cxflt(d, _mm_setzero_si128(), nz, i8));
  }
@@ -23587,12 +23587,34 @@ index f04fda6..b34f4da 100644
 +}
 +static inline u128 spu_frest(u128 a)           { return spu_frest_ref(a); }
 +static inline u128 spu_frsqest(u128 a)         { return spu_frsqest_ref(a); }
-+static inline u128 spu_csflt(u128 a, int i8)   { return spu_csflt_ref(a, i8); }
-+static inline u128 spu_cuflt(u128 a, int i8)   { return spu_cuflt_ref(a, i8); }
++/* Build the extended-range SPU float directly from integer bits. Native
++ * integer-to-float conversion rounds instead of truncating and cannot represent
++ * exponent 255. Integer NEON also keeps results independent of host FPCR. */
++static inline u128 spu__int_float_neon(uint32x4_t magnitude, uint32x4_t sign, int i8) {
++    const int32x4_t top = vsubq_s32(vdupq_n_s32(31), vreinterpretq_s32_u32(vclzq_u32(magnitude)));
++    const int32x4_t exponent = vaddq_s32(top, vdupq_n_s32((i8 & 0xFF) - 28));
++    const uint32x4_t significand = vshlq_u32(magnitude, vsubq_s32(vdupq_n_s32(23), top));
++    uint32x4_t bits = vorrq_u32(sign, vorrq_u32(
++        vshlq_n_u32(vreinterpretq_u32_s32(exponent), 23),
++        vandq_u32(significand, vdupq_n_u32(0x7FFFFFu))));
++    bits = vbslq_u32(vcgtq_s32(exponent, vdupq_n_s32(255)),
++                     vorrq_u32(sign, vdupq_n_u32(0x7FFFFFFFu)), bits);
++    bits = vbicq_u32(bits, vorrq_u32(vceqzq_u32(magnitude),
++                                     vcltq_s32(exponent, vdupq_n_s32(1))));
++    u128 r; vst1q_u32(r._u32, bits); return r;
++}
++static inline u128 spu_csflt(u128 a, int i8) {
++    const uint32x4_t x = vld1q_u32(a._u32);
++    return spu__int_float_neon(vreinterpretq_u32_s32(vabsq_s32(vreinterpretq_s32_u32(x))),
++                               vandq_u32(x, vdupq_n_u32(0x80000000u)), i8);
++}
++static inline u128 spu_cuflt(u128 a, int i8) {
++    return spu__int_float_neon(vld1q_u32(a._u32), vdupq_n_u32(0), i8);
++}
  #else
  static inline u128 spu_fi(u128 a, u128 b)      { return spu_fi_ref(a, b); }
  static inline u128 spu_frest(u128 a)           { return spu_frest_ref(a); }
-@@ -2330,4 +2461,41 @@ static inline u128 spu_fsmh(u128 a) { return spu_fsmh_ref(a); }
+@@ -2330,4 +2483,41 @@ static inline u128 spu_fsmh(u128 a) { return spu_fsmh_ref(a); }
  static inline u128 spu_fsmb(u128 a) { return spu_fsmb_ref(a); }
  #endif
  

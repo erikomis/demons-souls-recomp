@@ -30,6 +30,16 @@ add_test(NAME interrupted_lift COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_
 add_test(NAME play_configuration COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_play.py")
 
 set(SPU "${PS3RECOMP_DIR}/runtime/spu")
+foreach(mode neon scalar scalar_int)
+    add_executable(test_spu_int_float_${mode} test_spu_int_float.c)
+    target_include_directories(test_spu_int_float_${mode} PRIVATE "${SPU}")
+    target_compile_options(test_spu_int_float_${mode} PRIVATE -UNDEBUG)
+    target_link_libraries(test_spu_int_float_${mode} PRIVATE m)
+    add_test(NAME spu_int_float_${mode} COMMAND test_spu_int_float_${mode})
+endforeach()
+target_compile_definitions(test_spu_int_float_scalar PRIVATE SPU_SCALAR_HELPERS=1)
+target_compile_definitions(test_spu_int_float_scalar_int PRIVATE SPU_SCALAR_INT=1)
+
 add_executable(test_taskset_lifecycle test_taskset_lifecycle.c
     "${PS3RECOMP_DIR}/runtime/platform/win32_compat.c")
 add_executable(test_spu_thread_group test_spu_thread_group.c
