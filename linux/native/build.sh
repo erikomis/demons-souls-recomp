@@ -25,7 +25,9 @@
 #   DES_BUILD         the build folder (default port/build_linux)
 #   DES_LTO=1         ThinLTO across the whole program (Steam Deck, Boletaria: +3.5% on top of PGO; a longer
 #                     link). Changing it reconfigures the build folder, which then rebuilds everything
-#   DES_PGO=<file>    an llvm-profdata profile to optimize with (-fprofile-use); see docs/LINUX_NATIVE.md
+#   DES_PGO=<file>    an llvm-profdata profile to optimize with (-fprofile-use); see docs/LINUX_NATIVE.md.
+#                     Default: port/pgo/des.profdata when it exists (DES_PGO=0: none)
+#   DES_MARCH=0       build for plain x86-64 + AVX2 instead of x86-64-v3 (used when the CPU has all of v3)
 #   DES_DISTROBOX=<name>  the distrobox container the build step compiles in. On SteamOS (no compiler on the
 #                     host, and an older glibc than a current toolchain builds for) the default is "des-build"
 #                     when that container exists; the game then also runs inside it (linux/native/play.sh)
@@ -37,6 +39,8 @@ DES_ROOT=$(cd "$here/../.." && pwd)
 cd "$DES_ROOT"
 DES_VENV=${DES_VENV:-$DES_ROOT/.venv}
 DES_BUILD=${DES_BUILD:-$DES_ROOT/port/build_linux}
+[ -z "${DES_PGO:-}" ] && [ -f "$DES_ROOT/port/pgo/des.profdata" ] && DES_PGO=$DES_ROOT/port/pgo/des.profdata
+[ "${DES_PGO:-}" = 0 ] && DES_PGO=
 DES_KEYS=${DES_KEYS:-${XDG_DATA_HOME:-$HOME/.local/share}/demons-souls-recomp/keys/self_keys.txt}
 DES_USRDIR=$DES_ROOT/game/PS3_GAME/USRDIR
 DES_ELF=$DES_USRDIR/EBOOT.elf
@@ -162,6 +166,13 @@ for s in $steps; do
       # the Steam Deck's too). DES_AVX2=0 builds for an older CPU.
       avx=ON; [ "${DES_AVX2:-1}" = 0 ] && avx=OFF
       grep -q '^flags' /proc/cpuinfo && ! grep -qw avx2 /proc/cpuinfo && avx=OFF
+      # x86-64-v3 (BMI2 shifts, LZCNT, MOVBE, ...) on a CPU that has all of it -- every AVX2 CPU in practice:
+      # +3.7% in Boletaria on the Deck. -ffp-contract=off keeps FMA from fusing a multiply and an add the
+      # game does separately (the PPU code already had it; this covers the SPU code too). DES_MARCH=0: off.
+      if [ "$avx" = ON ] && [ "${DES_MARCH:-1}" != 0 ]; then
+        v3=1; for f in avx2 bmi1 bmi2 f16c fma abm movbe; do grep -qw "$f" /proc/cpuinfo || v3=0; done
+        [ "$v3" = 1 ] && flags="$flags -march=x86-64-v3 -ffp-contract=off"
+      fi
       cmake -S "$DES_ROOT/project" -B "$DES_BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Fast \
             -DCMAKE_C_COMPILER="$(command -v clang)" -DCMAKE_CXX_COMPILER="$(command -v clang++)" \
             -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" -DCMAKE_EXE_LINKER_FLAGS="$lflags" \

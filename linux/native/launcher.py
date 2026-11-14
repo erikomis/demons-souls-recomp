@@ -9,19 +9,35 @@ on its own always start the game the same way. It also rebuilds the game (linux/
 the applications menu (where Steam's "Add a Non-Steam Game" finds it). The first install, from your disc
 image, is the installer's job (linux/native/install.sh); before it, Play opens the installer.
 
-    python3 linux/native/launcher.py          the window
-    python3 linux/native/launcher.py --play   starts the game with the saved settings (for a shortcut)
+    python3 linux/native/launcher.py           the window
+    python3 linux/native/launcher.py --steam   the window, for Steam's shortcut: Play has the focus, and the
+                                               window closes when the game ends (back to the Steam library)
+    python3 linux/native/launcher.py --play    starts the game with the saved settings, no window
+
+A controller works the window (Steam's game mode has no mouse): up / down (D-pad or left stick) moves between
+the items, left / right changes the one selected, A presses it, B backs out of a menu or a question, Start
+plays. It is read from /dev/input/js* (Steam's virtual pad, or any pad the kernel knows), not at all while
+the game runs. The arrow keys and Enter do the same from a keyboard -- and from the Deck's controls in
+desktop mode, which type them.
 
 Python 3.8+ with Tk (tkinter), nothing else: SteamOS has it; Debian / Ubuntu: sudo apt install python3-tk;
 Fedora: sudo dnf install python3-tkinter; Arch: sudo pacman -S tk.
 """
+import errno
+import glob
 import json
 import os
 import shlex
 import signal
+import struct
 import subprocess
 import sys
 import threading
+import time
+try:
+    import fcntl
+except ImportError:     # not Linux: no controller, the window still works
+    fcntl = None
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -110,7 +126,142 @@ def play_now(c):
     return subprocess.call(['bash', PLAY], cwd=ROOT, env=play_env(c))
 
 
-def main_window():
+class Gamepads:
+    """The kernel's joystick devices (/dev/input/js*), read without blocking: poll() returns the actions
+    since the last call -- 'up' 'down' 'left' 'right' (D-pad or left stick, repeating while held), 'a', 'b',
+    'start'. Buttons and axes go by the kernel's own maps (JSIOCGBTNMAP / JSIOCGAXMAP), so A is the south
+    face button and Start is Start on any pad the kernel knows; a device without a south button (a wheel,
+    a flight stick, a keyboard receiver's "Multi Axis") is not a pad. When Steam's virtual pad is there
+    (Valve's vendor id), it is the only one read: Steam mirrors the physical pads into it, and reading both
+    would count every press twice. New pads are picked up every 2 s."""
+    EV_BUTTON, EV_AXIS, EV_INIT = 0x01, 0x02, 0x80
+    JSIOCGAXES, JSIOCGBUTTONS = 0x80016A11, 0x80016A12
+    JSIOCGAXMAP, JSIOCGBTNMAP = 0x80406A32, 0x84006A34          # u8[ABS_CNT], u16[KEY_MAX - BTN_MISC + 1]
+    BTN_SOUTH, BTN_EAST, BTN_START = 0x130, 0x131, 0x13B
+    BTN_DPAD = {0x220: 'up', 0x221: 'down', 0x222: 'left', 0x223: 'right'}
+    ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y = 0x00, 0x01, 0x10, 0x11
+    REPEAT_FIRST, REPEAT_NEXT = 0.40, 0.12
+    STICK, HAT = 20000, 16000
+
+    def __init__(self):
+        self.pads = {}          # path -> {'fd', 'buttons': {number: code}, 'axes': {number: code}, 'val', 'dpad', 'steam'}
+        self.rescan_at = 0.0
+        self.held = None        # the direction being held, and when it repeats next
+        self.repeat_at = 0.0
+
+    def _open(self, path):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            return None
+        try:
+            b = bytearray(1)
+            fcntl.ioctl(fd, self.JSIOCGBUTTONS, b)
+            nb = b[0]
+            fcntl.ioctl(fd, self.JSIOCGAXES, b)
+            na = b[0]
+            bm = bytearray(1024)
+            fcntl.ioctl(fd, self.JSIOCGBTNMAP, bm)
+            am = bytearray(64)
+            fcntl.ioctl(fd, self.JSIOCGAXMAP, am)
+        except OSError:
+            os.close(fd)
+            return None
+        buttons = dict(enumerate(struct.unpack('<512H', bm)[:nb]))
+        if self.BTN_SOUTH not in buttons.values():
+            os.close(fd)
+            return None
+        try:
+            vendor = open('/sys/class/input/%s/device/id/vendor' % os.path.basename(path)).read().strip()
+        except OSError:
+            vendor = ''
+        return {'fd': fd, 'buttons': buttons, 'axes': dict(enumerate(am[:na])), 'val': {}, 'dpad': set(),
+                'steam': vendor == '28de'}
+
+    def _rescan(self):
+        for path in sorted(glob.glob('/dev/input/js*')):
+            if path not in self.pads:
+                p = self._open(path)
+                if p:
+                    self.pads[path] = p
+        if any(p['steam'] for p in self.pads.values()):
+            for path in [k for k, p in self.pads.items() if not p['steam']]:
+                os.close(self.pads.pop(path)['fd'])
+
+    def close(self):
+        for p in self.pads.values():
+            os.close(p['fd'])
+        self.pads.clear()
+
+    def _direction(self):
+        for p in self.pads.values():
+            if p['dpad']:
+                return next(iter(p['dpad']))
+            v = p['val']
+            for x, y, t in ((v.get(self.ABS_HAT0X, 0), v.get(self.ABS_HAT0Y, 0), self.HAT),
+                            (v.get(self.ABS_X, 0), v.get(self.ABS_Y, 0), self.STICK)):
+                if abs(y) >= t and abs(y) >= abs(x):
+                    return 'up' if y < 0 else 'down'
+                if abs(x) >= t:
+                    return 'left' if x < 0 else 'right'
+        return None
+
+    def poll(self):
+        if fcntl is None:
+            return []
+        now = time.monotonic()
+        if now >= self.rescan_at:
+            self._rescan()
+            self.rescan_at = now + 2.0
+        out = []
+        for path, p in list(self.pads.items()):
+            while True:
+                try:
+                    data = os.read(p['fd'], 8 * 64)
+                except OSError as e:
+                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):   # unplugged
+                        os.close(p['fd'])
+                        del self.pads[path]
+                    break
+                if not data:
+                    break
+                for off in range(0, len(data) - 7, 8):
+                    _, value, kind, number = struct.unpack_from('<IhBB', data, off)
+                    if kind & self.EV_AXIS:
+                        code = p['axes'].get(number)
+                        if code is not None:
+                            p['val'][code] = value      # an init event: where the axis rests
+                    elif kind & self.EV_BUTTON:
+                        code = p['buttons'].get(number)
+                        if code in self.BTN_DPAD:
+                            (p['dpad'].add if value else p['dpad'].discard)(self.BTN_DPAD[code])
+                        elif value == 1 and not kind & self.EV_INIT:
+                            if code == self.BTN_SOUTH:
+                                out.append('a')
+                            elif code == self.BTN_EAST:
+                                out.append('b')
+                            elif code == self.BTN_START:
+                                out.append('start')
+        d = self._direction()
+        if d != self.held:
+            self.held = d
+            if d:
+                out.append(d)
+                self.repeat_at = now + self.REPEAT_FIRST
+        elif d and now >= self.repeat_at:
+            out.append(d)
+            self.repeat_at = now + self.REPEAT_NEXT
+        return out
+
+    def reset(self):
+        """Forget what is held (after the game ran: the presses made in it are not the window's)."""
+        self.held = None
+        for p in self.pads.values():
+            p['val'].clear()
+            p['dpad'].clear()
+
+
+def main_window(steam=False):
     try:
         import tkinter as tk
         from tkinter import ttk, filedialog, messagebox
@@ -128,6 +279,13 @@ def main_window():
     if 'clam' in style.theme_names():
         style.theme_use('clam')
     style.configure('Horizontal.TProgressbar', background='#3584e4')   # clam's own fill is light grey
+    # The item a controller (or Tab) is on, plain to see from arm's length: clam's dotted focus ring is not.
+    focus_bg = '#bcd4f6'
+    for st, opt in (('TButton', 'background'), ('TMenubutton', 'background'), ('TCheckbutton', 'background'),
+                    ('TRadiobutton', 'background'), ('TCombobox', 'fieldbackground'), ('TEntry', 'fieldbackground')):
+        style.map(st, **{opt: [('focus', focus_bg)] + [tuple(x) for x in (style.map(st, opt) or [])]})
+    # clam draws a focused read-only combobox's value white (on its dark blue): dark on the light blue here
+    style.map('TCombobox', foreground=[('focus', 'black')] + [tuple(x) for x in (style.map('TCombobox', 'foreground') or [])])
 
     state = {'proc': None, 'kind': None}
 
@@ -226,7 +384,7 @@ def main_window():
     bar.grid(row=4, column=0, columnspan=4, sticky='we', pady=(8, 0))
     ttk.Label(inst, textvariable=prog).grid(row=5, column=0, columnspan=4, sticky='w')
 
-    logbox = tk.Text(body, height=5, wrap='none', font=('TkFixedFont', 9))
+    logbox = tk.Text(body, height=5, wrap='none', font=('TkFixedFont', 9), takefocus=0)
     logbox.pack(fill='both', expand=True, pady=(10, 0))
     logbox.configure(state='disabled')
 
@@ -315,11 +473,14 @@ def main_window():
         status.set('Playing. The logos and the first load take about a minute.')
 
         def done(code):
+            pads.reset()
             if code not in (0, -signal.SIGTERM, 130, 143):
                 if messagebox.askyesno('Demon\'s Souls',
                                        'Demon\'s Souls stopped with an error (exit code %d).\n\n'
                                        'Open the logs folder?' % code):
                     open_path(LOGS)
+            elif steam:
+                root.destroy()      # from Steam: the game ended, so does the "game" Steam started
         run('play', ['bash', PLAY], play_env(current()), on_done=done)
 
     def build_line(line):
@@ -438,19 +599,167 @@ def main_window():
             do_stop()
         root.destroy()
     root.protocol('WM_DELETE_WINDOW', on_close)
+
+    # --- controller and arrow keys ---------------------------------------------------------------------
+    pads = Gamepads()
+    menu_open = {'on': False}
+
+    def steam_running():
+        return subprocess.run(['pgrep', '-x', 'steam'], stdout=subprocess.DEVNULL).returncode == 0
+
+    T = root.tk.call     # by Tcl path: a question's buttons (tk_messageBox) have no Python widget
+
+    def enabled(path):
+        try:
+            if T('winfo', 'class', path).startswith('T'):
+                return not root.tk.getboolean(T(path, 'instate', 'disabled'))
+            return str(T(path, 'cget', '-state')) != 'disabled'
+        except tk.TclError:
+            return True
+
+    def move_focus(path, forward):
+        n = str(T('tk_focusNext' if forward else 'tk_focusPrev', path))
+        if n:
+            T('focus', n)
+
+    def change(path, step):
+        """Left / right: the next or previous choice of the item selected."""
+        cls = str(T('winfo', 'class', path))
+        if cls in ('TRadiobutton', 'Radiobutton'):
+            sibs = [str(c) for c in T('winfo', 'children', T('winfo', 'parent', path))
+                    if str(T('winfo', 'class', c)) == cls and enabled(c)]
+            if path in sibs and len(sibs) > 1:
+                n = sibs[(sibs.index(path) + step) % len(sibs)]
+                T('focus', n)
+                T(n, 'invoke')
+        elif cls == 'TCombobox':
+            vals = [str(x) for x in root.tk.splitlist(T(path, 'cget', '-values'))]
+            if vals:
+                cur = str(T(path, 'get'))
+                i = vals.index(cur) if cur in vals else -step
+                T(path, 'set', vals[(i + step) % len(vals)])
+                T('event', 'generate', path, '<<ComboboxSelected>>')
+        else:
+            move_focus(path, step > 0)      # buttons in a row, and the yes / no of a question
+
+    def open_more():
+        more.update_idletasks()
+        # as a ttk menubutton posts it: with Tk's grab, so Escape and a click elsewhere close it too
+        T('tk_popup', str(menu), more.winfo_rootx(), more.winfo_rooty() + more.winfo_height())
+        menu.activate(0)
+        menu_open['on'] = True
+    menu.bind('<Unmap>', lambda _e: menu_open.update(on=False))   # closed by the mouse, or by Escape
+
+    def menu_action(act):
+        last = menu.index('end')
+        cur = menu.index('active')
+        if act in ('up', 'down'):
+            step = 1 if act == 'down' else -1
+            i = cur if cur is not None else (-1 if step > 0 else last + 1)
+            for _ in range(last + 1):
+                i = (i + step) % (last + 1)
+                if menu.type(i) != 'separator':
+                    break
+            menu.activate(i)
+        elif act in ('a', 'b', 'start'):
+            T('tk::MenuUnpost', str(menu))      # releases tk_popup's grab and gives the focus back
+            menu_open['on'] = False
+            if act == 'a' and cur is not None:  # nothing highlighted (the mouse left it): nothing to run
+                menu.invoke(cur)
+
+    debug = os.environ.get('DES_LAUNCHER_DEBUG') == '1'
+
+    def nav(act, src='pad'):
+        """One controller (or arrow key) action on the item that has the focus."""
+        if debug:
+            print('[launcher] %s %s on %s' % (src, act, T('focus')), file=sys.stderr, flush=True)
+        if menu_open['on']:
+            return menu_action(act)
+        path = str(T('focus'))
+        if not path:
+            if not steam:
+                return      # another program has the focus: the pad is its
+            b_play.focus_force()
+            if act != 'start':
+                return      # the first press only shows where the focus is
+            path = str(b_play)
+        cls = str(T('winfo', 'class', path))
+        dialog = str(T('winfo', 'toplevel', path)) != '.'
+        if act == 'start':
+            if not dialog:
+                do_play()
+        elif act in ('up', 'down'):
+            move_focus(path, act == 'down')
+        elif act in ('left', 'right'):
+            change(path, 1 if act == 'right' else -1)
+        elif act == 'b':
+            if dialog:
+                T('event', 'generate', path, '<Escape>')
+        elif act == 'a':
+            if path == str(more):
+                open_more()
+            elif cls in ('TButton', 'Button', 'TCheckbutton', 'Checkbutton', 'TRadiobutton', 'Radiobutton'):
+                if enabled(path):
+                    T(path, 'invoke')
+            elif cls == 'TCombobox':
+                change(path, 1)
+            elif cls in ('TEntry', 'Entry') and steam_running():
+                # the character name: Steam's on-screen keyboard types into the window that has the focus
+                subprocess.Popen(['xdg-open', 'steam://open/keyboard'], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+
+    def safe_nav(a):
+        try:
+            nav(a)
+        except tk.TclError:
+            pass    # a widget went away between the press and the action
+
+    def pad_tick():
+        # The next poll is queued first and each action runs as its own event: an action that opens a question
+        # (tk_messageBox waits in a nested event loop) must not stop the polling the question is answered with.
+        root.after(16, pad_tick)
+        acts = pads.poll()
+        # Read all the while, act only when the game is not running: what is pressed in the game is the game's.
+        if acts and not (busy() and state['kind'] == 'play'):
+            for a in acts:
+                root.after_idle(safe_nav, a)
+
+    def key(act):
+        def handler(_e):
+            nav(act, 'key')
+            return 'break'
+        return handler
+    # Up / Down move between items everywhere (a read-only combobox would open its list on Down); Left / Right
+    # change the choice where there is one, and stay the cursor keys in the name field; Return presses.
+    for cls in ('TButton', 'TCheckbutton', 'TRadiobutton', 'TCombobox', 'TMenubutton', 'TEntry', 'Button'):
+        root.bind_class(cls, '<Up>', key('up'))
+        root.bind_class(cls, '<Down>', key('down'))
+    for cls in ('TButton', 'TCheckbutton', 'TRadiobutton', 'TCombobox', 'TMenubutton', 'Button'):
+        root.bind_class(cls, '<Left>', key('left'))
+        root.bind_class(cls, '<Right>', key('right'))
+        root.bind_class(cls, '<Return>', key('a'))
+        root.bind_class(cls, '<KP_Enter>', key('a'))
+
     refresh()
     # Fit the screen (a Steam Deck is 800 px tall): the log is what gives way.
     root.update_idletasks()
     h = min(root.winfo_reqheight(), root.winfo_screenheight() - 60)
     root.geometry('%dx%d' % (max(root.winfo_reqwidth(), 560), h))
-    root.mainloop()
+    b_play.focus_set()
+    if steam:
+        root.after(200, b_play.focus_force)    # the window's X focus, and Play keeps Tk's
+    root.after(100, pad_tick)
+    try:
+        root.mainloop()
+    finally:
+        pads.close()
     return 0
 
 
 def main():
     if '--play' in sys.argv[1:]:
         return play_now(load_conf())
-    return main_window()
+    return main_window(steam='--steam' in sys.argv[1:])
 
 
 if __name__ == '__main__':

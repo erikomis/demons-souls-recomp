@@ -66,8 +66,11 @@ code; only `build` is new then. The first build takes about an hour on a Steam D
 
 Options: `DES_LTO=1` (ThinLTO across the whole program: about 3.5% faster on the Deck, a longer link),
 `DES_PGO=<profile.profdata>` (profile-guided optimization with an llvm-profdata profile; +10% on the Deck,
-see NOTES), `JOBS=<n>` (parallel compile jobs; lower it if the build runs out of memory),
-`DES_AVX2=0` (a CPU without AVX2).
+see NOTES; `port/pgo/des.profdata` is used when it exists, `DES_PGO=0` turns that off), `JOBS=<n>`
+(parallel compile jobs; lower it if the build runs out of memory), `DES_AVX2=0` (a CPU without AVX2).
+On a CPU with all of x86-64-v3 (AVX2, BMI1/2, FMA, F16C, LZCNT, MOVBE: every AVX2 CPU in practice) the
+build targets it, about 3.7% faster on the Deck; float results are unchanged (`-ffp-contract=off`).
+`DES_MARCH=0` builds for plain x86-64 + AVX2 instead.
 
 ### SteamOS: the build container
 
@@ -97,8 +100,11 @@ it) keeps your settings, rebuilds (for example with ThinLTO), updates the checko
 add one of them with *Games → Add a Non-Steam Game to My Library*.
 
 **Steam:** *Add to Steam* (in the installer, or the launcher's More menu; or `linux/native/steam.py add
---restart-steam`) adds a "Demon's Souls" shortcut that goes straight into the game with the launcher's saved
-settings. It comes with library artwork cut from your own disc's background picture (`PS3_GAME/PIC1.PNG`):
+--restart-steam`) adds a "Demon's Souls" shortcut that opens the launcher with Play selected
+(`launcher.py --steam`); the launcher closes when the game ends, so quitting the game is back in the Steam
+library. A controller works the launcher, for game mode: up / down (D-pad or left stick) moves between the
+items, left / right changes the selected one, A presses it, B backs out of a menu or a question, Start plays;
+A on the character name opens Steam's on-screen keyboard. The arrow keys and Enter do the same. It comes with library artwork cut from your own disc's background picture (`PS3_GAME/PIC1.PNG`):
 a portrait and a wide capsule, the hero banner, the logo and an icon, kept in `port/steam_art/`. A shortcut
 for the Proton build (`linux/play.sh`) gets the same artwork. Steam rewrites its shortcut list when it exits,
 so it closes for a moment and opens again. The first change keeps a copy of the old list

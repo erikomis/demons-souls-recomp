@@ -9,7 +9,7 @@ your copy of the game and is not in this repository: a portrait capsule (600x900
 (920x430), the hero banner (1920x620), the logo on a transparent background, and a square icon.
 
 add writes Steam's shortcuts.vdf for every Steam user on this computer: a "Demon's Souls" shortcut that runs
-linux/native/launcher.py --play (the game with the launcher's saved settings), made once and updated after
+linux/native/launcher.py --steam (the launcher, which a controller works, closing when the game ends), made once and updated after
 (found by its linux/native path). A shortcut for the Proton build (linux/play.sh) gets the same artwork.
 Steam rewrites shortcuts.vdf when it exits, so it has to be closed while this runs: --restart-steam closes
 it and starts it again (the installer and the launcher ask first).
@@ -211,10 +211,10 @@ def add_to_steam(log=print):
             e = native[0]
             set_field(e, 'Exe', 1, exe)
             set_field(e, 'StartDir', 1, start)
-            set_field(e, 'LaunchOptions', 1, '--play')
+            set_field(e, 'LaunchOptions', 1, '--steam')
             what = 'updated'
         else:
-            e = new_entry(exe, start, NAME, '--play')
+            e = new_entry(exe, start, NAME, '--steam')
             entries.append([0, str(len(entries)), e])
             what = 'added'
         grid = os.path.join(cfg, 'grid')
