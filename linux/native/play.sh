@@ -64,12 +64,18 @@ export PAD_KEYMAP=souls OSK_TEXT="${DES_NAME:-Slayer}" PAD_SCRIPT="${PAD_SCRIPT:
 export PS3_INPUT_MAP="${PS3_INPUT_MAP:-$D/linux/native/input.toml}"
 # The Vulkan renderer: the game's own shaders translated (guest programs), drawn in batches, in a window.
 export PS3RECOMP_VK_GUEST_PROGRAMS=1 PS3RECOMP_VK_WINDOW=1 VK_DRAW_BATCH=1
+# The game's shaders, translated to SPIR-V, kept between runs (keyed by the full shader text and the glslang
+# version): only a shader never seen before is translated, on the render thread, when it first draws.
+export PS3RECOMP_SPIRV_CACHE="${PS3RECOMP_SPIRV_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/demons-souls-recomp/spirv}"
+mkdir -p "$PS3RECOMP_SPIRV_CACHE" 2>/dev/null || unset PS3RECOMP_SPIRV_CACHE
 # The SPU command dispatcher takes the rest of a fetched queue line without re-reserving it (NOTES fix 150) and
 # waits for work instead of spinning (fix 145).
 export DES_DISPQ_BATCH="${DES_DISPQ_BATCH:-1}" SPU_DISPQ_WAIT="${SPU_DISPQ_WAIT:-1}"
 # A few cheap lines in the game log for a report of sound running late / the game slowing: every 5 s the
-# audio rate, its queue and the voice thread's CPU; every second the game speed; the voice queue's backlog.
+# audio rate, its queue and the voice thread's CPU; every second the game speed; the voice queue's backlog;
+# every frame that took 100 ms or more ([hitch], with the time to line it up with a profile).
 export AUDIO_RATE="${AUDIO_RATE:-1}" DES_STEP_STATS="${DES_STEP_STATS:-1}" EVT_BACKLOG="${EVT_BACKLOG:-1}"
+export HITCH_MS="${HITCH_MS:-100}"
 if [ -n "$DECK" ]; then
   # 4 cores share 15 W with the GPU: idle SPUs back off and then sleep (linux/play.sh has the measurements).
   export SPU_IDLE_PAUSE="${SPU_IDLE_PAUSE:-128}" SPU_IDLE_SLEEP_US="${SPU_IDLE_SLEEP_US:-50}"

@@ -3619,6 +3619,28 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       528 M ramp and 87 M mixer passes.
     - Same scene, Deck, 60 fps mode: synth2 85-96% -> 26-32% of a core, fps ~42 -> ~44.
 
+153. **Native Linux: shaders kept between runs, SPURS task threads reused (stalls loading areas / breaking things)**
+    - User (Deck): the game struggles loading new areas and assets, and when a barrel or box breaks into debris.
+      boot_main.cpp's HITCH_MS=N logs every present more than N ms after the last, with the monotonic time
+      (play.sh: 100); native-tools hitch_prof.py lines the hitches up with `perf record -k CLOCK_MONOTONIC -p`.
+    - Boletaria (testsave, load + walk + fight, 60 fps mode), perf: in stalls of 100 ms and more the render thread
+      was \~83% busy in glslang + SPIRV-Tools (the HLSL -> SPIR-V translation of a first-seen guest program),
+      RADV itself \~1% (Mesa's disk cache has the pipelines). rsx_shader_spirv.cpp has a disk cache, but only with
+      PS3RECOMP_SPIRV_CACHE set, and nothing on Linux set it: every run translated every shader again.
+      play.sh now sets it (XDG cache dir, demons-souls-recomp/spirv; 253 files, 12 MB for this scene).
+      Same scene, cache empty -> warm: in game 58 -> 27 hitches of 50 ms+, 7.5 -> 2.7 s stalled, worst 705 ->
+      205 ms; the area load's worst 2965 -> 198 ms; game time 0.960 -> 0.983. A shader seen for the first time
+      still stalls once.
+    - Fix 126's task-thread pool was Windows-only: on Linux every short SPURS task (Havok, Edge zlib, the HighGraphics
+      and ChrInsMan tasks; perf saw \~90,000 distinct short threads in 270 s) got a new pthread with a 256 MB stack
+      (more than glibc's stack cache holds: a map and unmap per task). Ported (spu_workload.c, POSIX): a per-worker
+      condvar, one lock for list + job + timeout so a take racing a timeout cannot lose a job, CLOCK_MONOTONIC
+      waits, the same thread-local reset (POSIX audit: nothing POSIX-only needs it), and instead of Windows' exit
+      on a deep stack, madvise(DONTNEED) of the stack more than 16 MB below the top after each task. Threads are
+      named "spu job". SPU_TASK_POOL=0 = a thread per task. Stress test (4 dispatchers, timeouts provoked):
+      200,000 jobs each run once, TSan clean. Same scene, SPU_TASK_POOL=0 / 1: 43.6 -> 45.2 fps; the hitches are
+      unchanged (57 / 60) -- thread creation was a cost, not the stall.
+
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
 with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:
