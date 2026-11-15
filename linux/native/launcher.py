@@ -283,9 +283,11 @@ def main_window(steam=False):
     focus_bg = '#bcd4f6'
     for st, opt in (('TButton', 'background'), ('TMenubutton', 'background'), ('TCheckbutton', 'background'),
                     ('TRadiobutton', 'background'), ('TCombobox', 'fieldbackground'), ('TEntry', 'fieldbackground')):
-        style.map(st, **{opt: [('focus', focus_bg)] + [tuple(x) for x in (style.map(st, opt) or [])]})
+        # 'user1': the item the controller is on, which may not have the keyboard focus (below)
+        style.map(st, **{opt: [('focus', focus_bg), ('user1', focus_bg)] + [tuple(x) for x in (style.map(st, opt) or [])]})
     # clam draws a focused read-only combobox's value white (on its dark blue): dark on the light blue here
-    style.map('TCombobox', foreground=[('focus', 'black')] + [tuple(x) for x in (style.map('TCombobox', 'foreground') or [])])
+    style.map('TCombobox', foreground=[('focus', 'black'), ('user1', 'black')] +
+              [tuple(x) for x in (style.map('TCombobox', 'foreground') or [])])
 
     state = {'proc': None, 'kind': None}
 
@@ -407,8 +409,10 @@ def main_window(steam=False):
     b_update.pack(side='left')
     b_stop = ttk.Button(btns, text='Stop')
     b_stop.pack(side='left', padx=6)
+    b_quit = ttk.Button(btns, text='Quit')
+    b_quit.pack(side='right')
     more = ttk.Menubutton(btns, text='More')
-    more.pack(side='right')
+    more.pack(side='right', padx=6)
     menu = tk.Menu(more, tearoff=0)
     more['menu'] = menu
 
@@ -599,6 +603,7 @@ def main_window(steam=False):
             do_stop()
         root.destroy()
     root.protocol('WM_DELETE_WINDOW', on_close)
+    b_quit.configure(command=on_close)
 
     # --- controller and arrow keys ---------------------------------------------------------------------
     pads = Gamepads()
@@ -667,22 +672,65 @@ def main_window(steam=False):
             if act == 'a' and cur is not None:  # nothing highlighted (the mouse left it): nothing to run
                 menu.invoke(cur)
 
-    debug = os.environ.get('DES_LAUNCHER_DEBUG') == '1'
+    # Started by Steam, the window often does not get the keyboard focus (the desktop keeps it with Steam's
+    # window), and in desktop mode Steam turns the Deck's controls from mouse into the game's pad while the
+    # launcher runs. So from Steam the pad works the item Tk remembers as focused in the window (or in the
+    # question on top: it holds a grab), keyboard focus or not, and 'user1' shows which one it is.
+    padlog = None
+    if steam or os.environ.get('DES_LAUNCHER_DEBUG') == '1':
+        try:
+            os.makedirs(LOGS, exist_ok=True)
+            padlog = open(os.path.join(LOGS, 'launcher.txt'), 'w')
+        except OSError:
+            padlog = None
+
+    def note(msg):
+        if padlog:
+            padlog.write('%.3f %s\n' % (time.monotonic(), msg))
+            padlog.flush()
+    note('env: ' + ' '.join('%s=%s' % (k, os.environ.get(k, '-')) for k in
+                            ('SteamGameId', 'SteamAppId', 'SteamOverlayGameId', 'SDL_VIDEODRIVER',
+                             'SDL_GAMECONTROLLER_IGNORE_DEVICES', 'XDG_SESSION_TYPE', 'SDL_AUDIODRIVER',
+                             'PULSE_SERVER', 'PULSE_LATENCY_MSEC', 'PIPEWIRE_LATENCY', 'LD_PRELOAD')))
+    cursor = {'path': ''}
+
+    def mark(path):
+        """The 'user1' highlight on path, off the item it was on."""
+        old = cursor['path']
+        if old and old != path:
+            try:
+                if T('winfo', 'exists', old) and str(T('winfo', 'class', old)).startswith('T'):
+                    T(old, 'state', '!user1')
+            except tk.TclError:
+                pass
+        cursor['path'] = path
+        try:
+            if path and str(T('winfo', 'class', path)).startswith('T'):
+                T(path, 'state', 'user1')
+        except tk.TclError:
+            pass
+    root.bind_all('<FocusIn>', lambda e: mark(str(e.widget)), add='+')
+
+    def target():
+        """The item an action is for: the keyboard focus, or (from Steam) the one Tk keeps for the window."""
+        path = str(T('focus'))
+        if path or not steam:
+            return path     # nothing focused outside Steam: another program has the keyboard, and the pad
+        grab = str(T('grab', 'current'))
+        return str(T('focus', '-lastfor', grab if grab and grab != '.' else '.'))
 
     def nav(act, src='pad'):
         """One controller (or arrow key) action on the item that has the focus."""
-        if debug:
-            print('[launcher] %s %s on %s' % (src, act, T('focus')), file=sys.stderr, flush=True)
         if menu_open['on']:
+            note('%s %s in the More menu' % (src, act))
             return menu_action(act)
-        path = str(T('focus'))
-        if not path:
+        path = target()
+        note('%s %s on %s' % (src, act, path or '(no focus: ignored)'))
+        if not path or path == '.':
             if not steam:
-                return      # another program has the focus: the pad is its
-            b_play.focus_force()
-            if act != 'start':
-                return      # the first press only shows where the focus is
+                return
             path = str(b_play)
+            T('focus', path)
         cls = str(T('winfo', 'class', path))
         dialog = str(T('winfo', 'toplevel', path)) != '.'
         if act == 'start':
@@ -707,6 +755,7 @@ def main_window(steam=False):
                 # the character name: Steam's on-screen keyboard types into the window that has the focus
                 subprocess.Popen(['xdg-open', 'steam://open/keyboard'], stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL)
+        mark(target())      # where the action left the focus (a question it opened has been answered by now)
 
     def safe_nav(a):
         try:
@@ -714,11 +763,17 @@ def main_window(steam=False):
         except tk.TclError:
             pass    # a widget went away between the press and the action
 
+    seen = {'pads': None}
+
     def pad_tick():
         # The next poll is queued first and each action runs as its own event: an action that opens a question
         # (tk_messageBox waits in a nested event loop) must not stop the polling the question is answered with.
         root.after(16, pad_tick)
         acts = pads.poll()
+        if sorted(pads.pads) != seen['pads']:
+            seen['pads'] = sorted(pads.pads)
+            note('pads: %s' % (', '.join('%s%s' % (k, ' (Steam)' if v['steam'] else '') for k, v in
+                                          sorted(pads.pads.items())) or 'none'))
         # Read all the while, act only when the game is not running: what is pressed in the game is the game's.
         if acts and not (busy() and state['kind'] == 'play'):
             for a in acts:
@@ -746,6 +801,7 @@ def main_window(steam=False):
     h = min(root.winfo_reqheight(), root.winfo_screenheight() - 60)
     root.geometry('%dx%d' % (max(root.winfo_reqwidth(), 560), h))
     b_play.focus_set()
+    mark(str(b_play))
     if steam:
         root.after(200, b_play.focus_force)    # the window's X focus, and Play keeps Tk's
     root.after(100, pad_tick)

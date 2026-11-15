@@ -3570,6 +3570,37 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       did not change there, selftest_patches ok.
     - Not yet: other PCs (the 3070 / desktop at Latria 4-2, the uncapped benchmark); then it can be offered as a setting.
 
+151. **Native Linux (Vulkan): real ZPASS occlusion counts, a clean quit on the window's X, the controller from Steam
+     (2026-11-14, Steam Deck):**
+    - User: "the lens flare is way too bright again". The Vulkan backend had no occlusion path, so every ZPASS report
+      was the walker's 0xFFFF: fixes 38 / 132's bug on Vulkan. rsx_vulkan_backend.c vk_occ_*, after Metal's
+      eng_occ_*: one VkQueryPool of 1024 occlusion queries per submission slot (precise when the device has
+      occlusionQueryPrecise; RADV does), begun / ended around each draw made while 0x17CC is on, reset in vk_begin
+      (outside any render pass; re-reset when a recorded reset never got submitted), read in vk_slot_completed after
+      the slot's fence, a report stored with gcm_report_store_value once all its draws are read. Same switches as
+      Metal: RSX_ENGINE_OCCLUSION=0 = old 0xFFFF, RSX_ENGINE_OCC_DBG=1 / 3.
+    - The engine's method observer used to force word-by-word dispatch (losing fix 117's run path, a cost in the
+      CPU-bound 1-1). rsx_draw_engine.c now splits a run only at the four methods an observer needs (0x01A8, 0x17C8,
+      0x17CC, 0x1800, found arithmetically) and calls the observer only for them, in stream order; Metal gets the
+      run path back too (not compiled here: no macOS toolchain).
+    - Checked: Nexus (test save, DES_WARP_AT=125:1,0,999): every report 0 samples (probe behind the ceiling, as on
+      D3D12 / Metal), no flare through it. 1-1 60 fps mode, same exe, 2 pairs: occlusion off 46.5 / 46.6, on 46.4 /
+      46.9 fps. Review: 3 lenses + refuters; one minor (error path) fixed.
+    - Closing the window: SDL's quit event stopped the pump and the presents (rsx_ok = 0) and the game ran on behind
+      a dead window until KDE offered to kill it. boot_main.cpp now calls ps3_host_quit("window closed") (the
+      console's Quit Game: REQUEST_EXITGAME, a save in flight finishes, exit 0) and keeps pumping and presenting.
+    - The controller from Steam: through `distrobox enter` (podman exec) the game ran under conmon, outside Steam's
+      process tree, so Steam took its (native Wayland) window for a desktop one and gave the Deck's controls its
+      desktop layout. play.sh now enters the running container with nsenter -U -m (the game stays play.sh's child;
+      DES_NSENTER=0 = distrobox enter), and under Steam (SteamGameId / SteamAppId set) opens an X11 window. A Steam
+      PULSE_SERVER pointing into its runtime container is dropped when the socket is not there (with it SDL had no
+      sound device at all).
+    - Sound "desynced" (sound effects late): not reproduced. The mix runs at 187.5 blocks/s with the SDL queue at
+      \~21 ms, no underruns; SDL's pulseaudio driver (PipeWire's pulse server), 256-frame device buffer, PipeWire
+      quantum 256. Press -> sound (title Start / in-game Start / Circle, 60 fps mode, AUDIO_WAV + PAD_SCRIPT, now
+      also on Linux on the monotonic clock: native-tools press_sound.py / env.py): native 180-240 ms, the Windows
+      build under Proton on the same Deck and save 240-280 ms. cellAudio logs its SDL driver and device buffer.
+
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
 with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:

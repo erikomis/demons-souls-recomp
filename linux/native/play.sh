@@ -100,12 +100,38 @@ if [ -n "$DECK" ] && [ "${DES_GPU_CLOCK:-800}" != auto ] && [ -x "$GPU_PRIV" ] &
   fi
 fi
 
+# Started by Steam: an X11 window (SDL_VIDEODRIVER set: that one). Steam follows the focused window through X11,
+# and a native Wayland window is invisible to it: in desktop mode it would hand the controller to its desktop
+# layout (mouse and keys) while the game has the focus. Game Mode's gamescope offers only X11 anyway.
+if [ -n "${SteamGameId:-}${SteamAppId:-}${SteamOverlayGameId:-}" ] && [ -z "${SDL_VIDEODRIVER:-}" ]; then
+  export SDL_VIDEODRIVER=x11
+fi
+
+# Steam's own environment can point PulseAudio at a socket inside its runtime container
+# (PULSE_SERVER=unix:/run/pressure-vessel/...), which does not exist out here: SDL could then fall through to
+# plain ALSA, with its much longer buffers (sound late). Drop it when that socket is not there.
+case "${PULSE_SERVER:-}" in
+  unix:*) [ -S "${PULSE_SERVER#unix:}" ] || unset PULSE_SERVER PULSE_CLIENTCONFIG ;;
+esac
+
 # Built in a distrobox container (SteamOS): run it there too, with this environment.
 RUN=()
 BOX=${DES_DISTROBOX-$(cat "$BUILD/.distrobox" 2>/dev/null || true)}   # DES_DISTROBOX= (empty): run on the host
 if [ -n "$BOX" ] && ! [ -f /run/.containerenv ]; then
   command -v distrobox >/dev/null || die "the build was made in the distrobox container '$BOX', and distrobox is not here"
   RUN=(distrobox enter "$BOX" -- env -C "$D")
+  # Better, into the running container's namespaces (DES_NSENTER=0: not): the game then stays a child of this
+  # script, so Steam and Game Mode's gamescope see it as the game they started. Through `distrobox enter`
+  # (podman exec) it runs under podman's conmon, outside Steam's process tree, and Steam takes its window for
+  # a desktop one: the controller then gets Steam's desktop layout (mouse and keys), and the game nothing.
+  if [ "${DES_NSENTER:-1}" != 0 ] && command -v podman >/dev/null && command -v nsenter >/dev/null; then
+    [ "$(podman inspect -f '{{.State.Running}}' "$BOX" 2>/dev/null)" = true ] ||
+      distrobox enter "$BOX" -- true >/dev/null 2>&1    # starts it
+    CPID=$(podman inspect -f '{{.State.Pid}}' "$BOX" 2>/dev/null || true)
+    if [ -n "$CPID" ] && [ "$CPID" != 0 ] && nsenter -t "$CPID" -U -m --preserve-credentials -- true 2>/dev/null; then
+      RUN=(nsenter -t "$CPID" -U -m --preserve-credentials -- env -C "$D")
+    fi
+  fi
   for v in $(env | sed -n 's/^\(\(PS3\|DES_\|PAD_\|SPU_\|GCM_\|VK_\|OSK_\|SDL_\)[A-Za-z0-9_]*\)=.*/\1/p'); do
     RUN+=("$v=${!v}")
   done
