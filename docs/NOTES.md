@@ -3700,6 +3700,23 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       50 ms+, 8.6 s stalled, worst 646 ms, area load worst 1939 ms; on: 487 pipelines rebuilt during boot in
       10.0 s, 0 failed -> 22 hitches, 2.0 s, worst 197 ms, area load worst 198 ms (the warm-cache level).
 
+157. **Native Linux: the boss rush timer (ps3_overlay_image / ps3_overlay_set on Vulkan)**
+    - Both were no-op stubs on Linux (rsx_live_draw.c; only D3D12 and Metal drew them), so boss rush ran without its
+      timer. rsx_vulkan_backend.c now defines both (rsx_live_draw.c keeps the stubs only for builds without
+      PS3RECOMP_RSX_VULKAN): any thread copies its picture / text lines under a lock and bumps a generation; the
+      render side uploads a changed picture through a 3-buffer staging ring (a buffer is reused only once the
+      submission that read it is done) and draws it with premultiplied blending in a render pass on the swapchain
+      image (load, final PRESENT_SRC) in both present paths (vk_eng_present_direct, play.sh's, and
+      vk_present_window). The text overlay is D3D12's 5x7 font and layout, rasterized on the CPU when it changes.
+      The swapchain gets COLOR_ATTACHMENT usage. No overlay set: one atomic load per present.
+    - Placement in game-picture coordinates through the present's stretch (no letterbox on Linux), so on the Deck's
+      1280x800 the timer sits where it would on a 16:9 screen, stretched like the game's own text.
+    - Offscreen test of the real code on the Deck (RADV): rectangle, blending, no re-upload of an unchanged picture,
+      postponed upload of a busy buffer, text vs a CPU reference of D3D12's (0 mismatches), resize / shutdown.
+    - In game (play.sh, fullscreen 1280x800, DES_BOSS_RUSH=1 DES_BR_SOULS=2, the test save in a scratch boss rush
+      folder): with timer_font.bin the game-font timer "0:00.0 / Souls x2" at the bottom centre; without it the
+      text overlay at the top. make_boss_rush.py ran on Linux (2.4 s) and wrote bossrush/timer_font.bin.
+
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
 with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:
