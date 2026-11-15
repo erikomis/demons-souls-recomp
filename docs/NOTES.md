@@ -3601,6 +3601,24 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       also on Linux on the monotonic clock: native-tools press_sound.py / env.py): native 180-240 ms, the Windows
       build under Proton on the same Deck and save 240-280 ms. cellAudio logs its SDL driver and device buffer.
 
+152. **synth2 a third of its old cost: sound effects late, then missing, in busy scenes on the Steam Deck**
+    - The user's tutorial session (play.sh now logs the voice thread's CPU every 5 s, AUDIO_RATE; game speed,
+      DES_STEP_STATS; SPU event-queue backlog, EVT_BACKLOG): synth2 at 90-96% of a Zen 2 core for minutes while
+      the mix itself ran at 187.5 blocks/s with no underruns. Once the rest of the game got faster, the voices it
+      could not fit were dropped rather than late. A 32-entry event queue caps the backlog at ~170 ms.
+    - perf on synth2 (walking + attacking): the resampler 1090 36% (fix 143's fast loop most of it), the
+      voice-to-bus mixer loop 63C8 (inlined into 62E8) 21%, the gain ramp 2C20 (inlined into 2BE0) 18% plus
+      spu__x8_fa_fix / fm_fix 18% (its lanes 1-3 hold exponent-255 neighbours, so every pass took the fix tier).
+    - Three exact native fast paths in the lifted file (PORT PATCH blocks; each runs all passes but the last,
+      which the lifted loop runs so every register leaves as before; anything uncertain falls back):
+      SYNTH2_RESAMPLE (a native resampler loop under fix 143's), SYNTH2_RAMP (lane 0 pass by pass with the
+      exact helpers, then the settled gain a quadword at a time; lanes 1-3 solved per lane, settled or drifting
+      one word per pass, vector fallback), SYNTH2_MIX (the pan mix with round-toward-zero FMAs, x86-64 AVX2+FMA
+      only). =0 disables each; _CHECK=1 replays a sample of calls with the lifted code on a copy and compares LS
+      and all 128 registers. Check run in Boletaria, walking and fighting: 0 mismatches over 33 M resampler,
+      528 M ramp and 87 M mixer passes.
+    - Same scene, Deck, 60 fps mode: synth2 85-96% -> 26-32% of a core, fps ~42 -> ~44.
+
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
 with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:
