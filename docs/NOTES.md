@@ -3391,6 +3391,30 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       `-c http.sslBackend=schannel`, which checks GitHub's certificate against Windows' own store.
     - Checked: with GIT_SSL_CAINFO pointing at a junk file, plain `git clone` fails ("error setting certificate
       file"); setup.git('clone', ...) prints the retry line and clones (octocat/Hello-World).
+203. **GPU power smoothing for PCs that switch off while the port runs (LD_GPU_WARM, 2026-11-15):**
+    - Report: a PC (RTX 4090) that runs other modern games maxed out for hours powered off within minutes of play
+      in the port, in no particular scene. Windows logs Kernel-Power 41 (no shutdown, no crash dump): the power
+      supply cut out.
+    - Measured (LD_GPU_TS, new): a D3D12 timestamp at both ends of every command list. In Boletaria the GPU is busy
+      only \~11% of each second, in short bursts. Between frames it goes idle for up to \~24 ms (the frame waits on
+      the game thread, the present pacing, then the first kick of the next frame). A big card ramps from idle to
+      full clocks and back dozens of times a second, and those current steps are what a power supply can trip on.
+      Other games keep the GPU loaded steadily.
+    - Fix: LD_GPU_WARM=\<0..4> (default 0 = off). A "rsx gpu warm" thread fills the GPU's idle gaps with a small
+      compute dispatch (a mad loop into a 64 KB buffer, \~0.3 ms each, sized on the fly). It submits on the same
+      queue, only after the game's last submitted work has finished, and only while frames are being presented
+      (it stops 250 ms after the last Present: menus that stop presenting, minimised, quit). Higher levels make
+      each chunk wider. It does not touch the game's frames, and when the game has work the warm chunk only
+      delays it by up to one chunk.
+    - Result, level 2, sandbox install, 1-1 through 1-3 then 2-1 (\~75 min): no power-off (before: within
+      2-8 min). nvidia-smi at 10 Hz: GPU power held at a mean of 260 W (max 288), with the 99th-percentile step
+      between samples at 14 W. Cost: the warm thread uses \~17% of a CPU core, and the GPU draws its loaded power
+      the whole time.
+    - The perf log (LD_PRESENT_LOG) gets a line once a second: `gpu <busy%> <idle ms> <max idle ms>
+      <idle gaps over 2 ms> <submits> <warm chunks> <warm ms>`, plus `info gpu_warm <level>` at start.
+      LD_GPU_TS=1 prints the same line to stderr without a perf log.
+    - Use: put `LD_GPU_WARM=2` in the launcher's extra settings (try 3 if it still happens). Lowering the GPU's
+      power limit is the other workaround.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
