@@ -3679,6 +3679,27 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       2.3 s (the warm-cache level), 0 failed builds, up to \~290 skipped draws per 5 s while new things appear.
       Screenshot after the load: the same picture.
 
+156. **Vulkan: the pipelines a session built are rebuilt at launch after an update (RSX_VK_PIPELINE_WARM)**
+    - After our update (the translator / backend build changes) or a SteamOS GPU-driver update, every cache misses
+      and the next session recompiled everything in game. Modern games rebuild their known pipelines at launch.
+    - rsx_vulkan_backend.c: each engine pipeline variant built is appended (one O_APPEND write, deduped, 32768 max)
+      to <PS3RECOMP_SPIRV_CACHE>/pipelines.bin: 47-word records (both shaders' cache keys -- the cache file holds the
+      HLSL, so a stale entry can be re-translated -- topology, slots, stride, targets, the render state; check word;
+      torn / foreign records skipped and compacted). The variant builder is factored out (vk_eng_build_pipeline)
+      so a thread with its own identical render passes / layouts / modules makes a create info RADV's cache maps to
+      the same entry (device test: 7.1 ms cold -> 0.7 ms from another process).
+    - A stamp per Mesa cache (pipelines.<hash>.stamp: record version, translator build + glslang + mode, backend
+      build + depth format + features + MRT mode, driver version, GPU, pipelineCacheUUID, which Mesa cache) decides:
+      changed -> one nice-19 thread rebuilds the list (yielding to fix 155's in-game jobs), then writes the stamp;
+      same -> it times ~8 listed builds and re-walks only if Mesa's cache lost them. Quit joins the thread (atexit
+      too: the game exits with exit()). RSX_VK_PIPELINE_WARM=0 = neither recorded nor rebuilt; =force = always.
+    - Review (2 lenses + verify): backend-only updates did not change the stamp, the stamp ignored which Mesa cache,
+      exit() during a walk -- fixed. Harness tests: record round trip / bit flips / torn tails / 4 writers, stale-
+      file re-translation, exit ordering; ASan / UBSan / TSan clean.
+    - Boletaria, simulated driver update (an empty MESA_SHADER_CACHE_DIR), load + walk + fight: off 52 hitches of
+      50 ms+, 8.6 s stalled, worst 646 ms, area load worst 1939 ms; on: 487 pipelines rebuilt during boot in
+      10.0 s, 0 failed -> 22 hitches, 2.0 s, worst 197 ms, area load worst 198 ms (the warm-cache level).
+
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
 with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:

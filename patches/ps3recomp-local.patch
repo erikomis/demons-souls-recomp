@@ -46714,7 +46714,7 @@ index f076ef89..c6691d5c 100644
 
 
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index db64302e..9105f1c5 100644
+index db64302e..02acae20 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -20,10 +20,12 @@
@@ -46744,7 +46744,7 @@ index db64302e..9105f1c5 100644
   */
  
  #ifndef _WIN32
-@@ -52,11 +55,22 @@
+@@ -52,19 +55,38 @@
  #include "rsx_draw_engine.h"
  #include "vulkan/rsx_vk_fallback_vert.spv.h"
  #include "vulkan/rsx_vk_fallback_frag.spv.h"
@@ -46766,8 +46766,24 @@ index db64302e..9105f1c5 100644
 +static HostInputSdl s_hisdl;
  
  #include <dlfcn.h>
++#include <errno.h>
++#include <fcntl.h>
  #include <pthread.h>
-@@ -86,6 +100,7 @@
+ #include <stddef.h>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <strings.h>
++#include <sys/resource.h>
++#include <sys/stat.h>
++#include <sys/syscall.h>
++#include <time.h>
++#include <unistd.h>
+ 
+ /* ---------------------------------------------------------------------------
+  * Run-time loaded entry points (Vulkan 1.0 core only)
+@@ -86,6 +108,7 @@
      X(vkCreateCommandPool) X(vkDestroyCommandPool) X(vkAllocateCommandBuffers) \
      X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkResetCommandBuffer) \
      X(vkCreateFence) X(vkDestroyFence) X(vkWaitForFences) X(vkResetFences) X(vkQueueSubmit) \
@@ -46775,7 +46791,7 @@ index db64302e..9105f1c5 100644
      X(vkCreateRenderPass) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
      X(vkCreateShaderModule) X(vkDestroyShaderModule) \
      X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) \
-@@ -101,12 +116,15 @@
+@@ -101,12 +124,15 @@
      X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdDraw) \
      X(vkCmdSetStencilReference) X(vkCmdSetDepthBounds) \
      X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) \
@@ -46793,15 +46809,16 @@ index db64302e..9105f1c5 100644
  #define VK_WSI_DEVICE_FNS(X) \
      X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) \
      X(vkAcquireNextImageKHR) X(vkQueuePresentKHR)
-@@ -215,6 +233,7 @@ typedef struct vk_state {
+@@ -215,6 +241,8 @@ typedef struct vk_state {
      int              bc_ok;           /* textureCompressionBC enabled       */
      int              depth_bounds_ok; /* depthBounds enabled                */
      int              indep_blend_ok;  /* independentBlend: per-target MRT state */
 +    int              occ_precise_ok;  /* occlusionQueryPrecise: exact ZPASS sample counts */
++    u32              features_hash;   /* FNV-1a of the enabled VkPhysicalDeviceFeatures (vk-warm's stamp) */
      u32              max_dim;         /* maxImageDimension2D of the device  */
      int              windowed;
      SDL_Window*      window;
-@@ -449,10 +468,19 @@ static void vk_present_wait_gpu(void);
+@@ -449,10 +477,19 @@ static void vk_present_wait_gpu(void);
  
  /* VK_DRAW_BATCH (vk_eng_draw): draws recorded into s_vk.cmd and not yet
   * submitted. Anything that records other work, destroys an object or reads
@@ -46823,7 +46840,7 @@ index db64302e..9105f1c5 100644
  static int vk_eb_active(void);       /* batching decided on and on */
  static u32 vk_eb_max(void);
  static void vk_eb_recorded(void);   /* one more command in the open batch */
-@@ -462,12 +490,12 @@ static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src,
+@@ -462,12 +499,12 @@ static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src,
  
  static void vk_destroy_image(vk_image* im)
  {
@@ -46841,7 +46858,7 @@ index db64302e..9105f1c5 100644
      memset(im, 0, sizeof *im);
  }
  
-@@ -525,10 +553,9 @@ static int vk_create_device_buffer(vk_buffer* b, VkDeviceSize size, VkBufferUsag
+@@ -525,10 +562,9 @@ static int vk_create_device_buffer(vk_buffer* b, VkDeviceSize size, VkBufferUsag
  
  static void vk_destroy_buffer(vk_buffer* b)
  {
@@ -46855,7 +46872,7 @@ index db64302e..9105f1c5 100644
      memset(b, 0, sizeof *b);
  }
  
-@@ -575,8 +602,29 @@ static void vk_device_idle(void)
+@@ -575,8 +611,29 @@ static void vk_device_idle(void)
  
  /* A full execution and memory dependency on everything submitted before
   * this command buffer, the present's copy included. */
@@ -46885,7 +46902,7 @@ index db64302e..9105f1c5 100644
      VkMemoryBarrier mb = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
                             .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
                             .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT };
-@@ -584,36 +632,439 @@ static void vk_cmd_after_everything(VkCommandBuffer cb)
+@@ -584,36 +641,439 @@ static void vk_cmd_after_everything(VkCommandBuffer cb)
                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
  }
  
@@ -47050,8 +47067,7 @@ index db64302e..9105f1c5 100644
 +
 +/* Whichever in-flight submissions have finished by now (no waiting). */
 +static void vk_slots_poll(void)
- {
--    VK_CHECK(pvkEndCommandBuffer(s_vk.cmd), "vkEndCommandBuffer");
++{
 +    for (u32 k = 0; k < s_nslots; k++)
 +        if (s_slot[k].pending && pvkGetFenceStatus(s_vk.device, s_slot[k].fence) == VK_SUCCESS)
 +            vk_slot_completed(&s_slot[k]);
@@ -47059,7 +47075,8 @@ index db64302e..9105f1c5 100644
 +
 +/* Make slot k the one recorded into, once its last submission is done. */
 +static void vk_slot_acquire(u32 k)
-+{
+ {
+-    VK_CHECK(pvkEndCommandBuffer(s_vk.cmd), "vkEndCommandBuffer");
 +    vk_slot* S = &s_slot[k];
 +    if (S->pending) {
 +        const u64 ss_t = vk_sync_stats_on() ? vk_now_ns() : 0;
@@ -47335,7 +47352,46 @@ index db64302e..9105f1c5 100644
      VkImageMemoryBarrier b = {
          .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
          .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
-@@ -1714,7 +2165,7 @@ static int vk_env_on(const char* name)
+@@ -1406,6 +1866,20 @@ static void vk_guest_tri(const rsx_state* st, u32 i0, u32 i1, u32 i2)
+     vk_guest_push(st, i2);
+ }
+ 
++/* The guest programs' set layout (rsx_shader_spirv.h's binding contract): the
++ * engine's pipelines use it too, and the pipeline warm-up (vk-warm) makes an
++ * identical one -- the driver's pipeline cache keys on the content. */
++static void vk_guest_set_bindings(VkDescriptorSetLayoutBinding b[4])
++{
++    const VkShaderStageFlags both = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
++    b[0] = (VkDescriptorSetLayoutBinding){ RSX_SPIRV_VPCONST_BINDING, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, both, NULL };
++    b[1] = (VkDescriptorSetLayoutBinding){ RSX_SPIRV_PSCONST_BINDING, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, both, NULL };
++    b[2] = (VkDescriptorSetLayoutBinding){ RSX_SPIRV_TEXTURE_BINDING, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, RSX_MAX_TEXTURES,
++                                           VK_SHADER_STAGE_FRAGMENT_BIT, NULL };
++    b[3] = (VkDescriptorSetLayoutBinding){ RSX_SPIRV_SAMPLER_BINDING, VK_DESCRIPTOR_TYPE_SAMPLER, RSX_MAX_TEXTURES,
++                                           VK_SHADER_STAGE_FRAGMENT_BIT, NULL };
++}
++
+ static int vk_guest_init(void)
+ {
+     if (!rsx_vulkan_backend_guest_programs()) return 0;
+@@ -1425,15 +1899,8 @@ static int vk_guest_init(void)
+         return -1;
+     }
+ 
+-    const VkShaderStageFlags both = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+-    VkDescriptorSetLayoutBinding b[4] = {
+-        { RSX_SPIRV_VPCONST_BINDING, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, both, NULL },
+-        { RSX_SPIRV_PSCONST_BINDING, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, both, NULL },
+-        { RSX_SPIRV_TEXTURE_BINDING, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, RSX_MAX_TEXTURES,
+-          VK_SHADER_STAGE_FRAGMENT_BIT, NULL },
+-        { RSX_SPIRV_SAMPLER_BINDING, VK_DESCRIPTOR_TYPE_SAMPLER, RSX_MAX_TEXTURES,
+-          VK_SHADER_STAGE_FRAGMENT_BIT, NULL },
+-    };
++    VkDescriptorSetLayoutBinding b[4];
++    vk_guest_set_bindings(b);
+     VkDescriptorSetLayoutCreateInfo lci = {
+         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+         .bindingCount = 4, .pBindings = b };
+@@ -1714,7 +2181,7 @@ static int vk_env_on(const char* name)
      return v && v[0] && v[0] != '0';
  }
  
@@ -47344,7 +47400,7 @@ index db64302e..9105f1c5 100644
  {
      if (why) VK_LOG("window disabled, continuing headless: %s\n", why);
      if (s_vk.device && pvkDeviceWaitIdle) {
-@@ -1741,15 +2192,19 @@ static void vk_window_drop(const char* why)
+@@ -1741,15 +2208,19 @@ static void vk_window_drop(const char* why)
      s_vk.sc_count = 0;
      s_vk.windowed = 0;
  }
@@ -47366,7 +47422,7 @@ index db64302e..9105f1c5 100644
      if (vk_env_on("PS3RECOMP_VK_FULLSCREEN")) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
      s_vk.window = SDL_CreateWindow(title && title[0] ? title : "ps3recomp",
                                     SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-@@ -1775,6 +2230,10 @@ static void vk_window_open(const char* title)
+@@ -1775,6 +2246,10 @@ static void vk_window_open(const char* title)
      VK_LOG("window: SDL video driver '%s', %u surface extension(s)\n",
             SDL_GetCurrentVideoDriver(), n);
  }
@@ -47377,7 +47433,7 @@ index db64302e..9105f1c5 100644
  
  static int vk_create_swapchain(void)
  {
-@@ -1791,8 +2250,14 @@ static int vk_create_swapchain(void)
+@@ -1791,8 +2266,14 @@ static int vk_create_swapchain(void)
      if (nf == 0) { VK_LOG("surface reports no formats\n"); return -1; }
      if (nf > 64) nf = 64;
      VkSurfaceFormatKHR fmts[64];
@@ -47394,7 +47450,7 @@ index db64302e..9105f1c5 100644
      /* UNORM, not SRGB: the offscreen target holds the guest's values as-is. */
      VkSurfaceFormatKHR fmt = fmts[0];
      if (nf == 1 && fmts[0].format == VK_FORMAT_UNDEFINED) {
-@@ -1833,6 +2298,23 @@ static int vk_create_swapchain(void)
+@@ -1833,6 +2314,23 @@ static int vk_create_swapchain(void)
      for (size_t k = 0; k < 4; k++)
          if (caps.supportedCompositeAlpha & alphas[k]) { alpha = alphas[k]; break; }
  
@@ -47418,7 +47474,7 @@ index db64302e..9105f1c5 100644
      VkSwapchainKHR old = s_vk.swapchain;
      VkSwapchainCreateInfoKHR sci = {
          .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-@@ -1842,7 +2324,7 @@ static int vk_create_swapchain(void)
+@@ -1842,7 +2340,7 @@ static int vk_create_swapchain(void)
          .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
          .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
          .preTransform = caps.currentTransform, .compositeAlpha = alpha,
@@ -47427,7 +47483,7 @@ index db64302e..9105f1c5 100644
          .clipped = VK_TRUE, .oldSwapchain = old,
      };
      VkSwapchainKHR sc = VK_NULL_HANDLE;
-@@ -1868,7 +2350,8 @@ static int vk_create_swapchain(void)
+@@ -1868,7 +2366,8 @@ static int vk_create_swapchain(void)
  
      s_vk.sc_extent = ext;
      s_vk.sc_count = n;
@@ -47437,7 +47493,7 @@ index db64302e..9105f1c5 100644
      return 0;
  }
  
-@@ -2092,6 +2575,9 @@ typedef struct vk_eng_obj {
+@@ -2092,6 +2591,9 @@ typedef struct vk_eng_obj {
      u8       cube;                   /* TEXTURE: six layers, a CUBE view    */
      u8       snapshot;               /* COLOR: a feedback copy, never a target */
      u32      mips;                   /* TEXTURE: levels the image was created with */
@@ -47447,7 +47503,7 @@ index db64302e..9105f1c5 100644
  } vk_eng_obj;
  
  static vk_eng_obj s_eobj[VK_ENG_MAX_OBJ];
-@@ -2126,12 +2612,20 @@ static VkFormat vk_eng_format(rsx_be_format f, u32* bpp)
+@@ -2126,12 +2628,20 @@ static VkFormat vk_eng_format(rsx_be_format f, u32* bpp)
  /* Colour formats the E2 passes render into: RGBA8 for ordinary and display
   * targets, RGBA16F for SET_SURFACE_FORMAT 0xB HDR targets. Both are required
   * colour attachment formats with blending in Vulkan 1.0. */
@@ -47469,7 +47525,7 @@ index db64302e..9105f1c5 100644
      default:                            return -1;
      }
  }
-@@ -2171,6 +2665,26 @@ static vk_buffer* vk_stage_get(vk_buffer* b, VkDeviceSize size, VkBufferUsageFla
+@@ -2171,6 +2681,26 @@ static vk_buffer* vk_stage_get(vk_buffer* b, VkDeviceSize size, VkBufferUsageFla
      return b;
  }
  
@@ -47496,13 +47552,16 @@ index db64302e..9105f1c5 100644
  /* Copy `rows` rows of `w` texels from host memory into a w x h rectangle at
   * (x, y) of one level / layer of an image that is in GENERAL. */
  static int vk_eng_upload_region(VkImage img, u32 layer, u32 mip, u32 x, u32 y,
-@@ -2255,15 +2769,21 @@ static int vk_eng_make_view(VkImage img, VkFormat fmt, u32 levels, VkComponentMa
+@@ -2255,15 +2785,25 @@ static int vk_eng_make_view(VkImage img, VkFormat fmt, u32 levels, VkComponentMa
      return pvkCreateImageView(s_vk.device, &vci, NULL, out) == VK_SUCCESS ? 0 : -1;
  }
  
 +static void vk_sa_start(void);       /* RSX_VK_ASYNC_SHADERS, with the pipelines below */
 +static void vk_sa_shutdown(void);
 +static void vk_sa_frame(void);
++static void vk_pw_start(void);       /* RSX_VK_PIPELINE_WARM, after the pipelines below */
++static void vk_pw_shutdown(void);
++static int  vk_pw_recording(void);
 +
  static int vk_eng_init(void* user, u32 width, u32 height)
  {
@@ -47510,6 +47569,7 @@ index db64302e..9105f1c5 100644
      memset(s_eobj, 0, sizeof s_eobj);
      memset(&s_eng_bound, 0, sizeof s_eng_bound);
 +    if (s_vk.device) vk_sa_start();       /* RSX_VK_ASYNC_SHADERS: workers + glslang pre-warm */
++    if (s_vk.device) vk_pw_start();       /* RSX_VK_PIPELINE_WARM: the list; a rebuild if the stamp changed */
      return s_vk.device ? 0 : -1;
  }
  
@@ -47518,7 +47578,7 @@ index db64302e..9105f1c5 100644
  
  static void vk_eng_release(void* user, u32 handle)
  {
-@@ -2280,6 +2800,15 @@ static void vk_eng_release(void* user, u32 handle)
+@@ -2280,6 +2820,15 @@ static void vk_eng_release(void* user, u32 handle)
          s_eobj[handle].surface = 0;
          if (vk_eng_get(snap, VK_ENG_TEXTURE)) vk_eng_release(user, snap);
      }
@@ -47534,7 +47594,7 @@ index db64302e..9105f1c5 100644
      if (s_eobj[handle].kind == VK_ENG_COLOR && s_eobj[handle].snapshot) {
          /* Never an attachment, so no framebuffer names it; the image goes
           * back to the pool for the next feedback draw. */
-@@ -2294,21 +2823,32 @@ static void vk_eng_release(void* user, u32 handle)
+@@ -2294,21 +2843,33 @@ static void vk_eng_release(void* user, u32 handle)
  }
  
  static void vk_eng_snapshot_pool_drain(void);
@@ -47543,6 +47603,7 @@ index db64302e..9105f1c5 100644
  
  static void vk_eng_shutdown(void* user)
  {
++    vk_pw_shutdown();                     /* the warm-up joined first: it waits on s_sa */
 +    vk_sa_shutdown();                     /* workers joined before any slot or the device goes */
      vk_eng2_shutdown(user);
      for (u32 i = 1; i < VK_ENG_MAX_OBJ; i++) vk_eng_release(user, i);
@@ -47569,7 +47630,7 @@ index db64302e..9105f1c5 100644
  }
  
  static u32 vk_eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
-@@ -2334,17 +2874,26 @@ static u32 vk_eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32
+@@ -2334,17 +2895,26 @@ static u32 vk_eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32
      o->kind = VK_ENG_COLOR; o->fmt = vf; o->bpp = bpp; o->w = w; o->h = h;
      /* UNDEFINED -> GENERAL, then the guest's own bytes when the engine could
       * resolve them, else transparent black so the contents are defined. */
@@ -47598,7 +47659,7 @@ index db64302e..9105f1c5 100644
  static u32 vk_eng_depth_target_create(void* user, u32 w, u32 h)
  {
      (void)user;
-@@ -2354,18 +2903,20 @@ static u32 vk_eng_depth_target_create(void* user, u32 w, u32 h)
+@@ -2354,18 +2924,20 @@ static u32 vk_eng_depth_target_create(void* user, u32 w, u32 h)
      vk_eng_obj* o = &s_eobj[hd];
      if (vk_create_image(&o->im, s_vk.depth_format, w, h,
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
@@ -47622,7 +47683,7 @@ index db64302e..9105f1c5 100644
      return hd;
  }
  
-@@ -2419,12 +2970,97 @@ static void vk_eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
+@@ -2419,12 +2991,97 @@ static void vk_eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
      else vk_submit_and_wait();
  }
  
@@ -47720,7 +47781,7 @@ index db64302e..9105f1c5 100644
      if (s_eb_pending) vk_eng_flush();   /* the present records on its own buffer */
      vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);
      pthread_mutex_lock(&s_vk.present_mu);
-@@ -2472,7 +3108,8 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -2472,7 +3129,8 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      const size_t tight = (size_t)w * o->bpp;
      vk_buffer* const st = vk_stage_get(&s_rb_stage, (VkDeviceSize)tight * h, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
      if (!st) return;
@@ -47730,7 +47791,7 @@ index db64302e..9105f1c5 100644
          vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
          VkBufferImageCopy region = {
              .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-@@ -2495,6 +3132,94 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -2495,6 +3153,94 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      }
  }
  
@@ -47825,7 +47886,7 @@ index db64302e..9105f1c5 100644
  /* ---- E3: textures ---------------------------------------------------------
   * The engine decodes every level to host rows (rsx_texture_decode) and hands
   * them over one upload each; the crossbar is a property of the view, so it
-@@ -2540,9 +3265,12 @@ static u32 vk_eng_texture_create(void* user, rsx_be_format fmt, u32 w, u32 h,
+@@ -2540,9 +3286,12 @@ static u32 vk_eng_texture_create(void* user, rsx_be_format fmt, u32 w, u32 h,
      o->kind = VK_ENG_TEXTURE; o->fmt = vf; o->w = w; o->h = h; o->cube = (u8)cube; o->mips = mips;
      o->bpp = bc ? 0 : bpp; o->block = bc ? bpp : 0;
      /* UNDEFINED -> GENERAL for every level and face before the uploads arrive. */
@@ -47841,7 +47902,7 @@ index db64302e..9105f1c5 100644
      return hd;
  fail:
      vk_destroy_image(&o->im);
-@@ -2647,7 +3375,8 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
+@@ -2647,7 +3396,8 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
      }
      o->kind = VK_ENG_COLOR; o->snapshot = 1;
      o->fmt = t->fmt; o->bpp = t->bpp; o->w = t->w; o->h = t->h;
@@ -47851,7 +47912,7 @@ index db64302e..9105f1c5 100644
      vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT,
                       reused ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED);
      vk_barrier_image(t->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-@@ -2660,7 +3389,7 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
+@@ -2660,7 +3410,7 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
                      o->im.img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
      /* The copy, made visible to whatever samples it next. */
      vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
@@ -47860,7 +47921,7 @@ index db64302e..9105f1c5 100644
      return hd;
  }
  
-@@ -2705,9 +3434,10 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+@@ -2705,9 +3455,10 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
          t->kind = VK_ENG_TEXTURE; t->fmt = VK_FORMAT_R32_SFLOAT; t->bpp = 4; t->w = w; t->h = h;
          z = vk_eng_get(depth, VK_ENG_DEPTH);          /* same slot; reload for clarity */
          z->surface = snap;
@@ -47873,7 +47934,7 @@ index db64302e..9105f1c5 100644
      }
  
      /* The bounce buffer stays (device-local when the device has it, grown as
-@@ -2765,7 +3495,7 @@ static int vk_eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32
+@@ -2765,7 +3516,7 @@ static int vk_eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32
          return -1;
      vk_buffer* const st = vk_stage_get(&s_rb_stage, (VkDeviceSize)w * h * 4u, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
      if (!st) return -1;
@@ -47882,7 +47943,7 @@ index db64302e..9105f1c5 100644
      if (!rc) {
          vk_barrier_image(z->im.img, s_vk.depth_aspect, VK_IMAGE_LAYOUT_GENERAL);
          VkBufferImageCopy region = {
-@@ -2813,8 +3543,12 @@ static int vk_eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32
+@@ -2813,13 +3564,18 @@ static int vk_eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32
  #define VK_ENG_TOPOLOGIES 5
  #define VK_ENG_FB_CACHE   64
  
@@ -47895,7 +47956,13 @@ index db64302e..9105f1c5 100644
      VkShaderModule      vs, fs;
      rsx_be_render_state rs;
      u32                 nslots, stride, rt_count;
-@@ -2860,9 +3594,9 @@ static u32 s_esamp_count;
+     VkFormat            rt_fmt;          /* picks the render pass it is built against */
+     u32                 cube_mask;       /* TextureCube units: the split set layout */
++    u64                 vs_key, fs_key;  /* the shaders' SPIR-V cache file names (vk-warm records) */
+     VkPipeline          variant[VK_ENG_TOPOLOGIES];
+ } vk_eng_pipe;
+ 
+@@ -2860,12 +3616,14 @@ static u32 s_esamp_count;
  
  static void vk_eng_drop_framebuffers(void)
  {
@@ -47907,7 +47974,43 @@ index db64302e..9105f1c5 100644
      s_e2.fb_count = 0;
  }
  
-@@ -2958,17 +3692,428 @@ static VkStencilOpState vk_gcm_stencil_face(u32 func, u32 fail, u32 zfail, u32 z
++static int vk_eng_make_render_pass(VkFormat cf, u32 n, VkRenderPass* out);
++
+ /* The render pass for `n` colour attachments of format `cf` plus depth,
+  * LOAD/STORE in GENERAL like the vtable path's: clears are separate
+  * operations. An MRT set shares target A's format (engine contract). */
+@@ -2874,6 +3632,15 @@ static VkRenderPass vk_eng_render_pass(VkFormat cf, u32 n)
+     const int fi = vk_eng_rt_index(cf);
+     if (fi < 0 || n < 1 || n > RSX_BE_MAX_COLOR_TARGETS) return VK_NULL_HANDLE;
+     if (s_e2.rp[fi][n]) return s_e2.rp[fi][n];
++    if (vk_eng_make_render_pass(cf, n, &s_e2.rp[fi][n])) s_e2.rp[fi][n] = VK_NULL_HANDLE;
++    return s_e2.rp[fi][n];
++}
++
++/* Makes one (any thread: the pipeline warm-up makes its own, identical ones). */
++static int vk_eng_make_render_pass(VkFormat cf, u32 n, VkRenderPass* out)
++{
++    *out = VK_NULL_HANDLE;
++    if (n < 1 || n > RSX_BE_MAX_COLOR_TARGETS) return -1;
+     VkAttachmentDescription att[RSX_BE_MAX_COLOR_TARGETS + 1];
+     VkAttachmentReference   cref[RSX_BE_MAX_COLOR_TARGETS];
+     for (u32 i = 0; i <= n; i++) {
+@@ -2896,9 +3663,11 @@ static VkRenderPass vk_eng_render_pass(VkFormat cf, u32 n)
+     VkRenderPassCreateInfo rci = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+                                    .attachmentCount = n + 1, .pAttachments = att,
+                                    .subpassCount = 1, .pSubpasses = &sub };
+-    if (pvkCreateRenderPass(s_vk.device, &rci, NULL, &s_e2.rp[fi][n]) != VK_SUCCESS)
+-        s_e2.rp[fi][n] = VK_NULL_HANDLE;
+-    return s_e2.rp[fi][n];
++    if (pvkCreateRenderPass(s_vk.device, &rci, NULL, out) != VK_SUCCESS) {
++        *out = VK_NULL_HANDLE;
++        return -1;
++    }
++    return 0;
+ }
+ 
+ /* Tables carried from the Metal backend, itself copied from the D3D12 live
+@@ -2958,17 +3727,446 @@ static VkStencilOpState vk_gcm_stencil_face(u32 func, u32 fail, u32 zfail, u32 z
      return s;
  }
  
@@ -48015,6 +48118,7 @@ index db64302e..9105f1c5 100644
 +    pthread_cond_t  work_cv;         /* a job queued, or quit */
 +    pthread_cond_t  done_cv;         /* a job reached state 2 (CLOCK_MONOTONIC) */
 +    vk_sa_job       *head, *tail;
++    int             building;        /* jobs a thread is translating now (vk_sa_busy) */
 +    int             quit;
 +    pthread_t       thr[VK_SA_MAX_WORKERS];
 +    u32*            thr_spv[VK_SA_MAX_WORKERS];
@@ -48037,6 +48141,19 @@ index db64302e..9105f1c5 100644
 +}
 +
 +static int vk_sa_active(void) { return s_sa.inited && s_sa.nthr > 0; }
++
++/* Anything queued or being translated: the pipeline warm-up (vk-warm) waits
++ * while this is so, so a first-seen shader in the game always goes first.
++ * Any thread; s_sa is up for the warm-up's whole life (vk_pw_start runs after
++ * vk_sa_start, and vk_pw_shutdown joins it before vk_sa_shutdown). */
++static int vk_sa_busy(void)
++{
++    if (!s_sa.inited) return 0;
++    pthread_mutex_lock(&s_sa.mu);
++    const int busy = s_sa.head != NULL || s_sa.building > 0;
++    pthread_mutex_unlock(&s_sa.mu);
++    return busy;
++}
 +
 +static void vk_sa_job_free(vk_sa_job* j)
 +{
@@ -48073,6 +48190,7 @@ index db64302e..9105f1c5 100644
 +        if (!s_sa.head) s_sa.tail = NULL;
 +        j->next = NULL;
 +        j->state = 1;
++        s_sa.building++;
 +        pthread_mutex_unlock(&s_sa.mu);
 +        if (j->prewarm) {
 +            const u64 t0 = vk_now_ns();
@@ -48081,10 +48199,12 @@ index db64302e..9105f1c5 100644
 +                    (vk_now_ns() - t0) / 1e6, r ? " (failed)" : "");
 +            free(j);
 +            pthread_mutex_lock(&s_sa.mu);
++            s_sa.building--;
 +            continue;
 +        }
 +        vk_sa_build(j, spv, log, sizeof log);
 +        pthread_mutex_lock(&s_sa.mu);
++        s_sa.building--;
 +        if (j->orphan) {
 +            pthread_mutex_unlock(&s_sa.mu);
 +            vk_sa_job_free(j);                 /* nobody else has it any more */
@@ -48327,13 +48447,14 @@ index db64302e..9105f1c5 100644
 +    /* Must draw: built here if no worker has started it, else waited for. */
 +    const u64 t0 = vk_now_ns();
 +    int run_here = 0, waited = 0;
-+    if (j->state == 0) { vk_sa_unlink_locked(j); j->state = 1; run_here = 1; }
++    if (j->state == 0) { vk_sa_unlink_locked(j); j->state = 1; run_here = 1; s_sa.building++; }
 +    else while (j->state != 2) { pthread_cond_wait(&s_sa.done_cv, &s_sa.mu); waited = 1; }
 +    pthread_mutex_unlock(&s_sa.mu);
 +    if (run_here) {
 +        vk_sa_build(j, s_g.spv, s_g.log, sizeof s_g.log);
 +        pthread_mutex_lock(&s_sa.mu);
 +        j->state = 2;
++        s_sa.building--;
 +        pthread_mutex_unlock(&s_sa.mu);
 +    }
 +    if (run_here || waited) { s_sa.n.forced++; s_sa.n.forced_ns += vk_now_ns() - t0; }
@@ -48341,7 +48462,38 @@ index db64302e..9105f1c5 100644
  }
  
  /* A pixel program with a cube unit declares all sixteen units one by one
-@@ -3053,9 +4198,20 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
+@@ -2977,11 +4175,10 @@ static int vk_eng_translate(const char* hlsl, int stage, VkShaderModule* out)
+  * (rsx_shader_spirv.h): sixteen single bindings, where the shared layout has
+  * one binding of sixteen. Those pipelines use this layout, made on first use
+  * so a title without cube maps never builds it. */
+-static VkPipelineLayout vk_eng_split_layout(void)
++#define VK_ENG_SPLIT_BINDINGS (3u + RSX_MAX_TEXTURES)
++static void vk_eng_split_bindings(VkDescriptorSetLayoutBinding b[VK_ENG_SPLIT_BINDINGS])
+ {
+-    if (s_e2.split_pipe_layout) return s_e2.split_pipe_layout;
+     const VkShaderStageFlags both = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+-    VkDescriptorSetLayoutBinding b[3 + RSX_MAX_TEXTURES];
+     b[0] = (VkDescriptorSetLayoutBinding){ RSX_SPIRV_VPCONST_BINDING, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, both, NULL };
+     b[1] = (VkDescriptorSetLayoutBinding){ RSX_SPIRV_PSCONST_BINDING, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, both, NULL };
+     b[2] = (VkDescriptorSetLayoutBinding){ RSX_SPIRV_SAMPLER_BINDING, VK_DESCRIPTOR_TYPE_SAMPLER,
+@@ -2990,8 +4187,15 @@ static VkPipelineLayout vk_eng_split_layout(void)
+         b[3 + u] = (VkDescriptorSetLayoutBinding){ RSX_SPIRV_TEXTURE_BINDING + u,
+                                                    VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1,
+                                                    VK_SHADER_STAGE_FRAGMENT_BIT, NULL };
++}
++
++static VkPipelineLayout vk_eng_split_layout(void)
++{
++    if (s_e2.split_pipe_layout) return s_e2.split_pipe_layout;
++    VkDescriptorSetLayoutBinding b[VK_ENG_SPLIT_BINDINGS];
++    vk_eng_split_bindings(b);
+     VkDescriptorSetLayoutCreateInfo lci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+-                                            .bindingCount = 3 + RSX_MAX_TEXTURES, .pBindings = b };
++                                            .bindingCount = VK_ENG_SPLIT_BINDINGS, .pBindings = b };
+     VkDescriptorPoolSize ps[3] = {
+         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 },
+         { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, RSX_MAX_TEXTURES },
+@@ -3053,9 +4257,20 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
      }
      vk_eng_pipe* P = &s_epipe[slot];
      memset(P, 0, sizeof *P);
@@ -48365,7 +48517,18 @@ index db64302e..9105f1c5 100644
      }
      P->rs = *rs;
      P->nslots = layout->count;
-@@ -3070,11 +4226,13 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
+@@ -3063,6 +4278,10 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
+     P->rt_count = rt_count;
+     P->rt_fmt = cf;
+     P->cube_mask = vk_eng_cube_units(ps_hlsl);
++    if (vk_pw_recording()) {                /* RSX_VK_PIPELINE_WARM: what its variants record */
++        P->vs_key = rsx_hlsl_to_spirv_key_hash(vs_hlsl, RSX_SHADER_STAGE_VERTEX);
++        P->fs_key = rsx_hlsl_to_spirv_key_hash(ps_hlsl, RSX_SHADER_STAGE_FRAGMENT);
++    }
+     P->used = 1;
+     return slot + 1u;
+ }
+@@ -3070,43 +4289,67 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
  static void vk_eng_pipeline_release(void* user, u32 pipeline)
  {
      (void)user;
@@ -48381,7 +48544,1013 @@ index db64302e..9105f1c5 100644
      if (P->vs) pvkDestroyShaderModule(s_vk.device, P->vs, NULL);
      if (P->fs) pvkDestroyShaderModule(s_vk.device, P->fs, NULL);
      memset(P, 0, sizeof *P);
-@@ -3339,13 +4497,15 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
+     if (s_e2.pipeline == pipeline) s_e2.pipeline = 0;
+ }
+ 
+-static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
++/* PS3RECOMP_VK_MRT_MASK (see the colour blend state below), read once. */
++static int vk_eng_mrt_mode(void)
+ {
+-    static const VkPrimitiveTopology topo[VK_ENG_TOPOLOGIES] = {
++    static int mrt_mode = -1;
++    if (mrt_mode < 0) { const char* e = getenv("PS3RECOMP_VK_MRT_MASK"); mrt_mode = e ? atoi(e) : 1; }
++    return mrt_mode;
++}
++
++/* One engine pipeline: everything its VkGraphicsPipelineCreateInfo is made of
++ * comes from these arguments plus device constants (depth format, depth
++ * bounds and independent blend support, PS3RECOMP_VK_MRT_MASK). The engine's
++ * variants (vk_eng_variant) and the pipeline warm-up (vk-warm, which records
++ * exactly these arguments) both build through here, so a rebuilt pipeline is
++ * the one the engine will ask the driver for. Any thread: it touches no
++ * backend state except the one-time depth-bounds warning, skipped when quiet.
++ * vk-warm's stamp has a builder line (this file's compile time, the depth
++ * format, the enabled features, PS3RECOMP_VK_MRT_MASK), so any change here or
++ * in the render passes / layouts it is given re-walks the listed records at
++ * the next launch: nothing to bump for that. Only a new input the record does
++ * not carry changes the record (vk_pw_rec, VK_PW_VERSION -- which drops every
++ * listed record); a render-state field vk_pw_record zeroes that this starts
++ * reading must stop being zeroed there (old records just rebuild with 0). */
++static VkPipeline vk_eng_build_pipeline(VkShaderModule vsm, VkShaderModule fsm,
++                                        const rsx_be_render_state* rs, u32 nslots, u32 stride,
++                                        u32 rt_count, u32 topo_idx, VkRenderPass rp,
++                                        VkPipelineLayout layout, int quiet)
++{
++    static const VkPrimitiveTopology topo[VK_ENG_TOPOLOGIES] = {
+         VK_PRIMITIVE_TOPOLOGY_POINT_LIST, VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
+         VK_PRIMITIVE_TOPOLOGY_LINE_STRIP, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP };
+-    if (P->variant[topo_idx]) return P->variant[topo_idx];
+-    VkRenderPass rp = vk_eng_render_pass(P->rt_fmt, P->rt_count);
+-    if (!rp || P->nslots > VK_GUEST_ATTRS) return VK_NULL_HANDLE;
+-    const VkPipelineLayout layout = P->cube_mask ? vk_eng_split_layout() : s_g.pipe_layout;
+-    if (!layout) return VK_NULL_HANDLE;
+-    const rsx_be_render_state* rs = &P->rs;
++    if (!vsm || !fsm || !rp || !layout || topo_idx >= VK_ENG_TOPOLOGIES || nslots > VK_GUEST_ATTRS ||
++        rt_count < 1 || rt_count > RSX_BE_MAX_COLOR_TARGETS)
++        return VK_NULL_HANDLE;
+ 
+     VkPipelineShaderStageCreateInfo st[2] = {
+         { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+-          .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = P->vs, .pName = "main" },
++          .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vsm, .pName = "main" },
+         { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+-          .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = P->fs, .pName = "main" } };
+-    VkVertexInputBindingDescription vb = { 0, P->stride, VK_VERTEX_INPUT_RATE_VERTEX };
++          .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fsm, .pName = "main" } };
++    VkVertexInputBindingDescription vb = { 0, stride, VK_VERTEX_INPUT_RATE_VERTEX };
+     VkVertexInputAttributeDescription va[VK_GUEST_ATTRS];
+-    for (u32 s = 0; s < P->nslots; s++)
++    for (u32 s = 0; s < nslots; s++)
+         va[s] = (VkVertexInputAttributeDescription){ s, 0, VK_FORMAT_R32G32B32A32_SFLOAT, s * 16u };
+     VkPipelineVertexInputStateCreateInfo vi = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+         .vertexBindingDescriptionCount = 1, .pVertexBindingDescriptions = &vb,
+-        .vertexAttributeDescriptionCount = P->nslots, .pVertexAttributeDescriptions = va };
++        .vertexAttributeDescriptionCount = nslots, .pVertexAttributeDescriptions = va };
+     VkPipelineInputAssemblyStateCreateInfo ia = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+         .topology = topo[topo_idx] };
+@@ -3145,7 +4388,7 @@ static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
+         /* The bounds themselves are dynamic (vk_eng_set_depth_bounds). */
+         .depthBoundsTestEnable = (rs->depth_bounds_test && s_vk.depth_bounds_ok) ? VK_TRUE : VK_FALSE,
+         .minDepthBounds = 0.0f, .maxDepthBounds = 1.0f };
+-    if (rs->depth_bounds_test && !s_vk.depth_bounds_ok && !(s_e2.warned & 64u)) {
++    if (rs->depth_bounds_test && !s_vk.depth_bounds_ok && !quiet && !(s_e2.warned & 64u)) {
+         VK_LOG("engine: the device has no depthBounds; the depth bounds test is ignored\n");
+         s_e2.warned |= 64u;
+     }
+@@ -3165,10 +4408,9 @@ static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
+     if ((rs->color_mask >>  8) & 0xFFu) wm |= VK_COLOR_COMPONENT_G_BIT;
+     if ((rs->color_mask >>  0) & 0xFFu) wm |= VK_COLOR_COMPONENT_B_BIT;
+     if ((rs->color_mask >> 24) & 0xFFu) wm |= VK_COLOR_COMPONENT_A_BIT;
+-    static int mrt_mode = -1;
+-    if (mrt_mode < 0) { const char* e = getenv("PS3RECOMP_VK_MRT_MASK"); mrt_mode = e ? atoi(e) : 1; }
++    const int mrt_mode = vk_eng_mrt_mode();
+     VkPipelineColorBlendAttachmentState cba[RSX_BE_MAX_COLOR_TARGETS];
+-    for (u32 r = 0; r < P->rt_count; r++) {
++    for (u32 r = 0; r < rt_count; r++) {
+         VkColorComponentFlags twm = wm;
+         int tblend = rs->blend_enable != 0;
+         if (r > 0 && mrt_mode != 0 && s_vk.indep_blend_ok) {
+@@ -3194,7 +4436,7 @@ static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
+     }
+     VkPipelineColorBlendStateCreateInfo cb = {
+         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+-        .attachmentCount = P->rt_count, .pAttachments = cba };
++        .attachmentCount = rt_count, .pAttachments = cba };
+     VkDynamicState dyn[4] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                               VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_DEPTH_BOUNDS };
+     VkPipelineDynamicStateCreateInfo dy = {
+@@ -3206,11 +4448,26 @@ static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
+         .pViewportState = &vps, .pRasterizationState = &ras, .pMultisampleState = &ms,
+         .pDepthStencilState = &ds, .pColorBlendState = &cb, .pDynamicState = &dy,
+         .layout = layout, .renderPass = rp, .subpass = 0 };
+-    if (pvkCreateGraphicsPipelines(s_vk.device, VK_NULL_HANDLE, 1, &gci, NULL,
+-                                   &P->variant[topo_idx]) != VK_SUCCESS) {
+-        VK_LOG("engine: vkCreateGraphicsPipelines failed\n");
+-        P->variant[topo_idx] = VK_NULL_HANDLE;
++    VkPipeline pipe = VK_NULL_HANDLE;
++    if (pvkCreateGraphicsPipelines(s_vk.device, VK_NULL_HANDLE, 1, &gci, NULL, &pipe) != VK_SUCCESS) {
++        if (!quiet) VK_LOG("engine: vkCreateGraphicsPipelines failed\n");
++        pipe = VK_NULL_HANDLE;
+     }
++    return pipe;
++}
++
++static void vk_pw_record(const vk_eng_pipe* P, u32 topo_idx);
++
++static VkPipeline vk_eng_variant(vk_eng_pipe* P, u32 topo_idx)
++{
++    if (P->variant[topo_idx]) return P->variant[topo_idx];
++    VkRenderPass rp = vk_eng_render_pass(P->rt_fmt, P->rt_count);
++    if (!rp || P->nslots > VK_GUEST_ATTRS) return VK_NULL_HANDLE;
++    const VkPipelineLayout layout = P->cube_mask ? vk_eng_split_layout() : s_g.pipe_layout;
++    if (!layout) return VK_NULL_HANDLE;
++    P->variant[topo_idx] = vk_eng_build_pipeline(P->vs, P->fs, &P->rs, P->nslots, P->stride,
++                                                 P->rt_count, topo_idx, rp, layout, 0);
++    if (P->variant[topo_idx]) vk_pw_record(P, topo_idx);   /* RSX_VK_PIPELINE_WARM's list */
+     return P->variant[topo_idx];
+ }
+ 
+@@ -3234,6 +4491,876 @@ static void vk_eng2_shutdown(void* user)
+     s_esamp_count = 0;
+ }
+ 
++/* ---------------------------------------------------------------------------
++ * Known pipelines rebuilt at launch after an update (RSX_VK_PIPELINE_WARM).
++ *
++ * Two caches make a warm session smooth: the SPIR-V cache (rsx_shader_spirv.cpp,
++ * PS3RECOMP_SPIRV_CACHE, fix 153) and the driver's own disk cache of compiled
++ * pipelines (Mesa's, for RADV). Each is wiped at once by an update: every one
++ * of our builds changes the translator stamp in the SPIR-V cache's file
++ * headers (every file a miss), and a SteamOS driver update changes Mesa's
++ * cache key (every pipeline compiled again). The first session after either
++ * paid for everything in game: 9.8 s of stalls in one Boletaria scene (fix
++ * 154). Games ship the same answer to this: rebuild the pipelines they know of
++ * at launch.
++ *
++ * Record. Every engine pipeline variant this backend creates (vk_eng_variant:
++ * the per-topology build, not just the shader modules) is appended to
++ * <PS3RECOMP_SPIRV_CACHE>/pipelines.bin as one fixed-size record: the two
++ * shaders' SPIR-V cache file names (rsx_hlsl_to_spirv_key_hash -- the file
++ * holds the whole HLSL, so even a stale one can be translated again) and every
++ * argument vk_eng_build_pipeline takes besides the device constants: topology,
++ * vertex slots and stride, colour target count and format, the cube-map layout
++ * choice and rsx_be_render_state word for word (with the fields the builder
++ * never reads zeroed, so they cannot split one pipeline into several records).
++ * Record format (vk_pw_encode): magic, version | payload size, the payload, an
++ * FNV-1a 32 check of all that; little-endian, 4-byte words. Duplicates are
++ * dropped against a hash set loaded with the list at start-up; each new one
++ * is one write(2) on an O_APPEND descriptor under s_pw.mu, so two game
++ * instances never interleave inside a record, and a run killed in the middle
++ * of one leaves a torn record the reader skips (it resyncs byte by byte on the
++ * magic and check). At 32768 records' worth of bytes recording stops.
++ *
++ * Stamp. One per Mesa disk cache: <dir>/pipelines.<fnv64 of its line>.stamp
++ * (a Steam launch sets MESA_SHADER_CACHE_DIR / MESA_DISK_CACHE_SINGLE_FILE, a
++ * terminal launch does not: two RADV caches, one SPIR-V cache, and walking one
++ * says nothing about the other). It names everything the two caches depend on:
++ * the record version, rsx_hlsl_to_spirv_stamp (translator build, glslang
++ * version, output mode), the builder (this file's compile time -- an update
++ * that changes only the backend leaves the translator's alone -- the depth
++ * format, the enabled device features, PS3RECOMP_VK_MRT_MASK), the driver
++ * version, vendor and device IDs, the pipelineCacheUUID (RADV's changes with
++ * every driver build) and the Mesa cache (vk_pw_mesa_cache). At the engine's
++ * init the list is read and the stamp compared. Same stamp: the thread builds
++ * up to VK_PW_PROBES listed pipelines spread over the list and times each
++ * build in thread CPU time (RADV from its cache ~0.4 ms, compiling ~7 ms and
++ * up); if a quarter or more of them took over VK_PW_COLD_NS, Mesa's cache was
++ * wiped or evicted them and it goes on to walk the whole list, otherwise it
++ * stops (not with the Mesa cache off: nothing to find). Different, missing, or
++ * RSX_VK_PIPELINE_WARM=force: one thread
++ * (rsx_vk_warm, nice 19) walks the list in recorded order -- roughly the order
++ * the game first needed them -- and for each record gets both shaders
++ * (rsx_hlsl_to_spirv_from_cache_file: the current file, or the stale file's
++ * HLSL translated and the file rewritten; never into the memory cache),
++ * makes their modules (the last 256 are kept: pipelines share shaders), builds
++ * the VkPipeline through vk_eng_build_pipeline with its own, identical render
++ * passes and layouts (the driver's cache keys on content, not handles), and
++ * destroys it. That only fills the two caches: the engine still builds its own
++ * pipelines when drawing, but now both lookups hit. When the walk ends the new
++ * stamp is written (temporary file + rename), so it runs once per update; a
++ * session that quits first leaves the old stamp and the next one walks again
++ * (what was already done is a cache hit then, about a millisecond each). Nor
++ * is it written when a shader's cache file existed but could not be opened
++ * (rsx_hlsl_to_spirv_from_cache_file -2 for a file stat finds): that is the
++ * walk failing, not the shader.
++ *
++ * In-game work first: before every shader and every pipeline the thread waits
++ * (2 ms sleeps) while fix 155's queue has a job queued or being translated
++ * (vk_sa_busy), so a first-seen shader never waits behind the warm-up for more
++ * than the one translation or pipeline already under way; glslang itself is
++ * held for one translation at a time. A shader the warm-up has translated is
++ * on disk, so the engine finds it cached and builds without pop-in.
++ *
++ * Threads: the render thread loads the list, starts the thread and is the
++ * only one that records (s_pw.seen / fd / full under s_pw.mu). The thread reads
++ * only its list, the stamp text and paths (fixed before it starts), device
++ * constants and the Vulkan entry points, and touches only objects it made.
++ * Shutdown sets s_pw.quit (checked before every item and in the waits) and
++ * joins it before vk_sa_shutdown and before anything of the device goes; the
++ * longest it can take is one translation plus one pipeline build. The game
++ * quits with exit() and never shuts the backend down, so an atexit handler
++ * (registered after rsx_shader_spirv's cache object and the device exist, so
++ * it runs before their teardown) stops and joins it the same way; one lock
++ * (s_pw_stop_mu) keeps the two from joining it twice.
++ * RSX_VK_PIPELINE_WARM=0: neither recorded nor rebuilt. Without
++ * PS3RECOMP_SPIRV_CACHE it is off too. Log: "[vk-warm] ...", a progress line
++ * every 5 s while rebuilding.
++ * -------------------------------------------------------------------------*/
++
++/* vk-warm pure: begin -- libc and POSIX only (the scratch test compiles this block alone). */
++#define VK_PW_MAGIC        0x57505652u     /* "RVPW" */
++#define VK_PW_VERSION      1u
++#define VK_PW_RS_WORDS     34u             /* rsx_be_render_state, word for word (asserted below) */
++#define VK_PW_PAYLOAD      (4u + 6u + VK_PW_RS_WORDS)
++#define VK_PW_REC_WORDS    (2u + VK_PW_PAYLOAD + 1u)
++#define VK_PW_REC_BYTES    (VK_PW_REC_WORDS * 4u)
++#define VK_PW_MAX_RECORDS  32768u
++#define VK_PW_TOPOLOGIES   5u              /* VK_ENG_TOPOLOGIES */
++#define VK_PW_MAX_SLOTS    16u             /* VK_GUEST_ATTRS */
++#define VK_PW_MAX_TARGETS  4u              /* RSX_BE_MAX_COLOR_TARGETS */
++
++typedef struct vk_pw_rec {
++    u64 vs_key, fs_key;         /* rsx_hlsl_to_spirv_key_hash: <key>.spv in the SPIR-V cache */
++    u32 topo;                   /* variant: 0 points, 1 lines, 2 line strip, 3 triangles, 4 strip */
++    u32 nslots, stride;         /* vertex input: nslots RGBA32F at 16 * slot, one binding */
++    u32 rt_count, rt_fmt;       /* colour targets, all one VkFormat; depth is the device's */
++    u32 cube_mask;              /* != 0: the split set layout */
++    u32 rs[VK_PW_RS_WORDS];     /* rsx_be_render_state */
++} vk_pw_rec;
++
++static u32 vk_pw_fnv32(const void* p, size_t n)
++{
++    const u8* b = (const u8*)p;
++    u32 h = 0x811c9dc5u;
++    for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 0x01000193u; }
++    return h;
++}
++
++static u64 vk_pw_fnv64(const void* p, size_t n)
++{
++    const u8* b = (const u8*)p;
++    u64 h = 0xcbf29ce484222325ull;
++    for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 0x100000001b3ull; }
++    return h;
++}
++
++static void vk_pw_encode(const vk_pw_rec* r, u32 w[VK_PW_REC_WORDS])
++{
++    w[0] = VK_PW_MAGIC;
++    w[1] = VK_PW_VERSION | (VK_PW_PAYLOAD << 16);
++    u32* p = w + 2;
++    p[0] = (u32)r->vs_key; p[1] = (u32)(r->vs_key >> 32);
++    p[2] = (u32)r->fs_key; p[3] = (u32)(r->fs_key >> 32);
++    p[4] = r->topo; p[5] = r->nslots; p[6] = r->stride;
++    p[7] = r->rt_count; p[8] = r->rt_fmt; p[9] = r->cube_mask;
++    memcpy(p + 10, r->rs, sizeof r->rs);
++    w[VK_PW_REC_WORDS - 1] = vk_pw_fnv32(w, (VK_PW_REC_WORDS - 1u) * 4u);
++}
++
++/* A record's identity (the dedupe key): its payload. Never 0 (an empty set slot). */
++static u64 vk_pw_id(const u32 w[VK_PW_REC_WORDS])
++{
++    const u64 h = vk_pw_fnv64(w + 2, VK_PW_PAYLOAD * 4u);
++    return h ? h : 1u;
++}
++
++/* 1 when a whole, well-formed record of this version starts at b. */
++static int vk_pw_decode(const u8* b, size_t avail, vk_pw_rec* r, u64* id)
++{
++    u32 w[VK_PW_REC_WORDS];
++    if (avail < VK_PW_REC_BYTES) return 0;
++    memcpy(w, b, 8);
++    if (w[0] != VK_PW_MAGIC || w[1] != (VK_PW_VERSION | (VK_PW_PAYLOAD << 16))) return 0;
++    memcpy(w, b, VK_PW_REC_BYTES);
++    if (w[VK_PW_REC_WORDS - 1] != vk_pw_fnv32(w, (VK_PW_REC_WORDS - 1u) * 4u)) return 0;
++    const u32* p = w + 2;
++    r->vs_key = (u64)p[0] | ((u64)p[1] << 32);
++    r->fs_key = (u64)p[2] | ((u64)p[3] << 32);
++    r->topo = p[4]; r->nslots = p[5]; r->stride = p[6];
++    r->rt_count = p[7]; r->rt_fmt = p[8]; r->cube_mask = p[9];
++    memcpy(r->rs, p + 10, sizeof r->rs);
++    if (!r->vs_key || !r->fs_key || r->topo >= VK_PW_TOPOLOGIES || r->nslots > VK_PW_MAX_SLOTS ||
++        !r->stride || r->rt_count < 1 || r->rt_count > VK_PW_MAX_TARGETS)
++        return 0;
++    *id = vk_pw_id(w);
++    return 1;
++}
++
++/* Open-addressed set of record (or shader) ids. */
++typedef struct { u64* k; u32 cap, n; } vk_pw_set;
++
++static int vk_pw_set_has(const vk_pw_set* s, u64 id)
++{
++    if (!s->cap) return 0;
++    for (u32 i = (u32)(id ^ (id >> 32)) & (s->cap - 1u);; i = (i + 1u) & (s->cap - 1u)) {
++        if (s->k[i] == id) return 1;
++        if (!s->k[i]) return 0;
++    }
++}
++
++/* 1 added, 0 already there, -1 out of memory. id != 0. */
++static int vk_pw_set_add(vk_pw_set* s, u64 id)
++{
++    if ((s->n + 1u) * 2u > s->cap) {
++        const u32 cap = s->cap ? s->cap * 2u : 1024u;
++        u64* k = (u64*)calloc(cap, sizeof *k);
++        if (!k) return -1;
++        for (u32 j = 0; j < s->cap; j++) {
++            if (!s->k[j]) continue;
++            u32 i = (u32)(s->k[j] ^ (s->k[j] >> 32)) & (cap - 1u);
++            while (k[i]) i = (i + 1u) & (cap - 1u);
++            k[i] = s->k[j];
++        }
++        free(s->k);
++        s->k = k;
++        s->cap = cap;
++    }
++    u32 i = (u32)(id ^ (id >> 32)) & (s->cap - 1u);
++    while (s->k[i]) {
++        if (s->k[i] == id) return 0;
++        i = (i + 1u) & (s->cap - 1u);
++    }
++    s->k[i] = id;
++    s->n++;
++    return 1;
++}
++
++static void vk_pw_set_free(vk_pw_set* s)
++{
++    free(s->k);
++    s->k = NULL;
++    s->cap = s->n = 0;
++}
++
++typedef struct { u32 valid, dups, skipped_bytes; } vk_pw_parse_stats;
++
++/* A list file's bytes -> its distinct records, in file order (at most
++ * max_out), each id also put into `seen`. Whole valid records are taken;
++ * anything else (a record torn by a killed run, a foreign version, garbage) is
++ * stepped over a byte at a time until a record lines up again. Duplicates --
++ * two instances recording the same pipeline -- are counted, not returned. */
++static vk_pw_rec* vk_pw_parse(const u8* b, size_t len, vk_pw_set* seen, u32 max_out,
++                              u32* nout, vk_pw_parse_stats* st)
++{
++    vk_pw_rec* out = NULL;
++    u32 n = 0, cap = 0;
++    size_t o = 0;
++    while (o + VK_PW_REC_BYTES <= len) {
++        vk_pw_rec r;
++        u64 id;
++        if (!vk_pw_decode(b + o, len - o, &r, &id)) { o++; st->skipped_bytes++; continue; }
++        o += VK_PW_REC_BYTES;
++        st->valid++;
++        const int added = vk_pw_set_add(seen, id);
++        if (added == 0) { st->dups++; continue; }
++        if (added < 0 || n >= max_out) continue;
++        if (n == cap) {
++            const u32 nc = cap ? cap * 2u : 256u;
++            vk_pw_rec* g = (vk_pw_rec*)realloc(out, (size_t)nc * sizeof *g);
++            if (!g) continue;
++            out = g;
++            cap = nc;
++        }
++        out[n++] = r;
++    }
++    st->skipped_bytes += (u32)(len - o);
++    *nout = n;
++    return out;
++}
++
++/* One record, one write(2) on an O_APPEND descriptor. */
++static int vk_pw_append(int fd, const u32 w[VK_PW_REC_WORDS])
++{
++    const ssize_t n = write(fd, w, VK_PW_REC_BYTES);
++    return n == (ssize_t)VK_PW_REC_BYTES ? 0 : -1;
++}
++
++/* The list rewritten with just these records, whole or not at all (a
++ * temporary file renamed over it): what vk_pw_parse skipped -- an older
++ * format's records, torn ones, duplicates -- would otherwise count against
++ * the size bound for good. An instance appending at that moment keeps writing
++ * to the old file, and those records are lost (recorded again when next seen). */
++static int vk_pw_write_records(const char* path, const vk_pw_rec* list, u32 n)
++{
++    const size_t pl = strlen(path) + 32u;
++    char* tmp = (char*)malloc(pl);
++    if (!tmp) return -1;
++    snprintf(tmp, pl, "%s.%ld.tmp", path, (long)getpid());
++    const int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
++    int ok = fd >= 0;
++    for (u32 i = 0; ok && i < n; i++) {
++        u32 w[VK_PW_REC_WORDS];
++        vk_pw_encode(&list[i], w);
++        ok = vk_pw_append(fd, w) == 0;
++    }
++    if (fd >= 0) ok = (close(fd) == 0) && ok;
++    if (!ok || rename(tmp, path) != 0) { unlink(tmp); ok = 0; }
++    free(tmp);
++    return ok ? 0 : -1;
++}
++
++/* At most `max` bytes of a file, NUL-terminated (for the stamp); NULL when absent. */
++static u8* vk_pw_read_file(const char* path, size_t max, size_t* len)
++{
++    *len = 0;
++    const int fd = open(path, O_RDONLY | O_CLOEXEC);
++    if (fd < 0) return NULL;
++    struct stat sb;
++    if (fstat(fd, &sb) != 0 || sb.st_size < 0) { close(fd); return NULL; }
++    const size_t want = (size_t)sb.st_size < max ? (size_t)sb.st_size : max;
++    u8* b = (u8*)malloc(want + 1u);
++    if (!b) { close(fd); return NULL; }
++    size_t got = 0;
++    while (got < want) {
++        const ssize_t r = read(fd, b + got, want - got);
++        if (r < 0 && errno == EINTR) continue;
++        if (r <= 0) break;
++        got += (size_t)r;
++    }
++    close(fd);
++    b[got] = 0;
++    *len = got;
++    return b;
++}
++
++/* Mesa's boolean environment variables (util/u_debug's rule): 1 / true / yes / y. */
++static int vk_pw_env_true(const char* v)
++{
++    return v && (!strcmp(v, "1") || !strcasecmp(v, "true") || !strcasecmp(v, "yes") || !strcasecmp(v, "y"));
++}
++
++/* Which of Mesa's disk caches the driver reads and writes in this process, as
++ * util/disk_cache_os.c picks it: "off", or the kind (MESA_DISK_CACHE_SINGLE_FILE
++ * / _MULTI_FILE / _DATABASE, else the build's default) and the base directory
++ * (MESA_SHADER_CACHE_DIR, the older MESA_GLSL_CACHE_DIR, XDG_CACHE_HOME or
++ * HOME's .cache) -- Mesa adds its own subdirectories below that. */
++static void vk_pw_mesa_cache(char* out, size_t size)
++{
++    const char* rd = getenv("RADV_DEBUG");
++    if (vk_pw_env_true(getenv("MESA_SHADER_CACHE_DISABLE")) || vk_pw_env_true(getenv("MESA_GLSL_CACHE_DISABLE")) ||
++        (rd && strstr(rd, "nocache"))) {
++        snprintf(out, size, "off");
++        return;
++    }
++    const char* kind = vk_pw_env_true(getenv("MESA_DISK_CACHE_SINGLE_FILE")) ? "single-file"
++                     : vk_pw_env_true(getenv("MESA_DISK_CACHE_MULTI_FILE")) ? "multi-file"
++                     : vk_pw_env_true(getenv("MESA_DISK_CACHE_DATABASE")) ? "database" : "default";
++    const char* d = getenv("MESA_SHADER_CACHE_DIR");
++    const char* how = "dir";
++    if (!d || !*d) d = getenv("MESA_GLSL_CACHE_DIR");
++    if (!d || !*d) { d = getenv("XDG_CACHE_HOME"); how = "xdg"; }
++    if (!d || !*d) { d = getenv("HOME"); how = "home"; }
++    if (!d) d = "";
++    snprintf(out, size, "%s %s %.2000s", kind, how, d);
++}
++
++static void vk_pw_stamp_text(char* out, size_t size, const char* translator, const char* builder,
++                             u32 driver, u32 vendor, u32 device, const u8 uuid[16], const char* mesa)
++{
++    char u[33];
++    for (int i = 0; i < 16; i++) snprintf(u + 2 * i, 3, "%02x", uuid[i]);
++    snprintf(out, size, "records %u\ntranslator %s\nbuilder %s\ndriver 0x%08x\ngpu 0x%04x:0x%04x\n"
++                        "pipeline-cache %s\nmesa-cache %s\n",
++             VK_PW_VERSION, translator, builder, driver, vendor, device, u, mesa);
++}
++
++/* NULL when the stamps match; otherwise why not: "no stamp yet", or the first
++ * differing line's keyword ("translator changed", "driver changed", ...). */
++static const char* vk_pw_stamp_diff(const char* old, const char* now, char* why, size_t why_size)
++{
++    if (!old || !*old) return "no stamp yet";
++    if (strcmp(old, now) == 0) return NULL;
++    const char *a = old, *b = now;
++    while (*a || *b) {
++        const size_t la = strcspn(a, "\n"), lb = strcspn(b, "\n");
++        if (la != lb || memcmp(a, b, la) != 0) {
++            const char* line = lb ? b : a;
++            snprintf(why, why_size, "%.*s changed", (int)strcspn(line, " \n"), line);
++            return why;
++        }
++        a += la + (a[la] == '\n');
++        b += lb + (b[lb] == '\n');
++    }
++    return "stamp changed";
++}
++
++/* Whole or not at all: a temporary file renamed over the old one. */
++static int vk_pw_write_text(const char* path, const char* text)
++{
++    const size_t n = strlen(path) + 32u;
++    char* tmp = (char*)malloc(n);
++    if (!tmp) return -1;
++    snprintf(tmp, n, "%s.%ld.tmp", path, (long)getpid());
++    FILE* f = fopen(tmp, "wb");
++    int ok = f != NULL;
++    if (f) {
++        ok = fputs(text, f) >= 0;
++        ok = (fclose(f) == 0) && ok;
++    }
++    if (!ok || rename(tmp, path) != 0) { remove(tmp); ok = 0; }
++    free(tmp);
++    return ok ? 0 : -1;
++}
++/* vk-warm pure: end */
++
++_Static_assert(sizeof(rsx_be_render_state) == VK_PW_RS_WORDS * 4u,
++               "vk-warm records rsx_be_render_state word for word: update VK_PW_RS_WORDS and VK_PW_VERSION");
++_Static_assert(VK_PW_TOPOLOGIES == VK_ENG_TOPOLOGIES && VK_PW_MAX_SLOTS == VK_GUEST_ATTRS &&
++               VK_PW_MAX_TARGETS == RSX_BE_MAX_COLOR_TARGETS, "vk-warm record limits");
++
++static struct {
++    int             on;           /* -1 undecided, 0 off, 1 recording (RSX_VK_PIPELINE_WARM) */
++    pthread_mutex_t mu;           /* seen, fd, full, appended */
++    vk_pw_set       seen;         /* ids of every record in the list */
++    int             fd;           /* the list, O_APPEND; -1 none */
++    int             full;         /* recording stopped (bound reached, or a write failed) */
++    u32             appended;
++    char*           list_path;
++    char*           stamp_path;   /* this Mesa cache's stamp */
++    char*           spv_dir;      /* PS3RECOMP_SPIRV_CACHE */
++    char            mesa[2048];   /* vk_pw_mesa_cache */
++    char            stamp_now[4096];
++    char            why[64];
++    /* the rebuild: fixed before the thread starts, until it is joined */
++    int             thr_on;       /* under s_pw_stop_mu once the thread exists */
++    pthread_t       thr;
++    int             quit;         /* __atomic */
++    int             probe;        /* stamp unchanged: probe Mesa's cache, walk only if it is cold */
++    vk_pw_rec*      list;
++    u32             nlist;
++} s_pw = { .on = -1, .fd = -1 };
++
++/* The thread's stop and join: vk_pw_shutdown and the exit() handler (vk_pw_atexit). */
++static pthread_mutex_t s_pw_stop_mu = PTHREAD_MUTEX_INITIALIZER;
++static void vk_pw_atexit(void);
++
++static int vk_pw_recording(void) { return s_pw.on == 1; }
++
++/* A variant the engine just built (render thread). */
++static void vk_pw_record(const vk_eng_pipe* P, u32 topo_idx)
++{
++    if (s_pw.on != 1 || !P->vs_key || !P->fs_key) return;
++    vk_pw_rec r;
++    memset(&r, 0, sizeof r);
++    r.vs_key = P->vs_key; r.fs_key = P->fs_key;
++    r.topo = topo_idx; r.nslots = P->nslots; r.stride = P->stride;
++    r.rt_count = P->rt_count; r.rt_fmt = (u32)P->rt_fmt; r.cube_mask = P->cube_mask;
++    rsx_be_render_state rs = P->rs;
++    /* Read by the shaders (alpha test) or nobody, never by vk_eng_build_pipeline. */
++    rs.alpha_test_enable = rs.alpha_func = rs.alpha_ref_raw = rs.alpha_ref_format = 0;
++    rs.rt_fp16 = 0;
++    memcpy(r.rs, &rs, sizeof r.rs);
++    u32 w[VK_PW_REC_WORDS];
++    vk_pw_encode(&r, w);
++    const u64 id = vk_pw_id(w);
++    pthread_mutex_lock(&s_pw.mu);
++    if (!s_pw.full && vk_pw_set_add(&s_pw.seen, id) == 1) {
++        struct stat sb;
++        if (fstat(s_pw.fd, &sb) == 0 && sb.st_size >= (off_t)VK_PW_MAX_RECORDS * VK_PW_REC_BYTES) {
++            s_pw.full = 1;
++            fprintf(stderr, "[vk-warm] the pipeline list is full (%u records): no more are recorded\n",
++                    VK_PW_MAX_RECORDS);
++        } else if (vk_pw_append(s_pw.fd, w)) {
++            s_pw.full = 1;
++            fprintf(stderr, "[vk-warm] could not append to %s (%s): recording stops\n",
++                    s_pw.list_path, strerror(errno));
++        } else
++            s_pw.appended++;
++    }
++    pthread_mutex_unlock(&s_pw.mu);
++}
++
++#define VK_PW_MODULES 256
++
++typedef struct {
++    u32*      spv;
++    char      log[1024];
++    struct { u64 key; VkShaderModule mod; u64 used; } mod[VK_PW_MODULES];   /* the last ones made */
++    u64       tick;
++    vk_pw_set seen, failed;                  /* shaders made at least once / that cannot be */
++    u32       shaders, translated, cached, bad;
++    u32       unread;                        /* cache files that exist but could not be opened */
++    VkRenderPass          rp[VK_ENG_RT_FORMATS][RSX_BE_MAX_COLOR_TARGETS + 1];
++    VkDescriptorSetLayout set_layout[2];
++    VkPipelineLayout      layout[2];         /* 0 the guest programs' layout, 1 the split one */
++} vk_pw_ctx;
++
++static int vk_pw_quitting(void) { return __atomic_load_n(&s_pw.quit, __ATOMIC_ACQUIRE); }
++
++/* Before every shader and every pipeline: in-game shader work first. 0 = quit. */
++static int vk_pw_yield(void)
++{
++    while (!vk_pw_quitting() && vk_sa_busy()) {
++        const struct timespec ts = { 0, 2000000 };
++        nanosleep(&ts, NULL);
++    }
++    return !vk_pw_quitting();
++}
++
++static VkShaderModule vk_pw_module(vk_pw_ctx* c, u64 key, int stage)
++{
++    u32 victim = 0;
++    u64 oldest = ~0ull;
++    for (u32 i = 0; i < VK_PW_MODULES; i++) {
++        if (!c->mod[i].mod) { if (oldest) { victim = i; oldest = 0; } continue; }
++        if (c->mod[i].key == key) { c->mod[i].used = ++c->tick; return c->mod[i].mod; }
++        if (c->mod[i].used < oldest) { oldest = c->mod[i].used; victim = i; }
++    }
++    if (vk_pw_set_has(&c->failed, key) || !vk_pw_yield()) return VK_NULL_HANDLE;
++    u32 words = 0;
++    int how = -1;
++    const int rc = rsx_hlsl_to_spirv_from_cache_file(key, stage, c->spv, VK_SPV_WORDS, &words, &how,
++                                                     c->log, sizeof c->log);
++    if (rc || !words) {
++        /* No file could be opened, yet it is there (the path as
++         * rsx_shader_spirv.cpp's cache_path_for makes it): the walk is what
++         * failed -- not this shader -- so no stamp at the end (and no entry in
++         * `failed`: a later record may get it). */
++        if (rc == -2) {
++            char path[4200];
++            struct stat sb;
++            snprintf(path, sizeof path, "%s/%016llx.spv", s_pw.spv_dir, (unsigned long long)key);
++            if (stat(path, &sb) == 0 && S_ISREG(sb.st_mode)) {
++                if (c->unread++ < 8)
++                    fprintf(stderr, "[vk-warm] %s exists but could not be opened\n", path);
++                return VK_NULL_HANDLE;
++            }
++        }
++        vk_pw_set_add(&c->failed, key);
++        if (c->bad++ < 8)
++            fprintf(stderr, "[vk-warm] %s shader %016llx: %s\n",
++                    stage == RSX_SHADER_STAGE_VERTEX ? "vertex" : "fragment", (unsigned long long)key, c->log);
++        return VK_NULL_HANDLE;
++    }
++    if (vk_pw_set_add(&c->seen, key) == 1) {
++        c->shaders++;
++        if (how == 2) c->translated++; else c->cached++;
++    }
++    VkShaderModuleCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
++                                    .codeSize = (size_t)words * 4u, .pCode = c->spv };
++    VkShaderModule m = VK_NULL_HANDLE;
++    if (pvkCreateShaderModule(s_vk.device, &ci, NULL, &m) != VK_SUCCESS) {
++        vk_pw_set_add(&c->failed, key);
++        c->bad++;
++        return VK_NULL_HANDLE;
++    }
++    if (c->mod[victim].mod) pvkDestroyShaderModule(s_vk.device, c->mod[victim].mod, NULL);
++    c->mod[victim].key = key;
++    c->mod[victim].mod = m;
++    c->mod[victim].used = ++c->tick;
++    return m;
++}
++
++/* The thread's own render passes and layouts: identical create infos to the
++ * engine's (vk_eng_make_render_pass, vk_guest_set_bindings,
++ * vk_eng_split_bindings), so the engine's lazily made ones stay its own. */
++static VkRenderPass vk_pw_render_pass(vk_pw_ctx* c, VkFormat cf, u32 n)
++{
++    const int fi = vk_eng_rt_index(cf);
++    if (fi < 0 || n < 1 || n > RSX_BE_MAX_COLOR_TARGETS) return VK_NULL_HANDLE;
++    if (!c->rp[fi][n]) vk_eng_make_render_pass(cf, n, &c->rp[fi][n]);
++    return c->rp[fi][n];
++}
++
++static VkPipelineLayout vk_pw_layout(vk_pw_ctx* c, int split)
++{
++    if (c->layout[split]) return c->layout[split];
++    VkDescriptorSetLayoutBinding b[VK_ENG_SPLIT_BINDINGS];
++    u32 nb = 4;
++    if (split) { vk_eng_split_bindings(b); nb = VK_ENG_SPLIT_BINDINGS; }
++    else vk_guest_set_bindings(b);
++    VkDescriptorSetLayoutCreateInfo lci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
++                                            .bindingCount = nb, .pBindings = b };
++    if (!c->set_layout[split] &&
++        pvkCreateDescriptorSetLayout(s_vk.device, &lci, NULL, &c->set_layout[split]) != VK_SUCCESS) {
++        c->set_layout[split] = VK_NULL_HANDLE;
++        return VK_NULL_HANDLE;
++    }
++    VkPipelineLayoutCreateInfo plci = { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
++                                        .setLayoutCount = 1, .pSetLayouts = &c->set_layout[split] };
++    if (pvkCreatePipelineLayout(s_vk.device, &plci, NULL, &c->layout[split]) != VK_SUCCESS)
++        c->layout[split] = VK_NULL_HANDLE;
++    return c->layout[split];
++}
++
++static void vk_pw_ctx_free(vk_pw_ctx* c)
++{
++    for (u32 i = 0; i < VK_PW_MODULES; i++)
++        if (c->mod[i].mod) pvkDestroyShaderModule(s_vk.device, c->mod[i].mod, NULL);
++    for (u32 f = 0; f < VK_ENG_RT_FORMATS; f++)
++        for (u32 n = 0; n <= RSX_BE_MAX_COLOR_TARGETS; n++)
++            if (c->rp[f][n]) pvkDestroyRenderPass(s_vk.device, c->rp[f][n], NULL);
++    for (int k = 0; k < 2; k++) {
++        if (c->layout[k]) pvkDestroyPipelineLayout(s_vk.device, c->layout[k], NULL);
++        if (c->set_layout[k]) pvkDestroyDescriptorSetLayout(s_vk.device, c->set_layout[k], NULL);
++    }
++    vk_pw_set_free(&c->seen);
++    vk_pw_set_free(&c->failed);
++    free(c->spv);
++    free(c);
++}
++
++/* One listed pipeline: its shaders, render pass and layout, then the build
++ * (destroyed again: only the caches are the point). *cpu_ns: the build's
++ * thread CPU time. VK_NULL_HANDLE when something failed or quit was asked. */
++static u64 vk_pw_cpu_ns(void)
++{
++    struct timespec t;
++    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
++    return (u64)t.tv_sec * 1000000000ull + (u64)t.tv_nsec;
++}
++
++static int vk_pw_build(vk_pw_ctx* c, const vk_pw_rec* r, u64* cpu_ns)
++{
++    *cpu_ns = 0;
++    const VkShaderModule vs = vk_pw_module(c, r->vs_key, RSX_SHADER_STAGE_VERTEX);
++    const VkShaderModule fs = vs ? vk_pw_module(c, r->fs_key, RSX_SHADER_STAGE_FRAGMENT) : VK_NULL_HANDLE;
++    const VkRenderPass rp = vk_pw_render_pass(c, (VkFormat)r->rt_fmt, r->rt_count);
++    const VkPipelineLayout lay = vk_pw_layout(c, r->cube_mask != 0);
++    VkPipeline p = VK_NULL_HANDLE;
++    if (vs && fs && rp && lay && vk_pw_yield()) {
++        rsx_be_render_state rs;
++        memcpy(&rs, r->rs, sizeof rs);
++        const u64 t = vk_pw_cpu_ns();
++        p = vk_eng_build_pipeline(vs, fs, &rs, r->nslots, r->stride, r->rt_count, r->topo,
++                                  rp, lay, 1);
++        *cpu_ns = vk_pw_cpu_ns() - t;
++    }
++    if (!p) return 0;
++    pvkDestroyPipeline(s_vk.device, p, NULL);
++    return 1;
++}
++
++/* Stamp unchanged: is Mesa's cache still warm for the list? Up to VK_PW_PROBES
++ * records spread over it (from a ninth in: the first ones are what the game
++ * builds itself right after start, and a pipeline it has built is in RADV's
++ * memory cache), each build timed in thread CPU time, which a nice-19 thread
++ * being preempted does not inflate. 1 cold (walk), 0 warm or undecided, -1 quit. */
++#define VK_PW_PROBES  8u
++#define VK_PW_COLD_NS 3000000ull
++
++static int vk_pw_probe(vk_pw_ctx* c)
++{
++    const u32 n = s_pw.nlist < VK_PW_PROBES ? s_pw.nlist : VK_PW_PROBES;
++    u32 built = 0, slow = 0;
++    u64 worst = 0, sum = 0;
++    for (u32 k = 0; k < n; k++) {
++        if (vk_pw_quitting()) return -1;
++        const u32 i = (u32)(((u64)s_pw.nlist * (k + 1u)) / (n + 1u));
++        u64 ns = 0;
++        const int ok = vk_pw_build(c, &s_pw.list[i], &ns);
++        if (!ok) {
++            if (vk_pw_quitting()) return -1;
++            continue;
++        }
++        built++;
++        sum += ns;
++        if (ns > worst) worst = ns;
++        if (ns > VK_PW_COLD_NS) slow++;
++    }
++    if (!built) {
++        fprintf(stderr, "[vk-warm] stamp unchanged; none of the %u probed pipelines could be built\n", n);
++        return 0;
++    }
++    /* A quarter or more (at least one): one slow outlier among warm ones is not eviction. */
++    const int cold = slow > 0 && slow * 4u >= built;
++    fprintf(stderr, "[vk-warm] stamp unchanged; %u of %u probed pipelines compiled (mean %.1f ms, worst %.1f ms "
++                    "CPU)%s\n", slow, built, sum / 1e6 / built, worst / 1e6,
++            cold ? ": Mesa's cache lost them, rebuilding the list" : ": Mesa's cache is warm");
++    return cold;
++}
++
++static void* vk_pw_thread(void* arg)
++{
++    (void)arg;
++    /* Below everything the game runs: on Linux a thread's id takes its own nice value. */
++    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 19);
++    vk_pw_ctx* c = (vk_pw_ctx*)calloc(1, sizeof *c);
++    if (c) c->spv = (u32*)malloc(VK_SPV_WORDS * sizeof(u32));
++    if (!c || !c->spv) {
++        fprintf(stderr, "[vk-warm] out of memory: nothing rebuilt\n");
++        if (c) free(c->spv);
++        free(c);
++        return NULL;
++    }
++    if (s_pw.probe && vk_pw_probe(c) != 1) {
++        vk_pw_ctx_free(c);
++        return NULL;
++    }
++    const u64 t0 = vk_now_ns();
++    u64 last = t0;
++    u32 done = 0, rebuilt = 0, failed = 0;
++    for (u32 i = 0; i < s_pw.nlist && !vk_pw_quitting(); i++) {
++        const u64 now = vk_now_ns();
++        if (now - last >= 5000000000ull) {
++            last = now;
++            fprintf(stderr, "[vk-warm] %u of %u pipelines (%u shaders: %u translated, %u cached), "
++                            "%u failed, %.0f s\n", done, s_pw.nlist, c->shaders, c->translated,
++                    c->cached, failed, (now - t0) / 1e9);
++        }
++        u64 ns;
++        const int ok = vk_pw_build(c, &s_pw.list[i], &ns);
++        if (!ok && vk_pw_quitting()) break;      /* stopped in a wait: not a failure */
++        done++;
++        if (ok) rebuilt++;
++        else failed++;
++    }
++    const double secs = (vk_now_ns() - t0) / 1e9;
++    if (done == s_pw.nlist && !c->unread) {
++        const int w = vk_pw_write_text(s_pw.stamp_path, s_pw.stamp_now);
++        fprintf(stderr, "[vk-warm] rebuilt %u pipelines (%u shaders: %u translated, %u cached) in %.1f s, "
++                        "%u failed%s\n", rebuilt, c->shaders, c->translated, c->cached, secs, failed,
++                w ? "; the stamp could not be written" : "");
++    } else if (done == s_pw.nlist)
++        fprintf(stderr, "[vk-warm] rebuilt %u of %u pipelines in %.1f s, but %u shader cache files that exist "
++                        "could not be opened: the stamp is left, the next launch walks again\n",
++                rebuilt, s_pw.nlist, secs, c->unread);
++    else
++        fprintf(stderr, "[vk-warm] stopped after %u of %u pipelines (%u shaders: %u translated, %u cached) "
++                        "in %.1f s; the rest next launch\n", done, s_pw.nlist, c->shaders, c->translated,
++                c->cached, secs);
++    vk_pw_ctx_free(c);
++    return NULL;
++}
++
++/* The engine's init (render thread), after vk_sa_start. */
++static void vk_pw_start(void)
++{
++    if (s_pw.on >= 0 || !s_g.on || !s_vk.device) return;
++    s_pw.on = 0;
++    const char* e = getenv("RSX_VK_PIPELINE_WARM");
++    if (e && *e == '0') {
++        fprintf(stderr, "[vk-warm] off (RSX_VK_PIPELINE_WARM=0): pipelines neither recorded nor rebuilt\n");
++        return;
++    }
++    const int force = e && strcmp(e, "force") == 0;
++    const char* dir = getenv("PS3RECOMP_SPIRV_CACHE");
++    if (!dir || !*dir || !rsx_hlsl_to_spirv_available()) {
++        fprintf(stderr, "[vk-warm] off: no PS3RECOMP_SPIRV_CACHE\n");
++        return;
++    }
++    const size_t n = strlen(dir) + 48u;
++    s_pw.list_path = (char*)malloc(n);
++    s_pw.stamp_path = (char*)malloc(n);
++    s_pw.spv_dir = strdup(dir);
++    if (!s_pw.list_path || !s_pw.stamp_path || !s_pw.spv_dir) {
++        free(s_pw.list_path); free(s_pw.stamp_path); free(s_pw.spv_dir);
++        s_pw.list_path = s_pw.stamp_path = s_pw.spv_dir = NULL;
++        return;
++    }
++    snprintf(s_pw.list_path, n, "%s/pipelines.bin", dir);
++    /* One stamp per Mesa cache; the single one earlier builds wrote is gone. */
++    vk_pw_mesa_cache(s_pw.mesa, sizeof s_pw.mesa);
++    snprintf(s_pw.stamp_path, n, "%s/pipelines.%016llx.stamp", dir,
++             (unsigned long long)vk_pw_fnv64(s_pw.mesa, strlen(s_pw.mesa)));
++    {
++        char legacy[4200];
++        snprintf(legacy, sizeof legacy, "%s/pipelines.stamp", dir);
++        (void)unlink(legacy);
++    }
++    pthread_mutex_init(&s_pw.mu, NULL);
++    s_pw.on = 1;
++
++    const u64 t0 = vk_now_ns();
++    size_t len = 0;
++    u8* buf = vk_pw_read_file(s_pw.list_path, (size_t)VK_PW_MAX_RECORDS * 2u * VK_PW_REC_BYTES, &len);
++    vk_pw_parse_stats st;
++    memset(&st, 0, sizeof st);
++    u32 nrec = 0;
++    vk_pw_rec* list = buf ? vk_pw_parse(buf, len, &s_pw.seen, VK_PW_MAX_RECORDS, &nrec, &st) : NULL;
++    free(buf);
++    if (st.skipped_bytes)
++        fprintf(stderr, "[vk-warm] %u bytes of the list skipped (torn or older-format records)\n", st.skipped_bytes);
++    /* Over a quarter of it unusable or repeated: compacted before anything is appended. */
++    const size_t wasted = (size_t)st.skipped_bytes + (size_t)st.dups * VK_PW_REC_BYTES;
++    if (wasted && wasted * 4u > len) {
++        if (vk_pw_write_records(s_pw.list_path, list, nrec) == 0) {
++            fprintf(stderr, "[vk-warm] list compacted: %zu -> %zu bytes\n", len, (size_t)nrec * VK_PW_REC_BYTES);
++            len = (size_t)nrec * VK_PW_REC_BYTES;
++        }
++    }
++    s_pw.fd = open(s_pw.list_path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
++    if (s_pw.fd < 0) {
++        s_pw.full = 1;
++        fprintf(stderr, "[vk-warm] cannot open %s (%s): nothing recorded\n", s_pw.list_path, strerror(errno));
++    } else if (len >= (size_t)VK_PW_MAX_RECORDS * VK_PW_REC_BYTES) {
++        s_pw.full = 1;
++        fprintf(stderr, "[vk-warm] the pipeline list is full: no more are recorded\n");
++    }
++
++    char tr[256];
++    rsx_hlsl_to_spirv_stamp(tr, sizeof tr);   /* also makes rsx_shader_spirv's cache object (vk_pw_atexit) */
++    /* What vk_eng_build_pipeline hands the driver besides a record: this
++     * file's build (the translator's stamp does not move when only the
++     * backend changed), the depth format, the enabled features, the MRT rule. */
++    char builder[128];
++    snprintf(builder, sizeof builder, "%s depth %d features %08x mrt %d", __DATE__ " " __TIME__,
++             (int)s_vk.depth_format, s_vk.features_hash,
++             vk_eng_mrt_mode());                 /* its static is set here, before the thread reads it */
++    VkPhysicalDeviceProperties p;
++    pvkGetPhysicalDeviceProperties(s_vk.phys, &p);
++    vk_pw_stamp_text(s_pw.stamp_now, sizeof s_pw.stamp_now, tr, builder, p.driverVersion, p.vendorID,
++                     p.deviceID, p.pipelineCacheUUID, s_pw.mesa);
++    size_t sl = 0;
++    char* old = (char*)vk_pw_read_file(s_pw.stamp_path, 2u * sizeof s_pw.stamp_now, &sl);
++    const char* why = vk_pw_stamp_diff(old, s_pw.stamp_now, s_pw.why, sizeof s_pw.why);
++    free(old);
++    if (why && !strcmp(why, "no stamp yet")) why = "no stamp for this Mesa cache yet";
++    if (!why && !force) {
++        if (!nrec || !strcmp(s_pw.mesa, "off")) {
++            fprintf(stderr, "[vk-warm] stamp unchanged, nothing to rebuild (%u pipelines listed, read in %.1f ms)\n",
++                    nrec, (vk_now_ns() - t0) / 1e6);
++            free(list);
++            return;
++        }
++        s_pw.probe = 1;     /* the thread checks Mesa's cache, walks only if it lost them */
++    }
++    if (!why) why = force ? "RSX_VK_PIPELINE_WARM=force" : "";
++    if (!nrec) {
++        const int w = vk_pw_write_text(s_pw.stamp_path, s_pw.stamp_now);
++        fprintf(stderr, "[vk-warm] stamp changed (%s), no pipelines listed yet%s\n", why,
++                w ? "; the stamp could not be written" : "");
++        free(list);
++        return;
++    }
++    if (!s_pw.probe)
++        fprintf(stderr, "[vk-warm] stamp changed (%s), rebuilding %u pipelines from the list\n", why, nrec);
++    s_pw.list = list;
++    s_pw.nlist = nrec;
++    __atomic_store_n(&s_pw.quit, 0, __ATOMIC_RELEASE);
++    /* exit() (how the game quits) must not leave the thread running while
++     * static objects and the driver are torn down: registered now, after
++     * rsx_shader_spirv's cache object and the device were made, the handler
++     * runs before their destructors and atexit handlers. */
++    static int atexit_on;
++    if (!atexit_on) atexit_on = atexit(vk_pw_atexit) == 0;
++    pthread_mutex_lock(&s_pw_stop_mu);
++    const int started = pthread_create(&s_pw.thr, NULL, vk_pw_thread, NULL) == 0;
++    if (started) {
++        s_pw.thr_on = 1;
++        pthread_setname_np(s_pw.thr, "rsx_vk_warm");
++    }
++    pthread_mutex_unlock(&s_pw_stop_mu);
++    if (!started) {
++        fprintf(stderr, "[vk-warm] no thread: nothing rebuilt\n");
++        free(s_pw.list);
++        s_pw.list = NULL;
++        s_pw.nlist = 0;
++    }
++}
++
++/* Under s_pw_stop_mu. */
++static void vk_pw_stop_locked(void)
++{
++    if (s_pw.thr_on) {
++        __atomic_store_n(&s_pw.quit, 1, __ATOMIC_RELEASE);
++        pthread_join(s_pw.thr, NULL);
++        s_pw.thr_on = 0;
++    }
++}
++
++/* The engine's shutdown and the backend's (idempotent): before vk_sa_shutdown,
++ * before anything of the device goes. */
++static void vk_pw_shutdown(void)
++{
++    pthread_mutex_lock(&s_pw_stop_mu);
++    vk_pw_stop_locked();
++    free(s_pw.list);
++    if (s_pw.on == 1) {
++        if (s_pw.appended)
++            fprintf(stderr, "[vk-warm] %u new pipelines recorded this session\n", s_pw.appended);
++        if (s_pw.fd >= 0) close(s_pw.fd);
++        vk_pw_set_free(&s_pw.seen);
++        pthread_mutex_destroy(&s_pw.mu);
++    }
++    free(s_pw.list_path);
++    free(s_pw.stamp_path);
++    free(s_pw.spv_dir);
++    memset(&s_pw, 0, sizeof s_pw);
++    s_pw.on = -1;
++    s_pw.fd = -1;
++    pthread_mutex_unlock(&s_pw_stop_mu);
++}
++
++/* exit() without the backend's shutdown: stop the walk, nothing else (the
++ * process is ending; the list and the device are left to it). */
++static void vk_pw_atexit(void)
++{
++    pthread_mutex_lock(&s_pw_stop_mu);
++    vk_pw_stop_locked();
++    pthread_mutex_unlock(&s_pw_stop_mu);
++}
++
+ /* Constants are kept in ordinary memory laid out like the shared UBO (vertex
+  * at 0, pixel at ps_off) and copied to the GPU per draw: into the draw's ring
+  * slice when batched, into the shared UBO otherwise (every such draw is waited
+@@ -3339,13 +5466,15 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
      vk_destroy_image(&s_e2.scratch_depth);
      if (vk_create_image(&s_e2.scratch_depth, s_vk.depth_format, w, h,
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -48399,7 +49568,7 @@ index db64302e..9105f1c5 100644
      s_e2.scratch_w = w; s_e2.scratch_h = h;
      return s_e2.scratch_depth.view;
  }
-@@ -3429,28 +4589,39 @@ static VkImageView vk_eng_dummy_cube_view(void)
+@@ -3429,28 +5558,39 @@ static VkImageView vk_eng_dummy_cube_view(void)
   * its time blocked on the GPU, the RSX ring drained one draw at a time and the
   * SPU geometry jobs waited for ring space. Batched, a draw takes slices of
   * three ring buffers and a descriptor set from a pool, records into the open
@@ -48452,7 +49621,7 @@ index db64302e..9105f1c5 100644
  
  static int vk_eb_on(void)
  {
-@@ -3471,15 +4642,18 @@ static int vk_eb_on(void)
+@@ -3471,15 +5611,18 @@ static int vk_eb_on(void)
      };
      VkDescriptorPoolCreateInfo pci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                         .maxSets = VK_EB_MAX_SETS, .poolSizeCount = 3, .pPoolSizes = ps };
@@ -48479,7 +49648,7 @@ index db64302e..9105f1c5 100644
      s_eb.on = 1;
      return 1;
  }
-@@ -3489,11 +4663,15 @@ static int vk_eb_on(void)
+@@ -3489,11 +5632,15 @@ static int vk_eb_on(void)
  static void vk_eb_release(void)
  {
      if (s_eb_pending) vk_eng_flush();
@@ -48500,7 +49669,7 @@ index db64302e..9105f1c5 100644
      memset(&s_eb, 0, sizeof s_eb);
      s_eb.on = -1;
  }
-@@ -3515,34 +4693,40 @@ static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src,
+@@ -3515,34 +5662,40 @@ static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src,
      if (!vk_eb_active()) return -2;
      const VkDeviceSize bytes = (VkDeviceSize)tight * rows;
      if (!bytes || bytes > VK_EB_SB_BYTES) return -2;
@@ -48549,7 +49718,7 @@ index db64302e..9105f1c5 100644
  static VkDeviceSize vk_eb_take(VkDeviceSize* head, VkDeviceSize cap, VkDeviceSize bytes, VkDeviceSize align)
  {
      const VkDeviceSize at = (*head + align - 1u) / align * align;
-@@ -3610,14 +4794,227 @@ static VkDescriptorSet vk_eng_write_descriptors_to(const vk_eng_pipe* P, VkDescr
+@@ -3610,14 +5763,227 @@ static VkDescriptorSet vk_eng_write_descriptors_to(const vk_eng_pipe* P, VkDescr
      return set;
  }
  
@@ -48780,7 +49949,7 @@ index db64302e..9105f1c5 100644
  
      /* Targets: every member of a set is target A's size (engine contract). */
      const u32 n = s_eng_bound.nrt;
-@@ -3644,8 +5041,10 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3644,8 +6010,10 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      VkFramebuffer fb = vk_eng_framebuffer(rp, s_eng_bound.rt, n, dview, dkey, w, h);
      if (!pipe || !rp || !fb) return;
  
@@ -48793,7 +49962,7 @@ index db64302e..9105f1c5 100644
      VkBuffer vbuf = s_vk.vertices.buf, ibuf = s_e2.indices.buf;
      VkDeviceSize voff = 0, ioff = 0;
      VkDescriptorSet set = VK_NULL_HANDLE;
-@@ -3656,23 +5055,23 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3656,23 +6024,23 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
          /* Slices of the rings and a set from the pool; a full one flushes the
           * batch (which empties them all) and the draw takes its slices again. */
          for (int tries = 0; tries < 2; tries++) {
@@ -48826,7 +49995,7 @@ index db64302e..9105f1c5 100644
                      break;
                  }
                  set = VK_NULL_HANDLE;
-@@ -3682,18 +5081,25 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3682,18 +6050,25 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
          }
          if (batched && !set) batched = 0;
      }
@@ -48858,7 +50027,7 @@ index db64302e..9105f1c5 100644
          if (ibytes) {
              if (vk_eng_ensure_indices(ibytes)) return;
              memcpy(s_e2.indices.ptr, indices, (size_t)ibytes);
-@@ -3706,14 +5112,17 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3706,14 +6081,17 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
          if (!set) return;
          if (vk_begin()) return;
      }
@@ -48884,7 +50053,7 @@ index db64302e..9105f1c5 100644
      pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
      VkViewport vp = { 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
      if (s_e2.have_vp && s_e2.vp[2] > 0.0f && s_e2.vp[3] > 0.0f) {
-@@ -3736,19 +5145,47 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3736,19 +6114,47 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      pvkCmdBindDescriptorSets(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               P->cube_mask ? s_e2.split_pipe_layout : s_g.pipe_layout,
                               0, 1, &set, 0, NULL);
@@ -48939,7 +50108,7 @@ index db64302e..9105f1c5 100644
  static const rsx_draw_backend s_vk_engine_backend = {
      .user                 = NULL,
      .init                 = vk_eng_init,
-@@ -3783,8 +5220,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -3783,8 +6189,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .readback             = vk_eng_readback,
      .depth_readback       = vk_eng_depth_readback,
      .color_target_write   = vk_eng_color_target_write,
@@ -48955,17 +50124,18 @@ index db64302e..9105f1c5 100644
      .texture_upload_ordered = 1,
  };
  
-@@ -3875,6 +5317,9 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3875,6 +6286,10 @@ static int vk_init_all(u32 width, u32 height, const char* title)
       * have their own); without it every target takes target A's. */
      want.independentBlend = have.independentBlend;
      s_vk.indep_blend_ok = have.independentBlend ? 1 : 0;
 +    /* Exact ZPASS sample counts (vk_occ_*): without it a visible draw's count may be any non-zero. */
 +    want.occlusionQueryPrecise = have.occlusionQueryPrecise;
 +    s_vk.occ_precise_ok = have.occlusionQueryPrecise ? 1 : 0;
++    s_vk.features_hash = vk_pw_fnv32(&want, sizeof want);
      VkDeviceCreateInfo dci = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                                 .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
                                 .enabledExtensionCount = s_vk.windowed ? 1u : 0u,
-@@ -3894,9 +5339,21 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3894,9 +6309,21 @@ static int vk_init_all(u32 width, u32 height, const char* title)
                                          .commandPool = s_vk.pool,
                                          .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
                                          .commandBufferCount = 1 };
@@ -48989,7 +50159,7 @@ index db64302e..9105f1c5 100644
      /* The present's own (see vk_state). */
      VK_CHECK(pvkCreateCommandPool(s_vk.device, &pci, NULL, &s_vk.present_pool), "vkCreateCommandPool");
      cai.commandPool = s_vk.present_pool;
-@@ -3961,11 +5418,33 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+@@ -3961,11 +6388,33 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
       * pipeline from the guest's programs, so without them it has nothing to
       * draw with, and the vtable's fixed-function path stays the default.
       * Either way PS3RECOMP_RSX_ENGINE=dispatch|vtable overrides. */
@@ -49026,13 +50196,14 @@ index db64302e..9105f1c5 100644
          rsx_set_backend(&s_vulkan_backend);
      VK_LOG("%s path\n", s_vk.eng_active ? "register-file draw engine" : "vtable");
      VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\n",
-@@ -3977,8 +5456,13 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3977,8 +6426,14 @@ void rsx_vulkan_backend_shutdown(void)
  {
      rsx_vulkan_backend_present_finish();   /* a host that began one and quit */
      if (rsx_get_backend() == &s_vulkan_backend) rsx_set_backend(NULL);
 +    if (g_rsx_engine_method_observer == vk_occ_method) g_rsx_engine_method_observer = NULL;
      if (s_vk.eng_active) { rsx_draw_engine_shutdown(); s_vk.eng_active = 0; }
-+    vk_sa_shutdown();                      /* no-op unless the engine never shut it down */
++    vk_pw_shutdown();                      /* both no-ops unless the engine never shut them down */
++    vk_sa_shutdown();
      rsx_draw_engine_set_backend(NULL);
 +    g_rsx_engine_geom_base = NULL; g_rsx_engine_geom_bytes = 0;
 +    g_rsx_engine_geom_serial = NULL; g_rsx_engine_geom_draw = NULL;
@@ -49040,7 +50211,7 @@ index db64302e..9105f1c5 100644
      if (s_vk.windowed && s_vk.swapchain && s_vk.presented && s_vk.hold_seconds > 0.0) {
          VK_LOG("holding the last frame on screen for %.1f s "
                 "(Esc or closing the window ends it early)\n", s_vk.hold_seconds);
-@@ -3991,6 +5475,10 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3991,6 +6446,10 @@ void rsx_vulkan_backend_shutdown(void)
      if (s_vk.windowed || s_vk.window) vk_window_drop(NULL);
      if (s_vk.device) {
          vk_device_idle();
@@ -49051,7 +50222,7 @@ index db64302e..9105f1c5 100644
          vk_guest_shutdown();
          for (int i = 0; i < VK_PIPELINE_SLOTS; i++)
              if (s_vk.pipelines[i]) pvkDestroyPipeline(s_vk.device, s_vk.pipelines[i], NULL);
-@@ -4010,7 +5498,15 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -4010,7 +6469,15 @@ void rsx_vulkan_backend_shutdown(void)
          vk_destroy_image(&s_vk.color);
          vk_destroy_buffer(&s_vk.vertices);
          vk_destroy_buffer(&s_vk.readback);
@@ -49068,7 +50239,7 @@ index db64302e..9105f1c5 100644
          if (s_vk.pool)  pvkDestroyCommandPool(s_vk.device, s_vk.pool, NULL);
          if (s_vk.present_fence) pvkDestroyFence(s_vk.device, s_vk.present_fence, NULL);
          if (s_vk.window_fence)  pvkDestroyFence(s_vk.device, s_vk.window_fence, NULL);
-@@ -4030,10 +5526,19 @@ int rsx_vulkan_backend_pump_messages(void)
+@@ -4030,10 +6497,19 @@ int rsx_vulkan_backend_pump_messages(void)
      if (!s_vk.windowed) return 0;
      int quit = 0;
      SDL_Event e;
@@ -49716,7 +50887,7 @@ index 81e3cc76..126d70a6 100644
  { (void)e; (void)id; (void)ea; (void)sz; return -1; }
  int spu_run_with_halt(void (*f)(spu_context*), spu_context* c) { (void)f; (void)c; return -1; }
 diff --git a/libs/video/rsx_shader_spirv.cpp b/libs/video/rsx_shader_spirv.cpp
-index 4aa4a176..8d0b98dc 100644
+index 4aa4a176..504e2232 100644
 --- a/libs/video/rsx_shader_spirv.cpp
 +++ b/libs/video/rsx_shader_spirv.cpp
 @@ -3,9 +3,9 @@
@@ -49741,10 +50912,14 @@ index 4aa4a176..8d0b98dc 100644
   *
   * Translations are cached. glslang takes 20-150 ms per shader, on the thread
   * that walks the FIFO, and the engine asks for the same HLSL again for every
-@@ -23,6 +25,38 @@
+@@ -22,7 +24,41 @@
+  * PS3RECOMP_SPIRV_CACHE=<existing directory> the cache is also kept on disk,
   * one file per shader, and the next run starts warm. A file whose key,
   * glslang version or translator build differs from the request is a miss,
-  * and is rewritten.
+- * and is rewritten.
++ * and is rewritten. Such a stale file still holds its whole key, which is
++ * what the Vulkan backend's pipeline warm-up (vk-warm) uses after an update:
++ * rsx_hlsl_to_spirv_from_cache_file translates it again from the file alone.
 + *
 + * No SPIR-V legalization by default (RSX_SPIRV_FAST, see fast_mode()).
 + * glslang runs SPIRV-Tools' HLSL legalization passes after GlslangToSpv
@@ -49780,7 +50955,7 @@ index 4aa4a176..8d0b98dc 100644
   */
  
  #include "rsx_shader_spirv.h"
-@@ -62,8 +96,8 @@ bool glslang_ready()
+@@ -62,8 +98,8 @@ bool glslang_ready()
      return true;
  }
  
@@ -49791,7 +50966,7 @@ index 4aa4a176..8d0b98dc 100644
  {
      if (!glslang_ready()) {
          put_log(log, log_size, "glslang::InitializeProcess failed", nullptr);
-@@ -108,7 +142,9 @@ int translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv,
+@@ -108,7 +144,9 @@ int translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv,
  
      spv::SpvBuildLogger logger;
      glslang::SpvOptions opts;
@@ -49802,7 +50977,7 @@ index 4aa4a176..8d0b98dc 100644
      glslang::GlslangToSpv(*program.getIntermediate(lang), spirv, &logger, &opts);
      if (spirv.empty()) {
          put_log(log, log_size, "SPIR-V generation", logger.getAllMessages().c_str());
-@@ -119,18 +155,34 @@ int translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv,
+@@ -119,18 +157,34 @@ int translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv,
  
  /* ---- translation cache ------------------------------------------------- */
  
@@ -49838,7 +51013,7 @@ index 4aa4a176..8d0b98dc 100644
      RsxSpirvCacheStats stats = {};
  };
  
-@@ -150,6 +202,19 @@ const std::string& cache_dir(Cache& c)
+@@ -150,6 +204,19 @@ const std::string& cache_dir(Cache& c)
      return c.dir;
  }
  
@@ -49858,7 +51033,33 @@ index 4aa4a176..8d0b98dc 100644
  /* The key is the stage, then the HLSL text. */
  std::string cache_key(const char* hlsl, int stage)
  {
-@@ -171,22 +236,23 @@ std::string cache_path(const std::string& dir, const std::string& key)
+@@ -158,35 +225,47 @@ std::string cache_key(const char* hlsl, int stage)
+     return key;
+ }
+ 
+-std::string cache_path(const std::string& dir, const std::string& key)
++/* FNV-1a 64 of the key: the file's name. */
++unsigned long long key_hash(const std::string& key)
+ {
+-    unsigned long long h = 0xcbf29ce484222325ull;       /* FNV-1a 64 */
++    unsigned long long h = 0xcbf29ce484222325ull;
+     for (unsigned char ch : key) { h ^= ch; h *= 0x100000001b3ull; }
++    return h;
++}
++
++std::string cache_path_for(const std::string& dir, unsigned long long h)
++{
+     char name[40];
+     snprintf(name, sizeof name, "/%016llx.spv", h);
+     return dir + name;
+ }
+ 
++std::string cache_path(const std::string& dir, const std::string& key)
++{
++    return cache_path_for(dir, key_hash(key));
++}
++
+ /* Header: magic, format, glslang major/minor/patch, translator build (six
   * words), key bytes, word count; then the key and the words. */
  const int kHeaderWords = 13;
  
@@ -49886,7 +51087,7 @@ index 4aa4a176..8d0b98dc 100644
      bool ok = fread(hdr, sizeof hdr, 1, f) == 1 &&
                memcmp(hdr, want, (kHeaderWords - 1) * sizeof(u32)) == 0 &&
                hdr[kHeaderWords - 1] != 0 && hdr[kHeaderWords - 1] <= (1u << 24);
-@@ -204,7 +270,7 @@ bool cache_load(const std::string& path, const std::string& key,
+@@ -204,7 +283,7 @@ bool cache_load(const std::string& path, const std::string& key,
  }
  
  /* Written under a temporary name and renamed, so a reader never sees half a file. */
@@ -49895,7 +51096,7 @@ index 4aa4a176..8d0b98dc 100644
                   const std::vector<unsigned int>& spirv)
  {
      char suffix[48];
-@@ -213,7 +279,7 @@ void cache_store(const std::string& path, const std::string& key,
+@@ -213,7 +292,7 @@ void cache_store(const std::string& path, const std::string& key,
      FILE* f = fopen(tmp.c_str(), "wb");
      if (!f) return;
      u32 hdr[kHeaderWords];
@@ -49904,7 +51105,7 @@ index 4aa4a176..8d0b98dc 100644
      bool ok = fwrite(hdr, sizeof hdr, 1, f) == 1 &&
                fwrite(key.data(), 1, key.size(), f) == key.size() &&
                fwrite(spirv.data(), sizeof(u32), spirv.size(), f) == spirv.size();
-@@ -224,6 +290,28 @@ void cache_store(const std::string& path, const std::string& key,
+@@ -224,6 +303,28 @@ void cache_store(const std::string& path, const std::string& key,
      if (!ok || rename(tmp.c_str(), path.c_str()) != 0) remove(tmp.c_str());
  }
  
@@ -49933,7 +51134,7 @@ index 4aa4a176..8d0b98dc 100644
  } // namespace
  
  extern "C" int rsx_hlsl_to_spirv_available(void) { return 1; }
-@@ -242,36 +330,107 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
+@@ -242,36 +343,238 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
          return -1;
      }
  
@@ -49951,11 +51152,6 @@ index 4aa4a176..8d0b98dc 100644
 -        const std::string& dir = cache_dir(c);
 -        const std::string path = dir.empty() ? std::string() : cache_path(dir, key);
 -        if (!dir.empty() && cache_load(path, key, spirv)) {
--            c.stats.disk_hits++;
--        } else {
--            if (translate(hlsl, stage, spirv, log, log_size)) return -1;
--            c.stats.translations++;
--            if (!dir.empty()) cache_store(path, key, spirv);
 +    MissInfo mi;
 +    {
 +        std::lock_guard<std::mutex> guard(c.lock);
@@ -49963,18 +51159,11 @@ index 4aa4a176..8d0b98dc 100644
 +        if (it != c.map.end()) {
 +            c.stats.memory_hits++;
 +            return copy_out(it->second, words, max_words, out_words, log, log_size);
-         }
--        it = c.map.emplace(key, std::move(spirv)).first;
++        }
 +        mi.fast = fast_mode(c);
 +        mi.dir = cache_dir(c);
 +        mi.gen = c.gen;
-     }
--    const std::vector<unsigned int>& spirv = it->second;
--    if (spirv.size() > max_words) {
--        char n[64];
--        snprintf(n, sizeof n, "%zu words, room for %u", spirv.size(), max_words);
--        put_log(log, log_size, "SPIR-V output too large", n);
--        return -1;
++    }
 +    const std::string path = mi.dir.empty() ? std::string() : cache_path(mi.dir, key);
 +    std::vector<unsigned int> spirv;
 +    if (!mi.dir.empty() && cache_load(path, key, mi.fast, spirv)) {
@@ -49985,9 +51174,7 @@ index 4aa4a176..8d0b98dc 100644
 +        /* emplace keeps an entry another thread stored meanwhile: first one wins. */
 +        auto it = c.map.emplace(key, std::move(spirv)).first;
 +        return copy_out(it->second, words, max_words, out_words, log, log_size);
-     }
--    memcpy(words, spirv.data(), spirv.size() * sizeof(u32));
--    *out_words = (u32)spirv.size();
++    }
 +    {
 +        std::lock_guard<std::mutex> gl(c.glslang_lock);
 +        {
@@ -49999,15 +51186,158 @@ index 4aa4a176..8d0b98dc 100644
 +                return copy_out(it->second, words, max_words, out_words, log, log_size);
 +            }
 +        }
++        /* Or the pipeline warm-up (rsx_hlsl_to_spirv_from_cache_file) may have
++         * written its file meanwhile: that one never goes into the map. */
++        if (!mi.dir.empty() && cache_load(path, key, mi.fast, spirv)) {
++            std::lock_guard<std::mutex> guard(c.lock);
+             c.stats.disk_hits++;
+-        } else {
+-            if (translate(hlsl, stage, spirv, log, log_size)) return -1;
+-            c.stats.translations++;
+-            if (!dir.empty()) cache_store(path, key, spirv);
++            if (c.gen != mi.gen)
++                return copy_out(spirv, words, max_words, out_words, log, log_size);
++            auto it = c.map.emplace(key, std::move(spirv)).first;
++            return copy_out(it->second, words, max_words, out_words, log, log_size);
+         }
+-        it = c.map.emplace(key, std::move(spirv)).first;
 +        if (translate(hlsl, stage, !mi.fast, spirv, log, log_size)) return -1;
 +        /* Into the map before glslang is free again, so a thread waiting for the
 +         * same shader finds it there instead of translating it a second time. */
 +        std::lock_guard<std::mutex> guard(c.lock);
 +        c.stats.translations++;
 +        if (c.gen == mi.gen) c.map.emplace(key, spirv);
-+    }
+     }
+-    const std::vector<unsigned int>& spirv = it->second;
+-    if (spirv.size() > max_words) {
+-        char n[64];
+-        snprintf(n, sizeof n, "%zu words, room for %u", spirv.size(), max_words);
+-        put_log(log, log_size, "SPIR-V output too large", n);
 +    /* The file outside both locks; a reader sees the old file or the whole new one. */
 +    if (!mi.dir.empty()) cache_store(path, key, mi.fast, spirv);
++    return copy_out(spirv, words, max_words, out_words, log, log_size);
++}
++
++extern "C" u64 rsx_hlsl_to_spirv_key_hash(const char* hlsl, int stage)
++{
++    if (!hlsl) return 0;
++    return (u64)key_hash(cache_key(hlsl, stage));
++}
++
++extern "C" int rsx_hlsl_to_spirv_stamp(char* out, u32 out_size)
++{
++    if (!out || !out_size) return -1;
++    Cache& c = cache();
++    bool fast;
++    {
++        std::lock_guard<std::mutex> guard(c.lock);
++        fast = fast_mode(c);
++    }
++    const glslang::Version v = glslang::GetVersion();
++    char build[sizeof kTranslatorBuild + 1];
++    memcpy(build, kTranslatorBuild, sizeof kTranslatorBuild);
++    build[sizeof kTranslatorBuild] = '\0';
++    snprintf(out, out_size, "build %s glslang %d.%d.%d format %u", build, v.major, v.minor, v.patch,
++             fast ? kCacheFormatFast : kCacheFormatLegalized);
++    return 0;
++}
++
++/* The pipeline warm-up's request (rsx_vulkan_backend.c, vk-warm): the shader
++ * whose disk file is <dir>/<key_hash>.spv. The file holds the whole key, so
++ * even a file an older translator wrote (a header this build calls a miss)
++ * still says what to translate. One read: the header and key, then the words
++ * when the header is this build's. A stale file is translated (one glslang run
++ * under glslang_lock, never more) and rewritten before that lock is free, so a
++ * thread that waited for glslang finds it on disk (rsx_hlsl_to_spirv looks).
++ * Nothing goes into the memory map: the warm-up walks every shader ever
++ * listed, and the map is never trimmed -- a later request reads the file. */
++extern "C" int rsx_hlsl_to_spirv_from_cache_file(u64 key_hash_wanted, int stage,
++                                                 u32* words, u32 max_words, u32* out_words,
++                                                 int* how, char* log, u32 log_size)
++{
++    if (out_words) *out_words = 0;
++    if (how) *how = -1;
++    if (!words || !out_words || !max_words ||
++        (stage != RSX_SHADER_STAGE_VERTEX && stage != RSX_SHADER_STAGE_FRAGMENT)) {
++        put_log(log, log_size, "bad arguments", nullptr);
+         return -1;
+     }
+-    memcpy(words, spirv.data(), spirv.size() * sizeof(u32));
+-    *out_words = (u32)spirv.size();
++    Cache& c = cache();
++    MissInfo mi;
++    {
++        std::lock_guard<std::mutex> guard(c.lock);
++        mi.fast = fast_mode(c);
++        mi.dir = cache_dir(c);
++        mi.gen = c.gen;
++    }
++    if (mi.dir.empty()) {
++        put_log(log, log_size, "no PS3RECOMP_SPIRV_CACHE", nullptr);
++        return -2;
++    }
++    const std::string path = cache_path_for(mi.dir, (unsigned long long)key_hash_wanted);
++    FILE* f = fopen(path.c_str(), "rb");
++    if (!f) {
++        put_log(log, log_size, "no cache file", path.c_str());
++        return -2;
++    }
++    u32 hdr[kHeaderWords];
++    std::string key;
++    bool ok = fread(hdr, sizeof hdr, 1, f) == 1 && hdr[0] == kCacheMagic &&
++              hdr[kHeaderWords - 2] >= 2 && hdr[kHeaderWords - 2] <= (1u << 24);
++    if (ok) {
++        key.resize(hdr[kHeaderWords - 2]);
++        ok = fread(&key[0], 1, key.size(), f) == key.size() &&
++             key[0] == (char)('0' + stage) && key_hash(key) == (unsigned long long)key_hash_wanted &&
++             memchr(key.data(), '\0', key.size()) == nullptr;
++    }
++    if (!ok) {
++        fclose(f);
++        put_log(log, log_size, "unreadable or foreign cache file", path.c_str());
++        return -1;
++    }
++    std::vector<unsigned int> spirv;
++    {
++        u32 want[kHeaderWords];
++        cache_header(want, key, 0, mi.fast);
++        if (memcmp(hdr, want, (kHeaderWords - 1) * sizeof(u32)) == 0 &&
++            hdr[kHeaderWords - 1] != 0 && hdr[kHeaderWords - 1] <= (1u << 24)) {
++            spirv.resize(hdr[kHeaderWords - 1]);
++            if (fread(spirv.data(), sizeof(u32), spirv.size(), f) != spirv.size()) spirv.clear();
++        }
++    }
++    fclose(f);
++    if (!spirv.empty()) {
++        if (how) *how = 1;
++        return copy_out(spirv, words, max_words, out_words, log, log_size);
++    }
++    {
++        std::lock_guard<std::mutex> guard(c.lock);
++        auto it = c.map.find(key);
++        if (it != c.map.end()) {
++            if (how) *how = 0;
++            return copy_out(it->second, words, max_words, out_words, log, log_size);
++        }
++    }
++    {
++        std::lock_guard<std::mutex> gl(c.glslang_lock);
++        {
++            std::lock_guard<std::mutex> guard(c.lock);
++            auto it = c.map.find(key);
++            if (it != c.map.end()) {
++                if (how) *how = 0;
++                return copy_out(it->second, words, max_words, out_words, log, log_size);
++            }
++        }
++        if (cache_load(path, key, mi.fast, spirv)) {       /* written meanwhile */
++            if (how) *how = 1;
++            return copy_out(spirv, words, max_words, out_words, log, log_size);
++        }
++        if (translate(key.c_str() + 1, stage, !mi.fast, spirv, log, log_size)) return -1;
++        cache_store(path, key, mi.fast, spirv);
++    }
++    if (how) *how = 2;
 +    return copy_out(spirv, words, max_words, out_words, log, log_size);
 +}
 +
@@ -50066,7 +51396,7 @@ index 4aa4a176..8d0b98dc 100644
      return 0;
  }
  
-@@ -287,7 +446,9 @@ extern "C" void rsx_hlsl_to_spirv_cache_reset(void)
+@@ -287,7 +590,9 @@ extern "C" void rsx_hlsl_to_spirv_cache_reset(void)
      Cache& c = cache();
      std::lock_guard<std::mutex> guard(c.lock);
      c.map.clear();
@@ -50076,7 +51406,7 @@ index 4aa4a176..8d0b98dc 100644
      c.stats = {};
  }
  
-@@ -313,4 +474,12 @@ extern "C" void rsx_hlsl_to_spirv_cache_stats(RsxSpirvCacheStats* out)
+@@ -313,4 +618,35 @@ extern "C" void rsx_hlsl_to_spirv_cache_stats(RsxSpirvCacheStats* out)
  
  extern "C" void rsx_hlsl_to_spirv_cache_reset(void) {}
  
@@ -50088,12 +51418,35 @@ index 4aa4a176..8d0b98dc 100644
 +
 +extern "C" int rsx_hlsl_to_spirv_prewarm(void) { return -1; }
 +
++extern "C" u64 rsx_hlsl_to_spirv_key_hash(const char* hlsl, int stage)
++{
++    (void)hlsl; (void)stage;
++    return 0;
++}
++
++extern "C" int rsx_hlsl_to_spirv_stamp(char* out, u32 out_size)
++{
++    if (out && out_size) out[0] = '\0';
++    return -1;
++}
++
++extern "C" int rsx_hlsl_to_spirv_from_cache_file(u64 key_hash_wanted, int stage,
++                                                 u32* words, u32 max_words, u32* out_words,
++                                                 int* how, char* log, u32 log_size)
++{
++    (void)key_hash_wanted; (void)stage; (void)words; (void)max_words;
++    if (out_words) *out_words = 0;
++    if (how) *how = -1;
++    if (log && log_size) snprintf(log, log_size, "HLSL -> SPIR-V translation not built");
++    return -1;
++}
++
  #endif
 diff --git a/libs/video/rsx_shader_spirv.h b/libs/video/rsx_shader_spirv.h
-index b9f67f57..d4a3704e 100644
+index b9f67f57..d2911701 100644
 --- a/libs/video/rsx_shader_spirv.h
 +++ b/libs/video/rsx_shader_spirv.h
-@@ -68,6 +68,23 @@ typedef struct RsxSpirvCacheStats {
+@@ -68,6 +68,48 @@ typedef struct RsxSpirvCacheStats {
  
  void rsx_hlsl_to_spirv_cache_stats(RsxSpirvCacheStats* out);
  
@@ -50113,6 +51466,31 @@ index b9f67f57..d4a3704e 100644
 + * first real translation of each stage pays for. Caches nothing. Meant for a
 + * worker thread at start-up. 0 when both translated, -1 otherwise. */
 +int rsx_hlsl_to_spirv_prewarm(void);
++
++/* For the Vulkan backend's pipeline warm-up (rsx_vulkan_backend.c, vk-warm).
++ *
++ * The disk cache file name of a shader: FNV-1a 64 of the key (the stage as
++ * one character, then the HLSL), the file being <dir>/<016llx>.spv. 0 for a
++ * NULL hlsl or the stub. */
++u64 rsx_hlsl_to_spirv_key_hash(const char* hlsl, int stage);
++
++/* What every disk cache file this build writes is tied to, as one line:
++ * the translator build (rsx_shader_spirv.cpp's compile time), the glslang
++ * version and the output mode (RSX_SPIRV_FAST). When it changes every file
++ * becomes a miss. 0, or -1 for the stub (empty string). */
++int rsx_hlsl_to_spirv_stamp(char* out, u32 out_size);
++
++/* SPIR-V for the shader whose disk cache file is <key_hash>.spv, by the HLSL
++ * key stored in it -- also when the file was written by an older build and is
++ * a miss for rsx_hlsl_to_spirv. Then it is translated (one glslang run) and
++ * the file rewritten for this build. Never puts anything into the memory
++ * cache. *how: 0 it was in memory, 1 the file was current, 2 translated.
++ * 0 on success; -2 when no file could be opened (no such file, or no
++ * PS3RECOMP_SPIRV_CACHE); -1 when it is not that shader's (key hash or stage
++ * differ), the translation failed or `words` is too small. */
++int rsx_hlsl_to_spirv_from_cache_file(u64 key_hash, int stage,
++                                      u32* words, u32 max_words, u32* out_words,
++                                      int* how, char* log, u32 log_size);
 +
  /* Empties the memory cache, zeroes the counters and reads
   * PS3RECOMP_SPIRV_CACHE again on the next request. Disk files stay. */
