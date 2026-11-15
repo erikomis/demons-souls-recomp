@@ -589,9 +589,20 @@ def step_decrypt(args, cfg):
 
 def git(*a, cwd=None, check=True):
     r = subprocess.run(['git', *a], cwd=cwd, capture_output=True, text=True)
+    if r.returncode and os.name == 'nt' and a and a[0] in ('clone', 'fetch') and _tls_trouble(r.stderr):
+        # Git's own certificate file is missing or unreadable ("error adding trust anchors from file ...
+        # ca-bundle.crt", GitHub #49): ask Windows' certificate store instead (schannel), which every Windows has.
+        say('  git could not check GitHub\'s certificate with its own file: trying Windows\' certificate store')
+        r = subprocess.run(['git', '-c', 'http.sslBackend=schannel', *a], cwd=cwd, capture_output=True, text=True)
     if check and r.returncode:
         fail(f'git {" ".join(a)} failed:\n{r.stdout}{r.stderr}')
     return r
+
+
+def _tls_trouble(err):
+    e = (err or '').lower()
+    return any(s in e for s in ('trust anchors', 'ca-bundle', 'certificate file', 'ssl certificate',
+                                'certificate problem', 'ssl_ctx', 'cafile', 'unable to get local issuer'))
 
 
 def step_ps3recomp():

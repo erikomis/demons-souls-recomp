@@ -3383,6 +3383,14 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       code, and left no drive mapping behind (net use). The launcher compiles. A full SETUP on a real NAS is untested
       (building ~2 GB over SMB will be slow); keeping the install local and only the disc image on the NAS already
       worked before this fix.
+202. **SETUP's git clone survives a broken Git certificate file (GitHub #49, 2026-11-15):**
+    - Report: step 3 stopped at `git clone ... ps3recomp` with "error adding trust anchors from file:
+      C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt": the player's installed Git (found first on PATH)
+      cannot read its own certificate bundle, so every HTTPS clone fails.
+    - Fix: setup.py's git() retries a failed clone/fetch whose error is about certificates once with
+      `-c http.sslBackend=schannel`, which checks GitHub's certificate against Windows' own store.
+    - Checked: with GIT_SSL_CAINFO pointing at a junk file, plain `git clone` fails ("error setting certificate
+      file"); setup.git('clone', ...) prints the retry line and clones (octocat/Hello-World).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
