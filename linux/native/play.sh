@@ -67,6 +67,9 @@ export PS3RECOMP_VK_GUEST_PROGRAMS=1 PS3RECOMP_VK_WINDOW=1 VK_DRAW_BATCH=1
 # The SPU command dispatcher takes the rest of a fetched queue line without re-reserving it (NOTES fix 150) and
 # waits for work instead of spinning (fix 145).
 export DES_DISPQ_BATCH="${DES_DISPQ_BATCH:-1}" SPU_DISPQ_WAIT="${SPU_DISPQ_WAIT:-1}"
+# A few cheap lines in the game log for a report of sound running late / the game slowing: every 5 s the
+# audio rate, its queue and the voice thread's CPU; every second the game speed; the voice queue's backlog.
+export AUDIO_RATE="${AUDIO_RATE:-1}" DES_STEP_STATS="${DES_STEP_STATS:-1}" EVT_BACKLOG="${EVT_BACKLOG:-1}"
 if [ -n "$DECK" ]; then
   # 4 cores share 15 W with the GPU: idle SPUs back off and then sleep (linux/play.sh has the measurements).
   export SPU_IDLE_PAUSE="${SPU_IDLE_PAUSE:-128}" SPU_IDLE_SLEEP_US="${SPU_IDLE_SLEEP_US:-50}"

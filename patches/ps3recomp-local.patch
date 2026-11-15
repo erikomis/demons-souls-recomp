@@ -203,7 +203,7 @@ index 0000000..0f80fdd
 +int ps3_audio_thread_realtime(void) { return -1; }
 +#endif
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index 02b751b2..84e39645 100644
+index 02b751b2..b8bf7410 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -86,6 +86,7 @@ extern uint32_t sys_event_queue_create_direct(uint64_t key, int32_t size);
@@ -395,12 +395,14 @@ index 02b751b2..84e39645 100644
  
          /* Notify event queues */
          audio_notify_event_queues();
-@@ -649,21 +729,125 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -649,21 +729,152 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
      return 0;
  }
  #else
 +#include <time.h>
 +#include <sched.h>
++#include <dirent.h>
++#include <unistd.h>   /* access */
 +
 +static unsigned long long s_posix_underruns;   /* device ran dry (AUDIO_RATE) */
 +static double audio_now_ns(void)
@@ -516,17 +518,42 @@ index 02b751b2..84e39645 100644
 -        } else {
 -            usleep(2000);
 +        if (rate_log && now - t_log >= 5e9) {
++            /* + the CPU share of the thread that renders the voices (Demon's Souls' synth2 SPU thread):
++             * near 100% of a core it falls behind and sounds come late (NOTES fixes 59, 143). */
++            double voice_cpu = -1.0;
++#if defined(__linux__)
++            { static char path[64]; static unsigned long long run0; static double t0v;
++              if (!path[0] || access(path, R_OK) != 0) {
++                  path[0] = 0;
++                  DIR* d = opendir("/proc/self/task"); struct dirent* de;
++                  while (d && (de = readdir(d))) {
++                      char cp[64], nm[32] = {0}; snprintf(cp, sizeof cp, "/proc/self/task/%s/comm", de->d_name);
++                      FILE* f = fopen(cp, "r");
++                      if (f) { if (fgets(nm, sizeof nm, f) && strstr(nm, "synth"))
++                                   snprintf(path, sizeof path, "/proc/self/task/%s/schedstat", de->d_name);
++                               fclose(f); }
++                  }
++                  if (d) closedir(d);
++                  run0 = 0;
++              }
++              if (path[0]) {
++                  FILE* f = fopen(path, "r"); unsigned long long run = 0;
++                  if (f) { if (fscanf(f, "%llu", &run) != 1) run = 0; fclose(f); }
++                  if (run0 && run >= run0) voice_cpu = (double)(run - run0) / (now - t0v) * 100.0;
++                  run0 = run; t0v = now;
++              } }
++#endif
 +            fprintf(stderr, "[audio-rate] %.1f blocks/s (real time 187.5), underruns %llu, late drops %llu,"
-+                            " queue mean %.1f min %.1f ms (target %.1f), worst gap %.1f ms\n",
++                            " queue mean %.1f min %.1f ms (target %.1f), worst gap %.1f ms, voice thread %.0f%%\n",
 +                    n_log * 1e9 / (now - t_log), s_posix_underruns - under_log, late_drops,
 +                    q_n ? q_sum / q_n / 48.0 : -1.0, q_n ? q_min / 48.0 : -1.0, target / 48.0,
-+                    worst_gap / 1e6);
++                    worst_gap / 1e6, voice_cpu);
 +            t_log = now; n_log = 0; under_log = s_posix_underruns; late_drops = 0;
 +            q_sum = 0; q_n = 0; q_min = 0xFFFFFFFFu; worst_gap = 0;
          }
      }
  
-@@ -739,7 +923,10 @@ s32 cellAudioInit(void)
+@@ -739,7 +950,10 @@ s32 cellAudioInit(void)
      memset(s_notify_queues, 0, sizeof(s_notify_queues));
      mutex_init(&s_audio_mutex);
  
@@ -538,7 +565,7 @@ index 02b751b2..84e39645 100644
          printf("[cellAudio] WARNING: Audio backend init failed, continuing silently\n");
          /* Don't fail -- games should still run without audio */
      }
-@@ -934,6 +1121,33 @@ s32 cellAudioPortStop(u32 portNum)
+@@ -934,6 +1148,33 @@ s32 cellAudioPortStop(u32 portNum)
      return CELL_OK;
  }
  
@@ -28290,7 +28317,7 @@ index 9626673..bb4c6d3 100644
  }
  
 diff --git a/runtime/syscalls/sys_event.c b/runtime/syscalls/sys_event.c
-index adabcc5..c8b1334 100644
+index adabcc56..1987e0c7 100644
 --- a/runtime/syscalls/sys_event.c
 +++ b/runtime/syscalls/sys_event.c
 @@ -5,12 +5,13 @@
@@ -28317,7 +28344,7 @@ index adabcc5..c8b1334 100644
          fprintf(stderr, "[WAIT] event_queue_receive(q=%u timeout=%llu) tid=%llu cia=0x%08X lr=0x%08X\n",
                  queue_id, (unsigned long long)timeout_us,
                  (unsigned long long)ctx->thread_id, (uint32_t)ctx->cia, (uint32_t)ctx->lr);
-@@ -693,6 +694,46 @@ int64_t sys_event_queue_tryreceive(ppu_context* ctx)
+@@ -693,6 +694,66 @@ int64_t sys_event_queue_tryreceive(ppu_context* ctx)
      return CELL_OK;
  }
  
@@ -28349,6 +28376,26 @@ index adabcc5..c8b1334 100644
 +    if (q->count == 0)
 +        rc = q->cancelled ? (int32_t)CELL_ECANCELED : !q->active ? (int32_t)CELL_ESRCH : (int32_t)CELL_EBUSY;
 +    else {
++        /* EVT_BACKLOG=1: the deepest backlog an SPU thread's queue had in each 5 s, for a queue that
++         * reached 3 or more. An audio SPU (Demon's Souls' synth2: one command per 5.33 ms block) that
++         * falls behind plays every sound that many blocks late. */
++        { static int on = -1; static uint32_t mx[SYS_EVENT_QUEUE_MAX]; static uint64_t t_log;
++          if (on < 0) { const char* e = getenv("EVT_BACKLOG"); on = e && *e == '1'; }
++          if (on) {
++              if (q->count > mx[queue_id - 1]) mx[queue_id - 1] = q->count;
++              struct timespec tn; clock_gettime(CLOCK_MONOTONIC, &tn);
++              const uint64_t now = (uint64_t)tn.tv_sec * 1000u + (uint64_t)tn.tv_nsec / 1000000u;
++              if (!t_log) t_log = now;
++              if (now - t_log >= 5000) {
++                  t_log = now;
++                  for (uint32_t i = 0; i < SYS_EVENT_QUEUE_MAX; i++)
++                      if (mx[i] >= 3) {
++                          fprintf(stderr, "[evt-backlog] spu queue %u: max %u waiting (capacity %u)\n",
++                                  i + 1, mx[i], g_sys_event_queues[i].capacity);
++                          mx[i] = 0;
++                      }
++              }
++          } }
 +        *out = q->buffer[q->head];
 +        q->head = (q->head + 1) % q->capacity;
 +        q->count--;
@@ -28364,7 +28411,7 @@ index adabcc5..c8b1334 100644
  int64_t sys_event_queue_drain(ppu_context* ctx)
  {
      uint32_t queue_id = LV2_ARG_U32(ctx, 0);
-@@ -733,10 +774,12 @@ static int event_queue_push(sys_event_queue_info* q, const sys_event_t* evt)
+@@ -733,10 +794,12 @@ static int event_queue_push(sys_event_queue_info* q, const sys_event_t* evt)
      /* EVT_PUSHLOG=<qid>: log every push to that queue with the host caller, to
       * find which producer feeds a queue when nothing logs a port_send. */
      { static int s_q = -1; if (s_q < 0) { const char* e = getenv("EVT_PUSHLOG"); s_q = e ? atoi(e) : 0; }
@@ -28380,7 +28427,7 @@ index adabcc5..c8b1334 100644
      /* PS3_EVQSTAT=<n>: every n pushes, report each live queue's push count and
       * how many events are sitting in it unread.
       *
-@@ -968,7 +1011,7 @@ int64_t sys_event_port_send(ppu_context* ctx)
+@@ -968,7 +1031,7 @@ int64_t sys_event_port_send(ppu_context* ctx)
      if (s_send_stack) { static unsigned char seen[8]={0}; unsigned pk=port_id&7;
          if(!seen[pk]){ seen[pk]=1; extern void ppu_dump_guest_stack(ppu_context*,const char*);
              char tag[40]; snprintf(tag,sizeof tag,"port_send producer port=%u",port_id); ppu_dump_guest_stack(ctx,tag); } }
@@ -28389,7 +28436,7 @@ index adabcc5..c8b1334 100644
              port_id, (unsigned long long)data1, (unsigned long long)data2, (unsigned long long)data3);
  
      if (port_id == 0 || port_id > SYS_EVENT_PORT_MAX)
-@@ -1001,7 +1044,7 @@ int64_t sys_event_port_send(ppu_context* ctx)
+@@ -1001,7 +1064,7 @@ int64_t sys_event_port_send(ppu_context* ctx)
          fprintf(stderr, "[evt] port_send(port=%u): NOT CONNECTED to any queue\n", port_id);
          return (int64_t)(int32_t)CELL_ENOTCONN;
      }
