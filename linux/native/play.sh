@@ -15,6 +15,9 @@
 #   DES_FULLSCREEN=0|1   borderless full screen (default: 1 on a Steam Deck, 0 elsewhere; F11 toggles it)
 #   DES_MOVIES=0|1       the movies, decoded by the system's FFmpeg (libavcodec) at run time: on when the build
 #                        found FFmpeg's headers; 0 skips them
+#   DES_ASYNC_SHADERS=0|1   a shader the game has never shown before is translated in the background and what
+#                        uses it appears a frame or a few late (default 1); 0 translates it at once, on the render
+#                        thread: no pop-in, but a brief stutter the first time a new area, enemy or effect shows
 #   DES_GAME=game_remaster   run the PC Remaster mod's copy instead of game/
 #   DES_BOSS_RUSH=1      boss rush mode (as in PLAY.bat); DES_BR_SOULS=2|3|5|10 multiplies the souls
 #   DES_GOD=1            no damage (testing)
@@ -65,7 +68,8 @@ export PS3_INPUT_MAP="${PS3_INPUT_MAP:-$D/linux/native/input.toml}"
 # The Vulkan renderer: the game's own shaders translated (guest programs), drawn in batches, in a window.
 export PS3RECOMP_VK_GUEST_PROGRAMS=1 PS3RECOMP_VK_WINDOW=1 VK_DRAW_BATCH=1
 # The game's shaders, translated to SPIR-V, kept between runs (keyed by the full shader text and the glslang
-# version): only a shader never seen before is translated, on the render thread, when it first draws.
+# version): only a shader never seen before is translated, when it first draws -- by background threads (its
+# draws skipped meanwhile: pop-in) unless DES_ASYNC_SHADERS=0 (on the render thread: a stutter).
 export PS3RECOMP_SPIRV_CACHE="${PS3RECOMP_SPIRV_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/demons-souls-recomp/spirv}"
 mkdir -p "$PS3RECOMP_SPIRV_CACHE" 2>/dev/null || unset PS3RECOMP_SPIRV_CACHE
 # The SPU command dispatcher takes the rest of a fetched queue line without re-reserving it (NOTES fix 150) and
@@ -83,6 +87,7 @@ fi
 [ "${DES_GOD:-}" = 1 ] && export DES_GOD=1
 if [ "${DES_FULLSCREEN:-${DECK:-0}}" = 1 ]; then export PS3RECOMP_VK_FULLSCREEN=1; else unset PS3RECOMP_VK_FULLSCREEN; fi
 if [ "${DES_MOVIES:-1}" = 1 ]; then unset PS3_NO_SAIL; else export PS3_NO_SAIL=1; fi
+if [ "${DES_ASYNC_SHADERS:-1}" = 1 ]; then export RSX_VK_ASYNC_SHADERS=1; else export RSX_VK_ASYNC_SHADERS=0; fi
 case "${DES_FPS:-60}" in
   60) export DES_60FPS=1 PS3_VBLANK_HZ=120 PS3_CLOCK_SCALE=200 ;;
   30) unset DES_60FPS PS3_VBLANK_HZ PS3_CLOCK_SCALE ;;
@@ -141,7 +146,7 @@ if [ -n "$BOX" ] && ! [ -f /run/.containerenv ]; then
       RUN=(nsenter -t "$CPID" -U -m --preserve-credentials -- env -C "$D")
     fi
   fi
-  for v in $(env | sed -n 's/^\(\(PS3\|DES_\|PAD_\|SPU_\|GCM_\|VK_\|OSK_\|SDL_\)[A-Za-z0-9_]*\)=.*/\1/p'); do
+  for v in $(env | sed -n 's/^\(\(PS3\|DES_\|PAD_\|SPU_\|GCM_\|VK_\|RSX_\|OSK_\|SDL_\)[A-Za-z0-9_]*\)=.*/\1/p'); do
     RUN+=("$v=${!v}")
   done
 fi

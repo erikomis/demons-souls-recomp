@@ -68,6 +68,7 @@ DEFAULTS = {
     'name': 'Slayer',
     'fullscreen': DECK,
     'movies': True,
+    'async_shaders': True,     # new shaders built in the background: brief pop-in instead of a stutter
     'skip_intro': False,
     'god': False,
     'gpu_clock': '800',        # Steam Deck: MHz or auto
@@ -101,6 +102,7 @@ def play_env(c):
     e['DES_NAME'] = c['name'] or 'Slayer'
     e['DES_FULLSCREEN'] = '1' if c['fullscreen'] else '0'
     e['DES_MOVIES'] = '1' if c['movies'] else '0'
+    e['DES_ASYNC_SHADERS'] = '1' if c['async_shaders'] else '0'
     for k in ('DES_GAME', 'DES_BOSS_RUSH', 'DES_BR_SOULS', 'DES_SKIP_INTRO', 'DES_GOD'):
         e.pop(k, None)
     if c['game'] == 'bossrush':
@@ -324,6 +326,7 @@ def main_window(steam=False):
         'name': tk.StringVar(value=conf['name']),
         'fullscreen': tk.BooleanVar(value=conf['fullscreen']),
         'movies': tk.BooleanVar(value=conf['movies']),
+        'async_shaders': tk.BooleanVar(value=conf['async_shaders']),
         'skip_intro': tk.BooleanVar(value=conf['skip_intro']),
         'god': tk.BooleanVar(value=conf['god']),
         'gpu_clock': tk.StringVar(value=conf['gpu_clock']),
@@ -351,6 +354,7 @@ def main_window(steam=False):
     row += 1
     for key, txt in (('fullscreen', 'Start in fullscreen (F11 or Alt+Enter switches in the game)'),
                      ('movies', 'Play movies'),
+                     ('async_shaders', 'Compile new shaders in the background (brief pop-in instead of a stutter)'),
                      ('skip_intro', 'Skip the intro (straight to PRESS START)'),
                      ('god', 'God mode at start')):
         ttk.Checkbutton(opts, text=txt, variable=v[key]).grid(row=row, column=0, columnspan=2, sticky='w')

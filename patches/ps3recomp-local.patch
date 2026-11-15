@@ -10827,10 +10827,21 @@ index c4e4d84..5a56bdd 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 8dff6011..4406094c 100644
+index 8dff6011..9104b36b 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
-@@ -144,6 +144,8 @@ typedef struct {
+@@ -109,6 +109,10 @@ typedef struct {
+     u64 color_serial;       /* g.write_serial of the last colour write, or 0 */
+     int guest_dirty;        /* rendered since guest memory last got a copy   */
+     u32 last_use;           /* g.frames when last bound, sampled or presented */
++    /* 1 + g.frames of the latest frame a draw rendered into it, and of the
++     * latest one before that (0 = none): only kept with a backend's
++     * pipeline_ready (eng_draw_must_draw). */
++    u32 drawn_frame, drawn_before;
+ } eng_surface;
+ 
+ typedef struct {
+@@ -144,6 +148,8 @@ typedef struct {
      u32 depth;                  /* slices of a 3D texture, else 1 */
      u32 levels;                 /* SET_TEXTURE_FORMAT mipmap count it was built with */
      int rewritten;              /* guest bytes rewritten by the engine itself */
@@ -10839,7 +10850,15 @@ index 8dff6011..4406094c 100644
  
  } eng_texture;
  
-@@ -1168,6 +1170,15 @@ static void eng_deswizzle_3d_slice(u8* dst, const u8* src, u32 w, u32 h, u32 d,
+@@ -706,6 +712,7 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+     s->color_serial = 0;
+     s->guest_dirty = 0;
+     s->last_use = g.frames;
++    s->drawn_frame = s->drawn_before = 0;   /* a new target: nothing drawn into it yet */
+     if (slot == g.n_surfaces) g.n_surfaces++;
+     { static u32 logs = 0; if (PS3_LOG_FIRST(logs, 16))
+         fprintf(stderr, "[rsx engine] surface %u:0x%08X %ux%u fmt %d%s\n",
+@@ -1168,6 +1175,15 @@ static void eng_deswizzle_3d_slice(u8* dst, const u8* src, u32 w, u32 h, u32 d,
  /* One hash per cached texture per presented frame. Word-at-a-time FNV over
   * the whole span is deliberately cheap: this is a mutation detector, not a
   * content id (rsx_live_draw.c:2002-2026). */
@@ -10855,7 +10874,7 @@ index 8dff6011..4406094c 100644
  static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
                                      int* readable)
  {
-@@ -1175,6 +1186,29 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
+@@ -1175,6 +1191,29 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
      if (!src) { *readable = 0; return 0; }
      u64 hash = 1469598103934665603ull;
      u32 i = 0;
@@ -10885,7 +10904,7 @@ index 8dff6011..4406094c 100644
      for (; i + 8 <= span; i += 8) {
          u64 word;
          memcpy(&word, src + i, sizeof(word));
-@@ -1315,6 +1349,148 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -1315,6 +1354,148 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
      return handle;
  }
  
@@ -11034,7 +11053,7 @@ index 8dff6011..4406094c 100644
  /* The cache slot for a texture unit's bytes, keyed on where they are and what
   * the registers say they are. An already-cached entry is re-hashed at most
   * once per presented frame and re-decoded when the guest changed it, which is
-@@ -1399,7 +1575,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -1399,7 +1580,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
              }
          }
          e->last_use_serial = ++g.texture_use_serial;
@@ -11043,7 +11062,7 @@ index 8dff6011..4406094c 100644
      }
  
      u32 index;
-@@ -1428,7 +1604,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -1428,7 +1609,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
      e.handle = eng_texture_upload(location, offset, fmt, w, h, levels, pitch,
                                    cube, remap, depth, 0u);
      if (e.handle && evicted) g.be->texture_release(g.be->user, evicted);
@@ -11052,7 +11071,7 @@ index 8dff6011..4406094c 100644
      return e.handle;
  }
  
-@@ -1489,6 +1665,106 @@ static int eng_surface_to_guest(u32 slot)
+@@ -1489,6 +1670,106 @@ static int eng_surface_to_guest(u32 slot)
      return 1;
  }
  
@@ -11159,7 +11178,7 @@ index 8dff6011..4406094c 100644
  static float* s_depth_rows;
  static u32 s_depth_cap;
  
-@@ -1629,6 +1905,33 @@ static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0,
+@@ -1629,6 +1910,33 @@ static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0,
  
  /* ---- pipelines ----------------------------------------------------------- */
  
@@ -11193,7 +11212,7 @@ index 8dff6011..4406094c 100644
  static u32 eng_vtex_mask(void)
  {
      u32 mask = 0;
-@@ -1649,7 +1952,7 @@ static u32 eng_unnorm_units(u32 dim[RSX_DSP_NUM_TEXTURES][3])
+@@ -1649,7 +1957,7 @@ static u32 eng_unnorm_units(u32 dim[RSX_DSP_NUM_TEXTURES][3])
      u32 mask = 0;
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
          rsx_dsp_texture t;
@@ -11202,7 +11221,7 @@ index 8dff6011..4406094c 100644
          dim[u][0] = dim[u][1] = dim[u][2] = 0;
          if (!t.enabled || !(t.format & RSX_TEX_FMT_UNNORM) || !t.width || !t.height)
              continue;
-@@ -1671,7 +1974,7 @@ static u32 eng_volume_mask(void)
+@@ -1671,7 +1979,7 @@ static u32 eng_volume_mask(void)
      u32 mask = 0;
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
          rsx_dsp_texture t;
@@ -11211,7 +11230,7 @@ index 8dff6011..4406094c 100644
          if (t.enabled && !t.cubemap && t.dimension == 3 && t.depth > 1 && t.width && t.height)
              mask |= 1u << u;
      }
-@@ -1683,7 +1986,7 @@ static u32 eng_cube_mask(void)
+@@ -1683,7 +1991,7 @@ static u32 eng_cube_mask(void)
      u32 mask = 0;
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
          rsx_dsp_texture t;
@@ -11220,7 +11239,7 @@ index 8dff6011..4406094c 100644
          /* A cube face is square by construction, so a non-square image
           * cannot be one; the fragment program is compiled against this mask
           * and a texturecube slot filled with a 2D texture is a validation
-@@ -1694,20 +1997,170 @@ static u32 eng_cube_mask(void)
+@@ -1694,20 +2002,170 @@ static u32 eng_cube_mask(void)
      return mask;
  }
  
@@ -11394,7 +11413,7 @@ index 8dff6011..4406094c 100644
      }
  
      /* A zero SET_SHADER_PROGRAM is "none", not "the program at offset 0": the
-@@ -1715,13 +2168,24 @@ static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
+@@ -1715,13 +2173,24 @@ static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
       * never read back as zero. */
      const u8* fp_uc = NULL;
      u32 fp_size = 0;
@@ -11422,7 +11441,7 @@ index 8dff6011..4406094c 100644
      }
  
      if (out_vp) *out_vp = vp_uc;
-@@ -1739,10 +2203,20 @@ static void eng_vertex_layout(rsx_vertex_layout_plan* layout)
+@@ -1739,10 +2208,20 @@ static void eng_vertex_layout(rsx_vertex_layout_plan* layout)
      const u8* uc = NULL;
      u32 instrs = 0;
      if (eng_guest_programs(&uc, &instrs, NULL, NULL)) {
@@ -11447,7 +11466,7 @@ index 8dff6011..4406094c 100644
      }
      rsx_vertex_layout_plan_init(layout, mask);
  }
-@@ -1910,6 +2384,17 @@ static u64 eng_fp_debug_hash(const u8* fp_uc, u32 fp_size)
+@@ -1910,6 +2389,17 @@ static u64 eng_fp_debug_hash(const u8* fp_uc, u32 fp_size)
      return fp_uc && fp_size
          ? rsx_fp_structural_hash(fp_uc, fp_size, 1469598103934665603ull) : 0;
  }
@@ -11465,7 +11484,7 @@ index 8dff6011..4406094c 100644
  
  static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
                              const rsx_be_render_state* rs,
-@@ -1934,27 +2419,60 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1934,27 +2424,60 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      const u32 vtex_mask = eng_vtex_mask();
      /* BRB/CLB outcomes are baked into the program: the branch bits are
       * identity only for a program that tests them. */
@@ -11531,7 +11550,7 @@ index 8dff6011..4406094c 100644
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
          if (!(gamma_units & (1u << u))) gamma_masks[u] = 0;
      /* Texture sign expansion: SET_TEXTURE_ADDRESS's UNSIGNED_REMAP_BIASED
-@@ -1962,10 +2480,18 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1962,10 +2485,18 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
       * gamma: only units the program samples count. */
      u8 expand_masks[RSX_DSP_NUM_TEXTURES] = {0};
      if (!fixed) for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u) {
@@ -11552,7 +11571,7 @@ index 8dff6011..4406094c 100644
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
          if (!(expand_units & (1u << u))) expand_masks[u] = 0;
  
-@@ -1979,8 +2505,18 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1979,8 +2510,18 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
              unnorm_dim[u][0] = unnorm_dim[u][1] = unnorm_dim[u][2] = 0;
  
      g.fp_constants.count = 0;
@@ -11573,7 +11592,7 @@ index 8dff6011..4406094c 100644
  
      /* An antialiased target is held at its sample grid; WPOS must still count
       * pixels (rsx_fp_apply_wpos_grid). */
-@@ -2001,8 +2537,15 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2001,8 +2542,15 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      } else {
          key = eng_vp_hash(vp_uc, vp_instrs * 16u, key);
          if (vp_branch_bits_used) key = eng_fnv1a(&vp_branch_bits, sizeof vp_branch_bits, key);
@@ -11591,7 +11610,7 @@ index 8dff6011..4406094c 100644
          const u32 fp_ctrl_key = fp_ctrl & 0x4Eu; /* colour width and fragment depth export */
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
          if (srgb_output) key = eng_fnv1a(&srgb_output, sizeof srgb_output, key);
-@@ -2040,6 +2583,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2040,6 +2588,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      }
      if (g.n_pipelines >= ENG_MAX_PIPELINES) return 0;
  
@@ -11605,7 +11624,7 @@ index 8dff6011..4406094c 100644
      u32 handle = 0;
      int vi = 1, fi = 1;
      u32 nconst = 0;
-@@ -2080,7 +2630,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2080,7 +2635,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      if (vi > 0 && fi > 0)
          handle = g.be->pipeline_create(g.be->user, s_vs_hlsl, s_ps_hlsl, rs,
                                         layout, layout->stride, rt_fmt, rt_count);
@@ -11620,7 +11639,7 @@ index 8dff6011..4406094c 100644
      /* RSX_ENGINE_SHADER_DUMP=<existing dir>: each new pipeline's two programs
       * as <dir>/pipe<handle>.vs.hlsl and .ps.hlsl, the handle being the one
       * RSX_ENGINE_PASS_DUMP's index names, and a guest fragment program's own
-@@ -2244,6 +2800,491 @@ static int dc_reserve_indices(u32 count)
+@@ -2244,6 +2805,491 @@ static int dc_reserve_indices(u32 count)
      return 1;
  }
  
@@ -12112,7 +12131,7 @@ index 8dff6011..4406094c 100644
  /* Turn this group's batches into a reference list, recording a CUT rather
   * than fetching a phantom vertex wherever the restart sentinel appears, then
   * collapse repeated references and fetch each unique vertex once.
-@@ -2326,6 +3367,9 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -2326,6 +3372,9 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
      rsx_vertex_fetch_plan_init(&dc.fetch_plan, &g.rsx, layout, eng_guest_ptr, NULL);
      rsx_vertex_fetch_plan_set_inline(&dc.fetch_plan, &g.rsx, dc.inl, dc.inl_bytes);
      rsx_vertex_fetch_plan_prepare(&dc.fetch_plan, dc.refs, dc.n_refs);
@@ -12122,7 +12141,7 @@ index 8dff6011..4406094c 100644
      if (!dc_reserve_verts((u64)dc.n_refs * layout->stride)) {
          dc.fetch_ok = 0;
          return;
-@@ -2474,7 +3518,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -2474,7 +3523,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
      u32 feedback[RSX_BE_MAX_COLOR_TARGETS] = {0};
      for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
          rsx_dsp_texture t;
@@ -12131,7 +12150,7 @@ index 8dff6011..4406094c 100644
          /* A unit left enabled by an earlier draw but not sampled by this
           * program is skipped: resolving it would cost a cache check, and an
           * aliased surface a store to guest memory, for nothing. */
-@@ -2873,9 +3917,9 @@ static void pd_note(const u32* targets, u32 n_targets, u32 zslot,
+@@ -2873,9 +3922,9 @@ static void pd_note(const u32* targets, u32 n_targets, u32 zslot,
      }
      if (s_pd.draws_log) {
          fprintf(s_pd.draws_log, "pass %03u draw %u: pipe %u cmask %08X blend %u %X/%X"
@@ -12143,7 +12162,76 @@ index 8dff6011..4406094c 100644
          if (rsx_dsp_reg(&g.rsx, M_POLY_OFFSET_FILL) & 1u) {
              const u32 f = rsx_dsp_reg(&g.rsx, M_POLY_OFFSET_FACTOR);
              const u32 b = rsx_dsp_reg(&g.rsx, M_POLY_OFFSET_BIAS);
-@@ -3026,6 +4070,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -3022,10 +4071,76 @@ static void eng_log_rect_clear(const char* what, const u32 rc[4], u32 w, u32 h)
+                 what, rc[0], rc[1], rc[2], rc[3], w, h);
+ }
+ 
++/* ---- pipelines still building (rsx_draw_backend.pipeline_ready) ----------
++ * A backend that builds new pipelines' shaders on worker threads (Vulkan,
++ * RSX_VK_ASYNC_SHADERS) has their draws skipped until they are ready: the
++ * object appears a frame or a few late instead of the game freezing while
++ * glslang runs. That is only acceptable for a draw the game makes again next
++ * frame, and whose absence does not change other draws. The rules are the
++ * D3D12 renderer's (rsx_live_draw.c ld_pso_draw_critical, NOTES fixes 62 and
++ * 128); a draw they name is built or waited for, never skipped:
++ *  - a draw into a display buffer, and a full-screen pass (no depth test,
++ *    <= 6 vertices: post-processing, tone map, the blits later passes read);
++ *  - a pass that writes no colour (depth-only: a shadow map; or stencil-only).
++ *    Skipped, the receivers' pipeline keys change (shadow sampling on/off),
++ *    and the whole lit scene would blink;
++ *  - a draw into a colour target no draw rendered into last frame: a
++ *    render-to-texture done once (at load, or on an event) and sampled
++ *    later would be lost, not late. Stricter than the D3D12 rule ("this
++ *    frame or the last"), where only the first of such a pass's draws was
++ *    kept: here every draw of a one-shot pass is;
++ *  - (the backend's own) a draw inside an occlusion count: a skipped draw
++ *    counts 0 and a lens flare behind it would flicker. */
++static int eng_draw_must_draw(const rsx_dsp_surface* sf, const rsx_be_render_state* rs,
++                              u32 target, u32 nverts)
++{
++    for (u32 i = 0; i < 8; i++) {
++        const eng_display_buffer* d = &g.display_buffers[i];
++        if (d->valid && d->location == sf->color_location[0] && d->offset == sf->color_offset[0])
++            return 1;
++    }
++    if (!rs->depth_test && nverts <= 6u) return 1;
++    /* No colour written at all: a depth-only (shadow map) or stencil-only pass -- it only exists for what it
++     * leaves in depth / stencil for the draws after it, so never skip it. */
++    if (!rs->color_mask) return 1;
++    /* drawn last frame: its latest draw was then, or this frame's first
++     * draw came after one then */
++    const eng_surface* s = &g.surfaces[target];
++    const u32 last = g.frames;           /* 1 + (g.frames - 1) */
++    return !(s->drawn_frame == last ||
++             (s->drawn_frame == last + 1u && s->drawn_before == last)) || !last;
++}
++
++/* A draw went to these targets this frame. */
++static void eng_targets_drawn(const u32* targets, u32 n_targets)
++{
++    const u32 now = g.frames + 1u;
++    for (u32 i = 0; i < n_targets; i++) {
++        eng_surface* s = &g.surfaces[targets[i]];
++        if (s->drawn_frame != now) { s->drawn_before = s->drawn_frame; s->drawn_frame = now; }
++    }
++}
++
++/* pipeline_ready said the build failed: from now on the key is one
++ * pipeline_create returned 0 for. */
++static void eng_pipeline_forget(u32 handle)
++{
++    for (u32 i = 0; i < g.n_pipelines; i++)
++        if (g.pipelines[i].handle == handle) {
++            g.pipelines[i].handle = 0;
++            static u32 logs = 0;
++            if (PS3_LOG_FIRST(logs, 16))
++                fprintf(stderr, "[rsx engine] pipeline %016llx: built off-thread, FAILED (draw dropped)\n",
++                        (unsigned long long)g.pipelines[i].key);
++        }
++    g.be->pipeline_release(g.be->user, handle);
++}
++
+ static void sink_end(void* user, const rsx_dispatch* r)
  {
      (void)user; (void)r;
      if (!g.ready || !dc.n_packets || !dc.fetch_ok) return;
@@ -12151,7 +12239,7 @@ index 8dff6011..4406094c 100644
      /* Mixed geometry sources have no defined concatenation here. Reject the
       * whole group instead of drawing partial/misordered geometry. */
      if (dc.n_immediate && (dc.n_arr || dc.n_idx || dc.inl_bytes ||
-@@ -3051,11 +4096,30 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -3051,11 +4166,30 @@ static void sink_end(void* user, const rsx_dispatch* r)
  
      rsx_vertex_layout_plan layout;
      eng_vertex_layout(&layout);
@@ -12182,7 +12270,24 @@ index 8dff6011..4406094c 100644
      if (rebuild) {
          if (!eng_topology_rebuild(prim, dc.refs_remapped, &indexed)) return;
          n_draw = indexed
-@@ -3110,7 +4174,11 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -3093,6 +4227,16 @@ static void sink_end(void* user, const rsx_dispatch* r)
+                                           &fp_hash);
+     if (!pipeline) return;
+     if (fp_hash && eng_debug_fp(fp_hash, pipeline)) return;
++    if (g.be->pipeline_ready) {
++        u32 nverts = dc.n_verts;
++#ifdef ENG_VCACHE
++        if (vc_hit) nverts = vc_hit->uploaded;   /* dc was not fetched for this draw */
++#endif
++        const int ready = g.be->pipeline_ready(g.be->user, pipeline,
++                                               eng_draw_must_draw(&sf, &rs, target, nverts));
++        if (ready < 0) eng_pipeline_forget(pipeline);
++        if (ready <= 0) return;
++    }
+ 
+     /* Textures before any pipeline or target binding: a cache refresh can
+      * replace a resource, and the backend is free to submit while doing it. */
+@@ -3110,7 +4254,11 @@ static void sink_end(void* user, const rsx_dispatch* r)
      const u32 vtex_mask = sink_bind_vertex_textures(eng_vtex_mask(), vtextures,
                                                      vsamplers);
  
@@ -12194,7 +12299,7 @@ index 8dff6011..4406094c 100644
          if (!dc_reserve_indices(n_draw)) return;
          rsx_draw_engine_write_topology_indices(
              prim, dc.n_source_refs, dc.cuts, dc.n_cuts,
-@@ -3225,6 +4293,16 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -3225,12 +4373,23 @@ static void sink_end(void* user, const rsx_dispatch* r)
      }
  
      const u32 uploaded = indexed ? dc.n_verts : n_draw;
@@ -12211,7 +12316,14 @@ index 8dff6011..4406094c 100644
      g.be->draw(g.be->user, topology, dc.verts, uploaded, layout.stride,
                 indexed ? g.indices : NULL, indexed ? n_draw : 0);
      /* Counted only when the draw ran the guest's OWN programs, which is what
-@@ -3375,10 +4453,14 @@ static void eng_present(u32 buffer_id)
+      * the test hook means: a draw through the built-in pair is a draw, not
+      * evidence that the decompile-translate-compile path worked. */
+     if (!pipeline_is_fixed) g.guest_draws++;
++    if (g.be->pipeline_ready) eng_targets_drawn(targets, n_targets);
+ 
+     if (rs.color_mask) eng_surfaces_wrote(targets, n_targets);
+     if (zslot != ENG_INVALID && rs.depth_test && rs.depth_write) {
+@@ -3375,10 +4534,14 @@ static void eng_present(u32 buffer_id)
                      i, g.surfaces[i].location, g.surfaces[i].offset,
                      g.surfaces[i].w, g.surfaces[i].h, g.surfaces[i].handle);
      }
@@ -12226,7 +12338,7 @@ index 8dff6011..4406094c 100644
      g.last_guest_draws = g.guest_draws;
      g.guest_draws = 0;
  }
-@@ -3460,6 +4542,7 @@ void rsx_draw_engine_shutdown(void)
+@@ -3460,6 +4623,7 @@ void rsx_draw_engine_shutdown(void)
      if (!g.be) return;
      if (g.ready && g.be->submit_and_wait)
          g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_SHUTDOWN);
@@ -12234,7 +12346,7 @@ index 8dff6011..4406094c 100644
      for (u32 i = 0; i < g.n_textures; i++)
          if (g.textures[i].handle) g.be->texture_release(g.be->user, g.textures[i].handle);
      for (u32 i = 0; i < g.n_pipelines; i++)
-@@ -3478,15 +4561,50 @@ void rsx_draw_engine_shutdown(void)
+@@ -3478,15 +4642,50 @@ void rsx_draw_engine_shutdown(void)
      free(dc.refs); free(dc.cuts); free(dc.verts); free(dc.immediate);
      rsx_vertex_remap_destroy(&dc.ref_remap);
      memset(&dc, 0, sizeof dc);
@@ -12285,7 +12397,7 @@ index 8dff6011..4406094c 100644
      /* The subchannel is a binding slot, not an engine selector, and a title
       * whose SPU-built command lists bind NV4097 elsewhere would otherwise
       * store its state in the wrong register bank.  Standard NV4097 methods
-@@ -3494,9 +4612,61 @@ void rsx_draw_engine_method(u32 method, u32 arg)
+@@ -3494,9 +4693,61 @@ void rsx_draw_engine_method(u32 method, u32 arg)
       * (0xE9xx, 0xEBxx) encode the subchannel bits as part of the address;
       * preserve them with the wider mask. */
      u32 m = (method >= 0xE000u) ? (method & 0xFFFCu) : (method & 0x1FFCu);
@@ -46602,7 +46714,7 @@ index f076ef89..c6691d5c 100644
 
 
 diff --git a/libs/video/rsx_vulkan_backend.c b/libs/video/rsx_vulkan_backend.c
-index db64302e..76f83a0f 100644
+index db64302e..9105f1c5 100644
 --- a/libs/video/rsx_vulkan_backend.c
 +++ b/libs/video/rsx_vulkan_backend.c
 @@ -20,10 +20,12 @@
@@ -46797,10 +46909,9 @@ index db64302e..76f83a0f 100644
 +    vk_cmd_after_everything(s_vk.cmd);
 +    s_vk.present_order = 0;
 +    vk_occ_cmd_begun();
-     return 0;
- }
- 
--static int vk_submit_and_wait(void)
++    return 0;
++}
++
 +/* VK_SYNC_STATS=1: every 5 s, how many submit-and-waits ran, how long they blocked, and from which
 + * call sites (return addresses: resolve with addr2line / perf). Finds the waits a frame pays for. */
 +#include <time.h>
@@ -46888,9 +46999,10 @@ index db64302e..76f83a0f 100644
 +{
 +    if (s_eb_pending) return 1;
 +    for (u32 k = 0; k < s_nslots; k++) if (s_slot[k].pending) return 1;
-+    return 0;
-+}
-+
+     return 0;
+ }
+ 
+-static int vk_submit_and_wait(void)
 +typedef struct { u64 serial; u64 handle; int type; } vk_garbage;
 +static vk_garbage* s_gb;
 +static u32 s_gb_n, s_gb_cap;
@@ -47384,7 +47496,21 @@ index db64302e..76f83a0f 100644
  /* Copy `rows` rows of `w` texels from host memory into a w x h rectangle at
   * (x, y) of one level / layer of an image that is in GENERAL. */
  static int vk_eng_upload_region(VkImage img, u32 layer, u32 mip, u32 x, u32 y,
-@@ -2264,6 +2778,7 @@ static int vk_eng_init(void* user, u32 width, u32 height)
+@@ -2255,15 +2769,21 @@ static int vk_eng_make_view(VkImage img, VkFormat fmt, u32 levels, VkComponentMa
+     return pvkCreateImageView(s_vk.device, &vci, NULL, out) == VK_SUCCESS ? 0 : -1;
+ }
+ 
++static void vk_sa_start(void);       /* RSX_VK_ASYNC_SHADERS, with the pipelines below */
++static void vk_sa_shutdown(void);
++static void vk_sa_frame(void);
++
+ static int vk_eng_init(void* user, u32 width, u32 height)
+ {
+     (void)user; (void)width; (void)height;
+     memset(s_eobj, 0, sizeof s_eobj);
+     memset(&s_eng_bound, 0, sizeof s_eng_bound);
++    if (s_vk.device) vk_sa_start();       /* RSX_VK_ASYNC_SHADERS: workers + glslang pre-warm */
+     return s_vk.device ? 0 : -1;
  }
  
  static void vk_eng_snapshot_recycle(vk_eng_obj* o);
@@ -47392,7 +47518,7 @@ index db64302e..76f83a0f 100644
  
  static void vk_eng_release(void* user, u32 handle)
  {
-@@ -2280,6 +2795,15 @@ static void vk_eng_release(void* user, u32 handle)
+@@ -2280,6 +2800,15 @@ static void vk_eng_release(void* user, u32 handle)
          s_eobj[handle].surface = 0;
          if (vk_eng_get(snap, VK_ENG_TEXTURE)) vk_eng_release(user, snap);
      }
@@ -47408,7 +47534,7 @@ index db64302e..76f83a0f 100644
      if (s_eobj[handle].kind == VK_ENG_COLOR && s_eobj[handle].snapshot) {
          /* Never an attachment, so no framebuffer names it; the image goes
           * back to the pool for the next feedback draw. */
-@@ -2294,21 +2818,31 @@ static void vk_eng_release(void* user, u32 handle)
+@@ -2294,21 +2823,32 @@ static void vk_eng_release(void* user, u32 handle)
  }
  
  static void vk_eng_snapshot_pool_drain(void);
@@ -47417,6 +47543,7 @@ index db64302e..76f83a0f 100644
  
  static void vk_eng_shutdown(void* user)
  {
++    vk_sa_shutdown();                     /* workers joined before any slot or the device goes */
      vk_eng2_shutdown(user);
      for (u32 i = 1; i < VK_ENG_MAX_OBJ; i++) vk_eng_release(user, i);
 +    vk_dc_shutdown();
@@ -47442,7 +47569,7 @@ index db64302e..76f83a0f 100644
  }
  
  static u32 vk_eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32 h,
-@@ -2334,17 +2868,26 @@ static u32 vk_eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32
+@@ -2334,17 +2874,26 @@ static u32 vk_eng_color_target_create(void* user, rsx_be_format fmt, u32 w, u32
      o->kind = VK_ENG_COLOR; o->fmt = vf; o->bpp = bpp; o->w = w; o->h = h;
      /* UNDEFINED -> GENERAL, then the guest's own bytes when the engine could
       * resolve them, else transparent black so the contents are defined. */
@@ -47471,7 +47598,7 @@ index db64302e..76f83a0f 100644
  static u32 vk_eng_depth_target_create(void* user, u32 w, u32 h)
  {
      (void)user;
-@@ -2354,18 +2897,20 @@ static u32 vk_eng_depth_target_create(void* user, u32 w, u32 h)
+@@ -2354,18 +2903,20 @@ static u32 vk_eng_depth_target_create(void* user, u32 w, u32 h)
      vk_eng_obj* o = &s_eobj[hd];
      if (vk_create_image(&o->im, s_vk.depth_format, w, h,
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
@@ -47495,7 +47622,7 @@ index db64302e..76f83a0f 100644
      return hd;
  }
  
-@@ -2419,12 +2964,96 @@ static void vk_eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
+@@ -2419,12 +2970,97 @@ static void vk_eng_clear_depth_stencil(void* user, u32 depth, u32 flags,
      else vk_submit_and_wait();
  }
  
@@ -47583,6 +47710,7 @@ index db64302e..76f83a0f 100644
  {
      (void)user;
      if (!s_vk.device) return;
++    vk_sa_frame();
 +    if (vk_present_direct_on()) {
 +        vk_eng_present_direct(vk_eng_get(surface, VK_ENG_COLOR));
 +        s_g.last_draws = s_g.draws;
@@ -47592,7 +47720,7 @@ index db64302e..76f83a0f 100644
      if (s_eb_pending) vk_eng_flush();   /* the present records on its own buffer */
      vk_eng_obj* o = vk_eng_get(surface, VK_ENG_COLOR);
      pthread_mutex_lock(&s_vk.present_mu);
-@@ -2472,7 +3101,8 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -2472,7 +3108,8 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      const size_t tight = (size_t)w * o->bpp;
      vk_buffer* const st = vk_stage_get(&s_rb_stage, (VkDeviceSize)tight * h, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
      if (!st) return;
@@ -47602,7 +47730,7 @@ index db64302e..76f83a0f 100644
          vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
          VkBufferImageCopy region = {
              .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-@@ -2495,6 +3125,94 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
+@@ -2495,6 +3132,94 @@ static void vk_eng_readback(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h,
      }
  }
  
@@ -47697,7 +47825,7 @@ index db64302e..76f83a0f 100644
  /* ---- E3: textures ---------------------------------------------------------
   * The engine decodes every level to host rows (rsx_texture_decode) and hands
   * them over one upload each; the crossbar is a property of the view, so it
-@@ -2540,9 +3258,12 @@ static u32 vk_eng_texture_create(void* user, rsx_be_format fmt, u32 w, u32 h,
+@@ -2540,9 +3265,12 @@ static u32 vk_eng_texture_create(void* user, rsx_be_format fmt, u32 w, u32 h,
      o->kind = VK_ENG_TEXTURE; o->fmt = vf; o->w = w; o->h = h; o->cube = (u8)cube; o->mips = mips;
      o->bpp = bc ? 0 : bpp; o->block = bc ? bpp : 0;
      /* UNDEFINED -> GENERAL for every level and face before the uploads arrive. */
@@ -47713,7 +47841,7 @@ index db64302e..76f83a0f 100644
      return hd;
  fail:
      vk_destroy_image(&o->im);
-@@ -2647,7 +3368,8 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
+@@ -2647,7 +3375,8 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
      }
      o->kind = VK_ENG_COLOR; o->snapshot = 1;
      o->fmt = t->fmt; o->bpp = t->bpp; o->w = t->w; o->h = t->h;
@@ -47723,7 +47851,7 @@ index db64302e..76f83a0f 100644
      vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT,
                       reused ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED);
      vk_barrier_image(t->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-@@ -2660,7 +3382,7 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
+@@ -2660,7 +3389,7 @@ static u32 vk_eng_color_snapshot(void* user, u32 surface)
                      o->im.img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
      /* The copy, made visible to whatever samples it next. */
      vk_barrier_image(o->im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
@@ -47732,7 +47860,7 @@ index db64302e..76f83a0f 100644
      return hd;
  }
  
-@@ -2705,9 +3427,10 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
+@@ -2705,9 +3434,10 @@ static u32 vk_eng_depth_snapshot(void* user, u32 depth, u32 w, u32 h)
          t->kind = VK_ENG_TEXTURE; t->fmt = VK_FORMAT_R32_SFLOAT; t->bpp = 4; t->w = w; t->h = h;
          z = vk_eng_get(depth, VK_ENG_DEPTH);          /* same slot; reload for clarity */
          z->surface = snap;
@@ -47745,7 +47873,7 @@ index db64302e..76f83a0f 100644
      }
  
      /* The bounce buffer stays (device-local when the device has it, grown as
-@@ -2765,7 +3488,7 @@ static int vk_eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32
+@@ -2765,7 +3495,7 @@ static int vk_eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32
          return -1;
      vk_buffer* const st = vk_stage_get(&s_rb_stage, (VkDeviceSize)w * h * 4u, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
      if (!st) return -1;
@@ -47754,7 +47882,20 @@ index db64302e..76f83a0f 100644
      if (!rc) {
          vk_barrier_image(z->im.img, s_vk.depth_aspect, VK_IMAGE_LAYOUT_GENERAL);
          VkBufferImageCopy region = {
-@@ -2860,9 +3583,9 @@ static u32 s_esamp_count;
+@@ -2813,8 +3543,12 @@ static int vk_eng_depth_readback(void* user, u32 depth, u32 x, u32 y, u32 w, u32
+ #define VK_ENG_TOPOLOGIES 5
+ #define VK_ENG_FB_CACHE   64
+ 
++struct vk_sa_job;
++
+ typedef struct vk_eng_pipe {
+     int                 used;
++    struct vk_sa_job*   job;             /* shaders still building (RSX_VK_ASYNC_SHADERS) */
++    int                 failed;          /* that build failed: draws drop until released */
+     VkShaderModule      vs, fs;
+     rsx_be_render_state rs;
+     u32                 nslots, stride, rt_count;
+@@ -2860,9 +3594,9 @@ static u32 s_esamp_count;
  
  static void vk_eng_drop_framebuffers(void)
  {
@@ -47766,13 +47907,472 @@ index db64302e..76f83a0f 100644
      s_e2.fb_count = 0;
  }
  
-@@ -3070,11 +3793,12 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
+@@ -2958,17 +3692,428 @@ static VkStencilOpState vk_gcm_stencil_face(u32 func, u32 fail, u32 zfail, u32 z
+     return s;
+ }
+ 
+-static int vk_eng_translate(const char* hlsl, int stage, VkShaderModule* out)
++/* Any thread (the async shader workers too): `spv` and `log` are the caller's. */
++static int vk_eng_translate_to(const char* hlsl, int stage, u32* spv, char* log, u32 log_size,
++                               VkShaderModule* out)
+ {
+     u32 words = 0;
+-    if (rsx_hlsl_to_spirv(hlsl, stage, s_g.spv, VK_SPV_WORDS, &words, s_g.log, sizeof s_g.log) || !words) {
++    *out = VK_NULL_HANDLE;
++    if (rsx_hlsl_to_spirv(hlsl, stage, spv, VK_SPV_WORDS, &words, log, log_size) || !words) {
+         VK_LOG("engine: %s translation failed: %s\n",
+-               stage == RSX_SHADER_STAGE_VERTEX ? "vertex" : "fragment", s_g.log);
++               stage == RSX_SHADER_STAGE_VERTEX ? "vertex" : "fragment", log);
+         return -1;
+     }
+     VkShaderModuleCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+-                                    .codeSize = (size_t)words * 4u, .pCode = s_g.spv };
+-    return pvkCreateShaderModule(s_vk.device, &ci, NULL, out) == VK_SUCCESS ? 0 : -1;
++                                    .codeSize = (size_t)words * 4u, .pCode = spv };
++    if (pvkCreateShaderModule(s_vk.device, &ci, NULL, out) == VK_SUCCESS) return 0;
++    *out = VK_NULL_HANDLE;
++    return -1;
++}
++
++static int vk_eng_translate(const char* hlsl, int stage, VkShaderModule* out)
++{
++    return vk_eng_translate_to(hlsl, stage, s_g.spv, s_g.log, sizeof s_g.log, out);
++}
++
++/* ---------------------------------------------------------------------------
++ * New shaders built off the render thread (RSX_VK_ASYNC_SHADERS): pop-in
++ * instead of freezes. The Vulkan side of the D3D12 renderer's NOTES fixes 62
++ * and 128 (rsx_live_draw.c ld_pso_*), for the user who chose pop-in there.
++ *
++ * A pipeline the engine has never built is decompiled on the render thread
++ * (the thread that walks the FIFO and presents) and both programs go through
++ * glslang: ~5 ms median, up to ~40 ms each the first time a shader is ever
++ * seen, up to a dozen in one frame in a new area, at an enemy's first
++ * appearance, or with breakable-object debris. Every millisecond of it held
++ * the frame. Once the SPIR-V cache (memory, then PS3RECOMP_SPIRV_CACHE) has a
++ * shader it is cheap.
++ *
++ * Now a pipeline whose two shaders are both cached (rsx_hlsl_to_spirv_cached:
++ * memory or a valid disk file, no glslang) is made right here as before --
++ * identical frames, so a warm session never pops in. Otherwise the slot is
++ * reserved, the two HLSL texts copied and the translation plus
++ * vkCreateShaderModule queued to RSX_VK_SHADER_WORKERS (default 2) threads;
++ * the engine gets the handle at once. Its draws are skipped until the
++ * modules are in (pipeline_ready, which the engine calls before each draw):
++ * the object shows a frame or a few late. Before skipping, a draw waits up to
++ * RSX_VK_SHADER_WAIT_US (default 3000) per frame in total, so a short
++ * translation still shows at once. The VkPipeline variants are made at the
++ * draw as before (Mesa's cache makes them cheap).
++ *
++ * Never skipped (finished here if no worker has started it, else waited for):
++ * the draws eng_draw_must_draw names in rsx_draw_engine.c -- display buffers
++ * and full-screen passes, depth-only passes (a skipped shadow map changes the
++ * receivers' pipeline keys: the lit scene would blink), draws into a colour
++ * target nothing drew into last frame (a one-shot render-to-texture would be
++ * lost, not late) -- and, from here, every draw while ZPASS counting is on
++ * (vk_occ_*: a skipped draw counts 0, and a lens flare would flicker).
++ *
++ * A failed build is cached as a failure the way a failed synchronous one is:
++ * pipeline_ready says -1, and the engine releases the handle and keeps 0 for
++ * the key, so the draws drop.
++ *
++ * Threads and lifetimes: a job belongs to its pipeline slot (P->job) and is
++ * only ever freed by one party. Under s_sa.mu: state 0 queued, 1 building,
++ * 2 done; a worker touches only its job (never s_epipe) and the device's
++ * vkCreateShaderModule / vkDestroyShaderModule, which need no external
++ * synchronization. The render thread harvests a done job (modules into the
++ * slot, job freed). Releasing a slot whose job is queued unlinks and frees
++ * it; one being built is marked orphan, and the worker destroys its modules
++ * and frees it; a done one is freed with its modules. Shutdown (and a backend
++ * shutdown without the engine) stops and joins the workers before the device
++ * goes; a job never started fails then. glslang itself runs one translation
++ * at a time (rsx_shader_spirv.cpp), but a lookup never waits behind it.
++ * At start-up a worker pre-warms glslang (its builtin symbol tables, ~35-45
++ * ms that the first real translation of each stage would pay).
++ * RSX_VK_ASYNC_SHADERS=0 = the old path everywhere (the engine is then given
++ * no pipeline_ready). Log: "[vk-async] ..." every 5 s while anything
++ * happened; RSX_VK_SHADER_TIME=1 one line per pipeline built off-thread.
++ * -------------------------------------------------------------------------*/
++typedef struct vk_sa_job {
++    struct vk_sa_job* next;           /* queue link, under s_sa.mu */
++    int    state;                     /* 0 queued, 1 building, 2 done -- under s_sa.mu */
++    int    orphan;                    /* its slot was released while building: the builder frees it */
++    int    prewarm;                   /* rsx_hlsl_to_spirv_prewarm, no slot */
++    u32    slot;                      /* s_epipe index */
++    char  *vs_hlsl, *ps_hlsl;         /* freed once built */
++    VkShaderModule vs, fs;            /* the result: both, or neither */
++    u64    t_submit, t_done;          /* ns */
++    u32    skipped;                   /* render thread only */
++} vk_sa_job;
++
++#define VK_SA_MAX_WORKERS 8
++#define VK_SA_MAX_PENDING 1024
++typedef struct { u32 queued, ready, skipped, waited, sync, forced, failed; u64 waited_ns, forced_ns; } vk_sa_counts;
++static struct {
++    int             on;              /* -1 undecided, 0 off, 1 on (RSX_VK_ASYNC_SHADERS) */
++    int             inited;          /* the lock, the conditions and the workers exist */
++    pthread_mutex_t mu;
++    pthread_cond_t  work_cv;         /* a job queued, or quit */
++    pthread_cond_t  done_cv;         /* a job reached state 2 (CLOCK_MONOTONIC) */
++    vk_sa_job       *head, *tail;
++    int             quit;
++    pthread_t       thr[VK_SA_MAX_WORKERS];
++    u32*            thr_spv[VK_SA_MAX_WORKERS];
++    int             nthr;
++    /* render thread only */
++    u32             pending[VK_SA_MAX_PENDING];   /* s_epipe slots with a job */
++    u32             npending;
++    u64             wait_budget_ns, wait_left_ns;
++    vk_sa_counts    n, total;
++    u64             last_log_ns;
++    u32             time_logs;
++} s_sa = { .on = -1 };
++
++static int vk_sa_wanted(void)
++{
++    if (s_sa.on >= 0) return s_sa.on;
++    const char* e = getenv("RSX_VK_ASYNC_SHADERS");
++    s_sa.on = !(e && *e == '0') && rsx_hlsl_to_spirv_available();
++    return s_sa.on;
++}
++
++static int vk_sa_active(void) { return s_sa.inited && s_sa.nthr > 0; }
++
++static void vk_sa_job_free(vk_sa_job* j)
++{
++    if (j->vs) pvkDestroyShaderModule(s_vk.device, j->vs, NULL);
++    if (j->fs) pvkDestroyShaderModule(s_vk.device, j->fs, NULL);
++    free(j->vs_hlsl); free(j->ps_hlsl);
++    free(j);
++}
++
++/* Translate both and make the modules; any thread. */
++static void vk_sa_build(vk_sa_job* j, u32* spv, char* log, u32 log_size)
++{
++    if (vk_eng_translate_to(j->vs_hlsl, RSX_SHADER_STAGE_VERTEX, spv, log, log_size, &j->vs) ||
++        vk_eng_translate_to(j->ps_hlsl, RSX_SHADER_STAGE_FRAGMENT, spv, log, log_size, &j->fs)) {
++        if (j->vs) pvkDestroyShaderModule(s_vk.device, j->vs, NULL);
++        if (j->fs) pvkDestroyShaderModule(s_vk.device, j->fs, NULL);
++        j->vs = j->fs = VK_NULL_HANDLE;
++    }
++    free(j->vs_hlsl); free(j->ps_hlsl);
++    j->vs_hlsl = j->ps_hlsl = NULL;
++    j->t_done = vk_now_ns();
++}
++
++static void* vk_sa_worker(void* arg)
++{
++    u32* spv = (u32*)arg;
++    char log[4096];
++    pthread_mutex_lock(&s_sa.mu);
++    for (;;) {
++        while (!s_sa.head && !s_sa.quit) pthread_cond_wait(&s_sa.work_cv, &s_sa.mu);
++        if (s_sa.quit) break;
++        vk_sa_job* j = s_sa.head;
++        s_sa.head = j->next;
++        if (!s_sa.head) s_sa.tail = NULL;
++        j->next = NULL;
++        j->state = 1;
++        pthread_mutex_unlock(&s_sa.mu);
++        if (j->prewarm) {
++            const u64 t0 = vk_now_ns();
++            const int r = rsx_hlsl_to_spirv_prewarm();
++            fprintf(stderr, "[vk-async] glslang pre-warmed in %.1f ms%s\n",
++                    (vk_now_ns() - t0) / 1e6, r ? " (failed)" : "");
++            free(j);
++            pthread_mutex_lock(&s_sa.mu);
++            continue;
++        }
++        vk_sa_build(j, spv, log, sizeof log);
++        pthread_mutex_lock(&s_sa.mu);
++        if (j->orphan) {
++            pthread_mutex_unlock(&s_sa.mu);
++            vk_sa_job_free(j);                 /* nobody else has it any more */
++            pthread_mutex_lock(&s_sa.mu);
++        } else {
++            j->state = 2;                      /* the render thread may free it from now on */
++            pthread_cond_broadcast(&s_sa.done_cv);
++        }
++    }
++    pthread_mutex_unlock(&s_sa.mu);
++    return NULL;
++}
++
++static void vk_sa_enqueue_locked(vk_sa_job* j)
++{
++    if (s_sa.tail) s_sa.tail->next = j; else s_sa.head = j;
++    s_sa.tail = j;
++    pthread_cond_signal(&s_sa.work_cv);
++}
++
++/* Take a still-queued job out of the queue. */
++static void vk_sa_unlink_locked(vk_sa_job* j)
++{
++    vk_sa_job *prev = NULL, *q = s_sa.head;
++    while (q && q != j) { prev = q; q = q->next; }
++    if (!q) return;
++    if (prev) prev->next = j->next; else s_sa.head = j->next;
++    if (s_sa.tail == j) s_sa.tail = prev;
++    j->next = NULL;
++}
++
++/* The engine's init: the workers, and the pre-warm as their first job. */
++static void vk_sa_start(void)
++{
++    if (s_sa.inited || !vk_sa_wanted() || !s_g.on) return;
++    int n = 2;
++    { const char* e = getenv("RSX_VK_SHADER_WORKERS"); if (e && *e) n = atoi(e); }
++    if (n < 1) n = 1;
++    if (n > VK_SA_MAX_WORKERS) n = VK_SA_MAX_WORKERS;
++    { const char* e = getenv("RSX_VK_SHADER_WAIT_US");
++      s_sa.wait_budget_ns = (e && *e) ? strtoull(e, NULL, 0) * 1000ull : 3000000ull; }
++    s_sa.wait_left_ns = s_sa.wait_budget_ns;
++    pthread_condattr_t ca;
++    pthread_condattr_init(&ca);
++    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
++    pthread_mutex_init(&s_sa.mu, NULL);
++    pthread_cond_init(&s_sa.work_cv, NULL);
++    pthread_cond_init(&s_sa.done_cv, &ca);
++    pthread_condattr_destroy(&ca);
++    s_sa.head = s_sa.tail = NULL;
++    s_sa.quit = 0;
++    s_sa.npending = 0;
++    s_sa.inited = 1;
++    vk_sa_job* pw = (vk_sa_job*)calloc(1, sizeof *pw);
++    if (pw) { pw->prewarm = 1; vk_sa_enqueue_locked(pw); }   /* no worker yet: no lock needed */
++    for (int i = 0; i < n; i++) {
++        u32* spv = (u32*)malloc(VK_SPV_WORDS * sizeof(u32));
++        if (!spv) break;
++        if (pthread_create(&s_sa.thr[s_sa.nthr], NULL, vk_sa_worker, spv) != 0) { free(spv); break; }
++        pthread_setname_np(s_sa.thr[s_sa.nthr], "rsx_vk_shader");
++        s_sa.thr_spv[s_sa.nthr++] = spv;
++    }
++    s_sa.last_log_ns = vk_now_ns();
++    VK_LOG("engine: new shaders built %s (%d workers, RSX_VK_ASYNC_SHADERS=0 turns it off), "
++           "draws wait up to %llu us a frame for them\n",
++           s_sa.nthr ? "off the render thread, their draws skipped meanwhile" : "on the render thread (no worker)",
++           s_sa.nthr, (unsigned long long)(s_sa.wait_budget_ns / 1000ull));
++}
++
++static void vk_sa_pending_remove(u32 slot)
++{
++    for (u32 i = 0; i < s_sa.npending; i++)
++        if (s_sa.pending[i] == slot) { s_sa.pending[i] = s_sa.pending[--s_sa.npending]; return; }
++}
++
++/* Queue slot's shaders. 0 = could not (the caller builds them now). */
++static int vk_sa_submit(u32 slot, const char* vs_hlsl, const char* ps_hlsl)
++{
++    if (s_sa.npending >= VK_SA_MAX_PENDING) return 0;
++    vk_sa_job* j = (vk_sa_job*)calloc(1, sizeof *j);
++    if (!j) return 0;
++    j->vs_hlsl = strdup(vs_hlsl);
++    j->ps_hlsl = strdup(ps_hlsl);
++    if (!j->vs_hlsl || !j->ps_hlsl) { free(j->vs_hlsl); free(j->ps_hlsl); free(j); return 0; }
++    j->slot = slot;
++    j->t_submit = vk_now_ns();
++    s_epipe[slot].job = j;
++    s_sa.pending[s_sa.npending++] = slot;
++    pthread_mutex_lock(&s_sa.mu);
++    vk_sa_enqueue_locked(j);
++    pthread_mutex_unlock(&s_sa.mu);
++    s_sa.n.queued++;
++    return 1;
++}
++
++/* A done job (state 2, or never to be built): its modules into the slot, the job freed.
++ * Render thread. 1 = the slot can draw. */
++static int vk_sa_harvest(u32 slot)
++{
++    vk_eng_pipe* P = &s_epipe[slot];
++    vk_sa_job* j = P->job;
++    P->vs = j->vs; P->fs = j->fs;
++    j->vs = j->fs = VK_NULL_HANDLE;
++    const int ok = P->vs && P->fs;
++    if (!ok) { P->failed = 1; s_sa.n.failed++; } else s_sa.n.ready++;
++    { static int on = -1;
++      if (on < 0) { const char* e = getenv("RSX_VK_SHADER_TIME"); on = e && *e && *e != '0'; }
++      if (on || (!ok && s_sa.time_logs < 8)) {
++          s_sa.time_logs++;
++          fprintf(stderr, "[vk-async] pipeline %u %s: %.1f ms from request to ready, %u draws skipped\n",
++                  slot + 1u, ok ? "built" : "FAILED",
++                  j->t_done > j->t_submit ? (j->t_done - j->t_submit) / 1e6 : 0.0, j->skipped);
++      } }
++    P->job = NULL;
++    vk_sa_job_free(j);
++    vk_sa_pending_remove(slot);
++    return ok;
++}
++
++/* pipeline_release of a slot with a job; see the threading note above. */
++static void vk_sa_release(vk_eng_pipe* P)
++{
++    vk_sa_job* j = P->job;
++    int free_now = 1;
++    pthread_mutex_lock(&s_sa.mu);
++    if (j->state == 0) vk_sa_unlink_locked(j);
++    else if (j->state == 1) { j->orphan = 1; free_now = 0; }
++    pthread_mutex_unlock(&s_sa.mu);
++    if (free_now) vk_sa_job_free(j);
++    vk_sa_pending_remove((u32)(P - s_epipe));
++    P->job = NULL;
++}
++
++static void vk_sa_log(const char* what, const vk_sa_counts* c)
++{
++    fprintf(stderr, "[vk-async] %s%u queued, %u ready, %u draws skipped, %u waited (%.1f ms), %u sync; "
++                    "%u forced (%.1f ms), %u failed, %u building\n",
++            what, c->queued, c->ready, c->skipped, c->waited, c->waited_ns / 1e6, c->sync,
++            c->forced, c->forced_ns / 1e6, c->failed, s_sa.npending);
++}
++
++/* Once a frame (the present): the wait budget refills, finished jobs whose
++ * pipeline was not drawn again are harvested, and the summary every 5 s. */
++static void vk_sa_frame(void)
++{
++    if (!s_sa.inited) return;
++    s_sa.wait_left_ns = s_sa.wait_budget_ns;
++    for (u32 i = 0; i < s_sa.npending; ) {
++        const u32 slot = s_sa.pending[i];
++        pthread_mutex_lock(&s_sa.mu);
++        const int done = s_epipe[slot].job->state == 2;
++        pthread_mutex_unlock(&s_sa.mu);
++        if (done) vk_sa_harvest(slot);         /* swaps the last one into i */
++        else i++;
++    }
++    const u64 now = vk_now_ns();
++    if (now - s_sa.last_log_ns < 5000000000ull) return;
++    s_sa.last_log_ns = now;
++    vk_sa_counts* c = &s_sa.n;
++    if (!(c->queued | c->ready | c->skipped | c->waited | c->sync | c->forced | c->failed)) return;
++    vk_sa_log("", c);
++    s_sa.total.queued += c->queued; s_sa.total.ready += c->ready; s_sa.total.skipped += c->skipped;
++    s_sa.total.waited += c->waited; s_sa.total.sync += c->sync; s_sa.total.forced += c->forced;
++    s_sa.total.failed += c->failed;
++    s_sa.total.waited_ns += c->waited_ns; s_sa.total.forced_ns += c->forced_ns;
++    memset(c, 0, sizeof *c);
++}
++
++/* Workers stopped and joined; every job left is harvested (a never-started one
++ * as failed), so no slot keeps a job and no module is lost. Idempotent. */
++static void vk_sa_shutdown(void)
++{
++    if (!s_sa.inited) return;
++    pthread_mutex_lock(&s_sa.mu);
++    s_sa.quit = 1;
++    pthread_cond_broadcast(&s_sa.work_cv);
++    pthread_mutex_unlock(&s_sa.mu);
++    for (int i = 0; i < s_sa.nthr; i++) { pthread_join(s_sa.thr[i], NULL); free(s_sa.thr_spv[i]); }
++    s_sa.nthr = 0;
++    /* No worker left: what is still queued never ran. Pre-warms go; slot jobs
++     * are found through their slots. */
++    for (vk_sa_job* q = s_sa.head; q; ) {
++        vk_sa_job* nx = q->next;
++        q->next = NULL;
++        if (q->prewarm) free(q);
++        q = nx;
++    }
++    s_sa.head = s_sa.tail = NULL;
++    while (s_sa.npending) {
++        const u32 slot = s_sa.pending[0];
++        vk_sa_job* j = s_epipe[slot].job;
++        if (j->state == 2) { vk_sa_harvest(slot); continue; }   /* modules into the slot */
++        s_epipe[slot].job = NULL;              /* never built: the slot draws nothing */
++        s_epipe[slot].failed = 1;
++        vk_sa_job_free(j);
++        vk_sa_pending_remove(slot);
++    }
++    vk_sa_counts* c = &s_sa.n;
++    s_sa.total.queued += c->queued; s_sa.total.ready += c->ready; s_sa.total.skipped += c->skipped;
++    s_sa.total.waited += c->waited; s_sa.total.sync += c->sync; s_sa.total.forced += c->forced;
++    s_sa.total.failed += c->failed;
++    s_sa.total.waited_ns += c->waited_ns; s_sa.total.forced_ns += c->forced_ns;
++    vk_sa_log("session: ", &s_sa.total);
++    pthread_cond_destroy(&s_sa.work_cv);
++    pthread_cond_destroy(&s_sa.done_cv);
++    pthread_mutex_destroy(&s_sa.mu);
++    const int on = s_sa.on;
++    memset(&s_sa, 0, sizeof s_sa);
++    s_sa.on = on;
++}
++
++/* rsx_draw_backend.pipeline_ready: 1 draw, 0 skip (still building), -1 failed. */
++static int vk_eng_pipeline_ready(void* user, u32 pipeline, int must_draw)
++{
++    (void)user;
++    if (!pipeline || pipeline > VK_ENG_MAX_PIPE) return 1;
++    vk_eng_pipe* P = &s_epipe[pipeline - 1];
++    if (P->failed) return -1;
++    vk_sa_job* j = P->job;
++    if (!j) return 1;
++    /* A draw inside a ZPASS count: skipped, it would count 0 (vk_occ_*). */
++    if (s_occ_on == 1 && s_occ.enabled) must_draw = 1;
++    pthread_mutex_lock(&s_sa.mu);
++    if (!must_draw) {
++        if (j->state != 2 && s_sa.wait_left_ns) {
++            const u64 t0 = vk_now_ns(), end = t0 + s_sa.wait_left_ns;
++            const struct timespec ts = { (time_t)(end / 1000000000ull), (long)(end % 1000000000ull) };
++            while (j->state != 2)
++                if (pthread_cond_timedwait(&s_sa.done_cv, &s_sa.mu, &ts) != 0) break;   /* ETIMEDOUT */
++            const u64 e = vk_now_ns() - t0;
++            s_sa.wait_left_ns = e < s_sa.wait_left_ns ? s_sa.wait_left_ns - e : 0;
++            s_sa.n.waited++;
++            s_sa.n.waited_ns += e;
++        }
++        const int done = j->state == 2;
++        pthread_mutex_unlock(&s_sa.mu);
++        if (!done) { j->skipped++; s_sa.n.skipped++; return 0; }
++        return vk_sa_harvest(pipeline - 1) ? 1 : -1;
++    }
++    /* Must draw: built here if no worker has started it, else waited for. */
++    const u64 t0 = vk_now_ns();
++    int run_here = 0, waited = 0;
++    if (j->state == 0) { vk_sa_unlink_locked(j); j->state = 1; run_here = 1; }
++    else while (j->state != 2) { pthread_cond_wait(&s_sa.done_cv, &s_sa.mu); waited = 1; }
++    pthread_mutex_unlock(&s_sa.mu);
++    if (run_here) {
++        vk_sa_build(j, s_g.spv, s_g.log, sizeof s_g.log);
++        pthread_mutex_lock(&s_sa.mu);
++        j->state = 2;
++        pthread_mutex_unlock(&s_sa.mu);
++    }
++    if (run_here || waited) { s_sa.n.forced++; s_sa.n.forced_ns += vk_now_ns() - t0; }
++    return vk_sa_harvest(pipeline - 1) ? 1 : -1;
+ }
+ 
+ /* A pixel program with a cube unit declares all sixteen units one by one
+@@ -3053,9 +4198,20 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
+     }
+     vk_eng_pipe* P = &s_epipe[slot];
+     memset(P, 0, sizeof *P);
+-    if (vk_eng_translate(vs_hlsl, RSX_SHADER_STAGE_VERTEX, &P->vs)) return 0;
+-    if (vk_eng_translate(ps_hlsl, RSX_SHADER_STAGE_FRAGMENT, &P->fs)) {
+-        pvkDestroyShaderModule(s_vk.device, P->vs, NULL); memset(P, 0, sizeof *P); return 0;
++    /* RSX_VK_ASYNC_SHADERS: only a pipeline that needs glslang goes to the
++     * workers; with both shaders cached it is made here, as before. */
++    int queued = 0;
++    if (vk_sa_active()) {
++        if (!rsx_hlsl_to_spirv_cached(vs_hlsl, RSX_SHADER_STAGE_VERTEX) ||
++            !rsx_hlsl_to_spirv_cached(ps_hlsl, RSX_SHADER_STAGE_FRAGMENT))
++            queued = vk_sa_submit(slot, vs_hlsl, ps_hlsl);
++        if (!queued) s_sa.n.sync++;
++    }
++    if (!queued) {
++        if (vk_eng_translate(vs_hlsl, RSX_SHADER_STAGE_VERTEX, &P->vs)) return 0;
++        if (vk_eng_translate(ps_hlsl, RSX_SHADER_STAGE_FRAGMENT, &P->fs)) {
++            pvkDestroyShaderModule(s_vk.device, P->vs, NULL); memset(P, 0, sizeof *P); return 0;
++        }
+     }
+     P->rs = *rs;
+     P->nslots = layout->count;
+@@ -3070,11 +4226,13 @@ static u32 vk_eng_pipeline_create(void* user, const char* vs_hlsl, const char* p
  static void vk_eng_pipeline_release(void* user, u32 pipeline)
  {
      (void)user;
 -    if (s_eb_pending) vk_eng_flush();
      if (!pipeline || pipeline > VK_ENG_MAX_PIPE || !s_epipe[pipeline - 1].used) return;
      vk_eng_pipe* P = &s_epipe[pipeline - 1];
++    if (P->job) vk_sa_release(P);         /* still building: never had modules or variants */
 +    /* A submission in flight may still bind it: deferred. The modules only
 +     * matter while a variant is built. */
      for (u32 t = 0; t < VK_ENG_TOPOLOGIES; t++)
@@ -47781,7 +48381,7 @@ index db64302e..76f83a0f 100644
      if (P->vs) pvkDestroyShaderModule(s_vk.device, P->vs, NULL);
      if (P->fs) pvkDestroyShaderModule(s_vk.device, P->fs, NULL);
      memset(P, 0, sizeof *P);
-@@ -3339,13 +4063,15 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
+@@ -3339,13 +4497,15 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
      vk_destroy_image(&s_e2.scratch_depth);
      if (vk_create_image(&s_e2.scratch_depth, s_vk.depth_format, w, h,
                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -47799,7 +48399,7 @@ index db64302e..76f83a0f 100644
      s_e2.scratch_w = w; s_e2.scratch_h = h;
      return s_e2.scratch_depth.view;
  }
-@@ -3429,28 +4155,39 @@ static VkImageView vk_eng_dummy_cube_view(void)
+@@ -3429,28 +4589,39 @@ static VkImageView vk_eng_dummy_cube_view(void)
   * its time blocked on the GPU, the RSX ring drained one draw at a time and the
   * SPU geometry jobs waited for ring space. Batched, a draw takes slices of
   * three ring buffers and a descriptor set from a pool, records into the open
@@ -47852,7 +48452,7 @@ index db64302e..76f83a0f 100644
  
  static int vk_eb_on(void)
  {
-@@ -3471,15 +4208,18 @@ static int vk_eb_on(void)
+@@ -3471,15 +4642,18 @@ static int vk_eb_on(void)
      };
      VkDescriptorPoolCreateInfo pci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                         .maxSets = VK_EB_MAX_SETS, .poolSizeCount = 3, .pPoolSizes = ps };
@@ -47879,7 +48479,7 @@ index db64302e..76f83a0f 100644
      s_eb.on = 1;
      return 1;
  }
-@@ -3489,11 +4229,15 @@ static int vk_eb_on(void)
+@@ -3489,11 +4663,15 @@ static int vk_eb_on(void)
  static void vk_eb_release(void)
  {
      if (s_eb_pending) vk_eng_flush();
@@ -47900,7 +48500,7 @@ index db64302e..76f83a0f 100644
      memset(&s_eb, 0, sizeof s_eb);
      s_eb.on = -1;
  }
-@@ -3515,34 +4259,40 @@ static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src,
+@@ -3515,34 +4693,40 @@ static int vk_eb_upload(VkImage img, VkBufferImageCopy* region, const void* src,
      if (!vk_eb_active()) return -2;
      const VkDeviceSize bytes = (VkDeviceSize)tight * rows;
      if (!bytes || bytes > VK_EB_SB_BYTES) return -2;
@@ -47949,7 +48549,7 @@ index db64302e..76f83a0f 100644
  static VkDeviceSize vk_eb_take(VkDeviceSize* head, VkDeviceSize cap, VkDeviceSize bytes, VkDeviceSize align)
  {
      const VkDeviceSize at = (*head + align - 1u) / align * align;
-@@ -3610,11 +4360,223 @@ static VkDescriptorSet vk_eng_write_descriptors_to(const vk_eng_pipe* P, VkDescr
+@@ -3610,14 +4794,227 @@ static VkDescriptorSet vk_eng_write_descriptors_to(const vk_eng_pipe* P, VkDescr
      return set;
  }
  
@@ -48176,7 +48776,11 @@ index db64302e..76f83a0f 100644
      if (topology < RSX_TOPOLOGY_POINTS || topology > RSX_TOPOLOGY_TRIANGLE_STRIP) return;
      vk_eng_pipe* P = &s_epipe[s_e2.pipeline - 1];
      if (!P->used || stride != P->stride) return;
-@@ -3644,8 +4606,10 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
++    if (P->job || P->failed) return;      /* shaders not built (pipeline_ready decides first) */
+ 
+     /* Targets: every member of a set is target A's size (engine contract). */
+     const u32 n = s_eng_bound.nrt;
+@@ -3644,8 +5041,10 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      VkFramebuffer fb = vk_eng_framebuffer(rp, s_eng_bound.rt, n, dview, dkey, w, h);
      if (!pipe || !rp || !fb) return;
  
@@ -48189,7 +48793,7 @@ index db64302e..76f83a0f 100644
      VkBuffer vbuf = s_vk.vertices.buf, ibuf = s_e2.indices.buf;
      VkDeviceSize voff = 0, ioff = 0;
      VkDescriptorSet set = VK_NULL_HANDLE;
-@@ -3656,23 +4620,23 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3656,23 +5055,23 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
          /* Slices of the rings and a set from the pool; a full one flushes the
           * batch (which empties them all) and the draw takes its slices again. */
          for (int tries = 0; tries < 2; tries++) {
@@ -48222,7 +48826,7 @@ index db64302e..76f83a0f 100644
                      break;
                  }
                  set = VK_NULL_HANDLE;
-@@ -3682,18 +4646,25 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3682,18 +5081,25 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
          }
          if (batched && !set) batched = 0;
      }
@@ -48254,7 +48858,7 @@ index db64302e..76f83a0f 100644
          if (ibytes) {
              if (vk_eng_ensure_indices(ibytes)) return;
              memcpy(s_e2.indices.ptr, indices, (size_t)ibytes);
-@@ -3706,14 +4677,17 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3706,14 +5112,17 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
          if (!set) return;
          if (vk_begin()) return;
      }
@@ -48280,7 +48884,7 @@ index db64302e..76f83a0f 100644
      pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
      VkViewport vp = { 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
      if (s_e2.have_vp && s_e2.vp[2] > 0.0f && s_e2.vp[3] > 0.0f) {
-@@ -3736,19 +4710,47 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
+@@ -3736,19 +5145,47 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
      pvkCmdBindDescriptorSets(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               P->cube_mask ? s_e2.split_pipe_layout : s_g.pipe_layout,
                               0, 1, &set, 0, NULL);
@@ -48335,7 +48939,7 @@ index db64302e..76f83a0f 100644
  static const rsx_draw_backend s_vk_engine_backend = {
      .user                 = NULL,
      .init                 = vk_eng_init,
-@@ -3783,8 +4785,12 @@ static const rsx_draw_backend s_vk_engine_backend = {
+@@ -3783,8 +5220,13 @@ static const rsx_draw_backend s_vk_engine_backend = {
      .readback             = vk_eng_readback,
      .depth_readback       = vk_eng_depth_readback,
      .color_target_write   = vk_eng_color_target_write,
@@ -48344,13 +48948,14 @@ index db64302e..76f83a0f 100644
 +    .readback_begin       = vk_eng_readback_begin,
 +    .depth_as_color       = vk_eng_depth_as_color,
 +    .readback_end         = vk_eng_readback_end,
++    .pipeline_ready       = vk_eng_pipeline_ready,
 +    /* Every upload starts with a full barrier on all earlier work, in this
 +     * submission and the ones before it, so it runs after each earlier draw
 +     * that sampled the old bytes has completed (in GPU order, no wait). */
      .texture_upload_ordered = 1,
  };
  
-@@ -3875,6 +4881,9 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3875,6 +5317,9 @@ static int vk_init_all(u32 width, u32 height, const char* title)
       * have their own); without it every target takes target A's. */
      want.independentBlend = have.independentBlend;
      s_vk.indep_blend_ok = have.independentBlend ? 1 : 0;
@@ -48360,7 +48965,7 @@ index db64302e..76f83a0f 100644
      VkDeviceCreateInfo dci = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                                 .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
                                 .enabledExtensionCount = s_vk.windowed ? 1u : 0u,
-@@ -3894,9 +4903,21 @@ static int vk_init_all(u32 width, u32 height, const char* title)
+@@ -3894,9 +5339,21 @@ static int vk_init_all(u32 width, u32 height, const char* title)
                                          .commandPool = s_vk.pool,
                                          .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
                                          .commandBufferCount = 1 };
@@ -48384,9 +48989,21 @@ index db64302e..76f83a0f 100644
      /* The present's own (see vk_state). */
      VK_CHECK(pvkCreateCommandPool(s_vk.device, &pci, NULL, &s_vk.present_pool), "vkCreateCommandPool");
      cai.commandPool = s_vk.present_pool;
-@@ -3963,9 +4984,22 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+@@ -3961,11 +5418,33 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
+      * pipeline from the guest's programs, so without them it has nothing to
+      * draw with, and the vtable's fixed-function path stays the default.
       * Either way PS3RECOMP_RSX_ENGINE=dispatch|vtable overrides. */
-     rsx_draw_engine_set_backend(&s_vk_engine_backend);
+-    rsx_draw_engine_set_backend(&s_vk_engine_backend);
++    /* RSX_VK_ASYNC_SHADERS=0 (or no glslang): no pipeline_ready, so the
++     * engine runs exactly as before it existed. */
++    static rsx_draw_backend sync_backend;
++    if (s_g.on && vk_sa_wanted()) {
++        rsx_draw_engine_set_backend(&s_vk_engine_backend);
++    } else {
++        sync_backend = s_vk_engine_backend;
++        sync_backend.pipeline_ready = NULL;
++        rsx_draw_engine_set_backend(&sync_backend);
++    }
      rsx_draw_engine_set_default(s_g.on ? 1 : 0);
 -    if (rsx_draw_engine_enabled() && rsx_draw_engine_init(s_vk.width, s_vk.height) == 0)
 +    if (s_g.on && !s_geom.buf &&
@@ -48409,12 +49026,13 @@ index db64302e..76f83a0f 100644
          rsx_set_backend(&s_vulkan_backend);
      VK_LOG("%s path\n", s_vk.eng_active ? "register-file draw engine" : "vtable");
      VK_LOG("offscreen target %ux%u ready, depth format %d (%s)\n",
-@@ -3977,8 +5011,12 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3977,8 +5456,13 @@ void rsx_vulkan_backend_shutdown(void)
  {
      rsx_vulkan_backend_present_finish();   /* a host that began one and quit */
      if (rsx_get_backend() == &s_vulkan_backend) rsx_set_backend(NULL);
 +    if (g_rsx_engine_method_observer == vk_occ_method) g_rsx_engine_method_observer = NULL;
      if (s_vk.eng_active) { rsx_draw_engine_shutdown(); s_vk.eng_active = 0; }
++    vk_sa_shutdown();                      /* no-op unless the engine never shut it down */
      rsx_draw_engine_set_backend(NULL);
 +    g_rsx_engine_geom_base = NULL; g_rsx_engine_geom_bytes = 0;
 +    g_rsx_engine_geom_serial = NULL; g_rsx_engine_geom_draw = NULL;
@@ -48422,7 +49040,7 @@ index db64302e..76f83a0f 100644
      if (s_vk.windowed && s_vk.swapchain && s_vk.presented && s_vk.hold_seconds > 0.0) {
          VK_LOG("holding the last frame on screen for %.1f s "
                 "(Esc or closing the window ends it early)\n", s_vk.hold_seconds);
-@@ -3991,6 +5029,10 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -3991,6 +5475,10 @@ void rsx_vulkan_backend_shutdown(void)
      if (s_vk.windowed || s_vk.window) vk_window_drop(NULL);
      if (s_vk.device) {
          vk_device_idle();
@@ -48433,7 +49051,7 @@ index db64302e..76f83a0f 100644
          vk_guest_shutdown();
          for (int i = 0; i < VK_PIPELINE_SLOTS; i++)
              if (s_vk.pipelines[i]) pvkDestroyPipeline(s_vk.device, s_vk.pipelines[i], NULL);
-@@ -4010,7 +5052,15 @@ void rsx_vulkan_backend_shutdown(void)
+@@ -4010,7 +5498,15 @@ void rsx_vulkan_backend_shutdown(void)
          vk_destroy_image(&s_vk.color);
          vk_destroy_buffer(&s_vk.vertices);
          vk_destroy_buffer(&s_vk.readback);
@@ -48450,7 +49068,7 @@ index db64302e..76f83a0f 100644
          if (s_vk.pool)  pvkDestroyCommandPool(s_vk.device, s_vk.pool, NULL);
          if (s_vk.present_fence) pvkDestroyFence(s_vk.device, s_vk.present_fence, NULL);
          if (s_vk.window_fence)  pvkDestroyFence(s_vk.device, s_vk.window_fence, NULL);
-@@ -4030,10 +5080,19 @@ int rsx_vulkan_backend_pump_messages(void)
+@@ -4030,10 +5526,19 @@ int rsx_vulkan_backend_pump_messages(void)
      if (!s_vk.windowed) return 0;
      int quit = 0;
      SDL_Event e;
@@ -48472,10 +49090,10 @@ index db64302e..76f83a0f 100644
  }
  
 diff --git a/libs/video/rsx_draw_engine.h b/libs/video/rsx_draw_engine.h
-index a25ecc29..7d4562a8 100644
+index a25ecc29..b72ef27c 100644
 --- a/libs/video/rsx_draw_engine.h
 +++ b/libs/video/rsx_draw_engine.h
-@@ -296,6 +296,18 @@ typedef struct rsx_draw_backend {
+@@ -296,6 +296,36 @@ typedef struct rsx_draw_backend {
                                       float depth_value, u8 stencil,
                                       u32 x, u32 y, u32 w, u32 h);
  
@@ -48491,10 +49109,28 @@ index a25ecc29..7d4562a8 100644
 +    u32  (*readback_begin)(void* user, u32 surface, u32 x, u32 y, u32 w, u32 h);
 +    int  (*readback_end)(void* user, u32 ticket, void* out, u32 out_pitch);
 +
++    /* Optional: for a backend whose pipeline_create may hand back a handle
++     * whose shaders are still being built on another thread (the Vulkan
++     * backend's RSX_VK_ASYNC_SHADERS). Called before each draw, after
++     * pipeline_create or the cache returned `pipeline`, and before anything
++     * of the draw is bound. `must_draw` is nonzero when skipping this draw
++     * would lose something rather than show it a frame late: a draw into a
++     * display buffer, a full-screen pass (no depth test, <= 6 vertices), a
++     * depth-only pass (a shadow map), or a draw into a colour target no draw
++     * rendered into last frame (a render-to-texture done once); the backend
++     * adds its own (a draw inside an occlusion count). Then it must finish
++     * the build, here or by waiting for it.
++     * Returns 1 = draw, 0 = skip this draw (still building), -1 = the build
++     * failed: the engine then releases the handle and caches 0 for the key,
++     * exactly as if pipeline_create had returned 0. NULL = every handle is
++     * ready the moment pipeline_create returns it (the engine then does no
++     * bookkeeping for this at all). */
++    int  (*pipeline_ready)(void* user, u32 pipeline, int must_draw);
++
  } rsx_draw_backend;
  
  /* ---- the engine --------------------------------------------------------- */
-@@ -324,6 +336,15 @@ void rsx_draw_engine_shutdown(void);
+@@ -324,6 +354,15 @@ void rsx_draw_engine_shutdown(void);
   * SPU-built command lists bind NV4097 to another subchannel would otherwise
   * write its state into the wrong register bank. */
  void rsx_draw_engine_method(u32 method, u32 arg);
@@ -49080,7 +49716,7 @@ index 81e3cc76..126d70a6 100644
  { (void)e; (void)id; (void)ea; (void)sz; return -1; }
  int spu_run_with_halt(void (*f)(spu_context*), spu_context* c) { (void)f; (void)c; return -1; }
 diff --git a/libs/video/rsx_shader_spirv.cpp b/libs/video/rsx_shader_spirv.cpp
-index 4aa4a176..31ed8bff 100644
+index 4aa4a176..8d0b98dc 100644
 --- a/libs/video/rsx_shader_spirv.cpp
 +++ b/libs/video/rsx_shader_spirv.cpp
 @@ -3,9 +3,9 @@
@@ -49166,7 +49802,7 @@ index 4aa4a176..31ed8bff 100644
      glslang::GlslangToSpv(*program.getIntermediate(lang), spirv, &logger, &opts);
      if (spirv.empty()) {
          put_log(log, log_size, "SPIR-V generation", logger.getAllMessages().c_str());
-@@ -119,7 +155,11 @@ int translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv,
+@@ -119,18 +155,34 @@ int translate(const char* hlsl, int stage, std::vector<unsigned int>& spirv,
  
  /* ---- translation cache ------------------------------------------------- */
  
@@ -49179,15 +49815,30 @@ index 4aa4a176..31ed8bff 100644
  const u32 kCacheMagic = 0x56505352u;   /* "RSPV" */
  /* This file's compile time stands for translate()'s options and the binding
   * contract in rsx_shader_spirv.h: when either changes, this file is rebuilt,
-@@ -131,6 +171,7 @@ struct Cache {
+  * and the files an older build wrote become misses. */
+ const char kTranslatorBuild[24] = __DATE__ " " __TIME__;
+ 
++/* Two locks, since the Vulkan backend translates on worker threads too
++ * (RSX_VK_ASYNC_SHADERS). `lock` covers the map, the stats and the lazily
++ * read settings, and is only ever held for a lookup or an insert -- never
++ * across a file read or a glslang run, so a cached shader is never kept
++ * waiting behind a translation.
++ * `glslang_lock` serializes glslang itself (its process-wide state is not
++ * documented as safe for concurrent compiles); it is taken first when both
++ * are held, never while `lock` is. */
+ struct Cache {
+     std::mutex lock;
++    std::mutex glslang_lock;
      std::unordered_map<std::string, std::vector<unsigned int>> map;
      std::string dir;
      bool dir_read = false;
 +    int fast = -1;                      /* RSX_SPIRV_FAST, read once; -1 unread */
++    u32 gen = 0;                        /* bumped by a reset: a translation begun
++                                         * before one is not kept in the map */
      RsxSpirvCacheStats stats = {};
  };
  
-@@ -150,6 +191,19 @@ const std::string& cache_dir(Cache& c)
+@@ -150,6 +202,19 @@ const std::string& cache_dir(Cache& c)
      return c.dir;
  }
  
@@ -49207,7 +49858,7 @@ index 4aa4a176..31ed8bff 100644
  /* The key is the stage, then the HLSL text. */
  std::string cache_key(const char* hlsl, int stage)
  {
-@@ -171,22 +225,23 @@ std::string cache_path(const std::string& dir, const std::string& key)
+@@ -171,22 +236,23 @@ std::string cache_path(const std::string& dir, const std::string& key)
   * words), key bytes, word count; then the key and the words. */
  const int kHeaderWords = 13;
  
@@ -49235,7 +49886,7 @@ index 4aa4a176..31ed8bff 100644
      bool ok = fread(hdr, sizeof hdr, 1, f) == 1 &&
                memcmp(hdr, want, (kHeaderWords - 1) * sizeof(u32)) == 0 &&
                hdr[kHeaderWords - 1] != 0 && hdr[kHeaderWords - 1] <= (1u << 24);
-@@ -204,7 +259,7 @@ bool cache_load(const std::string& path, const std::string& key,
+@@ -204,7 +270,7 @@ bool cache_load(const std::string& path, const std::string& key,
  }
  
  /* Written under a temporary name and renamed, so a reader never sees half a file. */
@@ -49244,7 +49895,7 @@ index 4aa4a176..31ed8bff 100644
                   const std::vector<unsigned int>& spirv)
  {
      char suffix[48];
-@@ -213,7 +268,7 @@ void cache_store(const std::string& path, const std::string& key,
+@@ -213,7 +279,7 @@ void cache_store(const std::string& path, const std::string& key,
      FILE* f = fopen(tmp.c_str(), "wb");
      if (!f) return;
      u32 hdr[kHeaderWords];
@@ -49253,30 +49904,216 @@ index 4aa4a176..31ed8bff 100644
      bool ok = fwrite(hdr, sizeof hdr, 1, f) == 1 &&
                fwrite(key.data(), 1, key.size(), f) == key.size() &&
                fwrite(spirv.data(), sizeof(u32), spirv.size(), f) == spirv.size();
-@@ -252,14 +307,15 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
-         c.stats.memory_hits++;
-     } else {
-         std::vector<unsigned int> spirv;
-+        const bool fast = fast_mode(c);
-         const std::string& dir = cache_dir(c);
-         const std::string path = dir.empty() ? std::string() : cache_path(dir, key);
--        if (!dir.empty() && cache_load(path, key, spirv)) {
-+        if (!dir.empty() && cache_load(path, key, fast, spirv)) {
-             c.stats.disk_hits++;
-         } else {
--            if (translate(hlsl, stage, spirv, log, log_size)) return -1;
-+            if (translate(hlsl, stage, !fast, spirv, log, log_size)) return -1;
-             c.stats.translations++;
--            if (!dir.empty()) cache_store(path, key, spirv);
-+            if (!dir.empty()) cache_store(path, key, fast, spirv);
-         }
-         it = c.map.emplace(key, std::move(spirv)).first;
+@@ -224,6 +290,28 @@ void cache_store(const std::string& path, const std::string& key,
+     if (!ok || rename(tmp.c_str(), path.c_str()) != 0) remove(tmp.c_str());
+ }
+ 
++/* The words for the caller's buffer. */
++int copy_out(const std::vector<unsigned int>& spirv, u32* words, u32 max_words,
++             u32* out_words, char* log, u32 log_size)
++{
++    if (spirv.size() > max_words) {
++        char n[64];
++        snprintf(n, sizeof n, "%zu words, room for %u", spirv.size(), max_words);
++        put_log(log, log_size, "SPIR-V output too large", n);
++        return -1;
++    }
++    memcpy(words, spirv.data(), spirv.size() * sizeof(u32));
++    *out_words = (u32)spirv.size();
++    return 0;
++}
++
++/* What a miss needs from the cache, read under its lock. */
++struct MissInfo {
++    bool fast;
++    std::string dir;
++    u32 gen;
++};
++
+ } // namespace
+ 
+ extern "C" int rsx_hlsl_to_spirv_available(void) { return 1; }
+@@ -242,36 +330,107 @@ extern "C" int rsx_hlsl_to_spirv(const char* hlsl, int stage,
+         return -1;
      }
-@@ -288,6 +344,7 @@ extern "C" void rsx_hlsl_to_spirv_cache_reset(void)
+ 
+-    /* One lock around the whole lookup and translation: glslang's process
+-     * state is not documented as thread-safe either. */
++    /* Memory, then disk, then glslang; see Cache for the two locks. */
+     Cache& c = cache();
+-    std::lock_guard<std::mutex> guard(c.lock);
+     const std::string key = cache_key(hlsl, stage);
+-    auto it = c.map.find(key);
+-    if (it != c.map.end()) {
+-        c.stats.memory_hits++;
+-    } else {
+-        std::vector<unsigned int> spirv;
+-        const std::string& dir = cache_dir(c);
+-        const std::string path = dir.empty() ? std::string() : cache_path(dir, key);
+-        if (!dir.empty() && cache_load(path, key, spirv)) {
+-            c.stats.disk_hits++;
+-        } else {
+-            if (translate(hlsl, stage, spirv, log, log_size)) return -1;
+-            c.stats.translations++;
+-            if (!dir.empty()) cache_store(path, key, spirv);
++    MissInfo mi;
++    {
++        std::lock_guard<std::mutex> guard(c.lock);
++        auto it = c.map.find(key);
++        if (it != c.map.end()) {
++            c.stats.memory_hits++;
++            return copy_out(it->second, words, max_words, out_words, log, log_size);
+         }
+-        it = c.map.emplace(key, std::move(spirv)).first;
++        mi.fast = fast_mode(c);
++        mi.dir = cache_dir(c);
++        mi.gen = c.gen;
+     }
+-    const std::vector<unsigned int>& spirv = it->second;
+-    if (spirv.size() > max_words) {
+-        char n[64];
+-        snprintf(n, sizeof n, "%zu words, room for %u", spirv.size(), max_words);
+-        put_log(log, log_size, "SPIR-V output too large", n);
+-        return -1;
++    const std::string path = mi.dir.empty() ? std::string() : cache_path(mi.dir, key);
++    std::vector<unsigned int> spirv;
++    if (!mi.dir.empty() && cache_load(path, key, mi.fast, spirv)) {
++        std::lock_guard<std::mutex> guard(c.lock);
++        c.stats.disk_hits++;
++        if (c.gen != mi.gen)
++            return copy_out(spirv, words, max_words, out_words, log, log_size);
++        /* emplace keeps an entry another thread stored meanwhile: first one wins. */
++        auto it = c.map.emplace(key, std::move(spirv)).first;
++        return copy_out(it->second, words, max_words, out_words, log, log_size);
+     }
+-    memcpy(words, spirv.data(), spirv.size() * sizeof(u32));
+-    *out_words = (u32)spirv.size();
++    {
++        std::lock_guard<std::mutex> gl(c.glslang_lock);
++        {
++            /* Another thread may have translated it while this one waited for glslang. */
++            std::lock_guard<std::mutex> guard(c.lock);
++            auto it = c.map.find(key);
++            if (it != c.map.end()) {
++                c.stats.memory_hits++;
++                return copy_out(it->second, words, max_words, out_words, log, log_size);
++            }
++        }
++        if (translate(hlsl, stage, !mi.fast, spirv, log, log_size)) return -1;
++        /* Into the map before glslang is free again, so a thread waiting for the
++         * same shader finds it there instead of translating it a second time. */
++        std::lock_guard<std::mutex> guard(c.lock);
++        c.stats.translations++;
++        if (c.gen == mi.gen) c.map.emplace(key, spirv);
++    }
++    /* The file outside both locks; a reader sees the old file or the whole new one. */
++    if (!mi.dir.empty()) cache_store(path, key, mi.fast, spirv);
++    return copy_out(spirv, words, max_words, out_words, log, log_size);
++}
++
++extern "C" int rsx_hlsl_to_spirv_cached(const char* hlsl, int stage)
++{
++    if (!hlsl) return 0;
++    if (stage != RSX_SHADER_STAGE_VERTEX && stage != RSX_SHADER_STAGE_FRAGMENT) return 0;
++    Cache& c = cache();
++    const std::string key = cache_key(hlsl, stage);
++    MissInfo mi;
++    {
++        std::lock_guard<std::mutex> guard(c.lock);
++        if (c.map.find(key) != c.map.end()) return 1;
++        mi.fast = fast_mode(c);
++        mi.dir = cache_dir(c);
++        mi.gen = c.gen;
++    }
++    if (mi.dir.empty()) return 0;
++    std::vector<unsigned int> spirv;
++    if (!cache_load(cache_path(mi.dir, key), key, mi.fast, spirv)) return 0;
++    std::lock_guard<std::mutex> guard(c.lock);
++    c.stats.disk_hits++;
++    if (c.gen != mi.gen) return 0;      /* reset meanwhile: let the caller ask again */
++    c.map.emplace(key, std::move(spirv));
++    return 1;
++}
++
++extern "C" int rsx_hlsl_to_spirv_prewarm(void)
++{
++    /* The decompilers' shape in miniature: a texture array, a sampler array,
++     * a constant buffer, varyings. glslang builds a builtin symbol table per
++     * stage the first time it parses one; the tables live for the process. */
++    static const char* const kVS =
++        "cbuffer VPConst : register(b0) { float4 c[4]; };\n"
++        "struct VOut { float4 pos : SV_Position; float4 tc0 : TEXCOORD0; };\n"
++        "VOut main(float4 a0 : ATTR0, float4 a8 : ATTR8) {\n"
++        "  VOut o; o.pos = a0 * c[0]; o.tc0 = a8; return o; }\n";
++    static const char* const kPS =
++        "Texture2D rsx_tex[16] : register(t0);\n"
++        "SamplerState rsx_samp[16] : register(s0);\n"
++        "cbuffer PSConstants : register(b1) { float4 k[2]; };\n"
++        "float4 main(float4 pos : SV_Position, float4 tc0 : TEXCOORD0) : SV_Target {\n"
++        "  return rsx_tex[0].Sample(rsx_samp[0], tc0.xy) * k[0]; }\n";
++    Cache& c = cache();
++    bool fast;
++    {
++        std::lock_guard<std::mutex> guard(c.lock);
++        fast = fast_mode(c);
++    }
++    std::lock_guard<std::mutex> gl(c.glslang_lock);
++    std::vector<unsigned int> spirv;
++    char log[512];
++    if (translate(kVS, RSX_SHADER_STAGE_VERTEX, !fast, spirv, log, sizeof log)) return -1;
++    spirv.clear();
++    if (translate(kPS, RSX_SHADER_STAGE_FRAGMENT, !fast, spirv, log, sizeof log)) return -1;
+     return 0;
+ }
+ 
+@@ -287,7 +446,9 @@ extern "C" void rsx_hlsl_to_spirv_cache_reset(void)
+     Cache& c = cache();
      std::lock_guard<std::mutex> guard(c.lock);
      c.map.clear();
++    c.gen++;
      c.dir_read = false;
 +    c.fast = -1;
      c.stats = {};
  }
  
+@@ -313,4 +474,12 @@ extern "C" void rsx_hlsl_to_spirv_cache_stats(RsxSpirvCacheStats* out)
+ 
+ extern "C" void rsx_hlsl_to_spirv_cache_reset(void) {}
+ 
++extern "C" int rsx_hlsl_to_spirv_cached(const char* hlsl, int stage)
++{
++    (void)hlsl; (void)stage;
++    return 0;
++}
++
++extern "C" int rsx_hlsl_to_spirv_prewarm(void) { return -1; }
++
+ #endif
+diff --git a/libs/video/rsx_shader_spirv.h b/libs/video/rsx_shader_spirv.h
+index b9f67f57..d4a3704e 100644
+--- a/libs/video/rsx_shader_spirv.h
++++ b/libs/video/rsx_shader_spirv.h
+@@ -68,6 +68,23 @@ typedef struct RsxSpirvCacheStats {
+ 
+ void rsx_hlsl_to_spirv_cache_stats(RsxSpirvCacheStats* out);
+ 
++/* Thread safety: any thread may call these at any time. A lookup (memory or
++ * disk) never waits behind another thread's glslang run; glslang itself runs
++ * one translation at a time. Two threads asking for the same new shader at
++ * once both get it, and the first one stored is the one kept.
++ *
++ * 1 when the shader is already translated: in memory, or a valid file in the
++ * disk cache (which is then read into memory, so the next rsx_hlsl_to_spirv
++ * for it is a memory hit). 0 when only glslang could make it -- or for bad
++ * arguments, or the stub. Never translates. */
++int rsx_hlsl_to_spirv_cached(const char* hlsl, int stage);
++
++/* Builds glslang's builtin symbol tables (one vertex and one fragment
++ * translation of a tiny shader, ~35 ms on a Steam Deck), which otherwise the
++ * first real translation of each stage pays for. Caches nothing. Meant for a
++ * worker thread at start-up. 0 when both translated, -1 otherwise. */
++int rsx_hlsl_to_spirv_prewarm(void);
++
+ /* Empties the memory cache, zeroes the counters and reads
+  * PS3RECOMP_SPIRV_CACHE again on the next request. Disk files stay. */
+ void rsx_hlsl_to_spirv_cache_reset(void);

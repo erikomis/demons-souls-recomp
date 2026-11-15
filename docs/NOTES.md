@@ -3657,6 +3657,28 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       200 ms+, area load worst 625 ms; game time 0.955 -> 0.980. Screenshots after the load: the same picture.
       The first run after the update recompiles Mesa's pipelines once (new SPIR-V): that run was 9.8 s stalled.
 
+155. **Vulkan: first-seen shaders translated off the render thread -- fix 128's pop-in, as a launcher toggle**
+    - The user (doesn't mind pop-in, others do) asked for fix 128 on Linux as an option. launcher.py: "Compile new
+      shaders in the background (brief pop-in instead of a stutter)", default on -> play.sh DES_ASYNC_SHADERS ->
+      RSX_VK_ASYNC_SHADERS (0 = exactly the synchronous path). play.sh now forwards RSX_* into the container.
+    - rsx_shader_spirv.cpp: the map lock is held only for lookups / inserts; glslang runs under its own lock
+      (serialized), so a cache hit never waits behind a translation; rsx_hlsl_to_spirv_cached (memory or valid
+      disk entry, never translates) and rsx_hlsl_to_spirv_prewarm (glslang's builtin tables at init).
+    - rsx_vulkan_backend.c: vk_eng_pipeline_create builds at once when both shaders are cached (a warm session
+      never pops in); otherwise the slot is queued to 2 workers (RSX_VK_SHADER_WORKERS) that translate and make
+      the shader modules. Engine hook pipeline_ready (optional vtable member; NULL elsewhere): draw, skip, or
+      failed (forgotten like a failed synchronous build). Per-frame wait budget RSX_VK_SHADER_WAIT_US (3000).
+      Never skipped (a queued job is built on the render thread, a started one waited for): display buffers,
+      full-screen passes (no depth test, <= 6 vertices), passes that write no colour (shadow maps, stencil),
+      draws into a target no draw rendered last frame (stricter than D3D12's rule), and draws inside a ZPASS
+      occlusion count (fix 151). "[vk-async]" every 5 s: queued / ready / skipped / waited / sync / forced.
+    - Review (3 lenses + verify): 9 findings, all refuted; the stencil-only pass was made never-skip anyway.
+      Harness tests (scratch): 6 threads x 48 shaders, no duplicate translations, outputs word for word; job
+      lifecycle with random releases / shutdown, TSan + ASan clean.
+    - Boletaria, SPIR-V cache empty, Mesa warm, load + walk + fight: off 44 hitches of 50 ms+, 3.9 s stalled; on 23,
+      2.3 s (the warm-cache level), 0 failed builds, up to \~290 skipped draws per 5 s while new things appear.
+      Screenshot after the load: the same picture.
+
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
 with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:
