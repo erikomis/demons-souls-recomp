@@ -3641,6 +3641,22 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       200,000 jobs each run once, TSan clean. Same scene, SPU_TASK_POOL=0 / 1: 43.6 -> 45.2 fps; the hitches are
       unchanged (57 / 60) -- thread creation was a cost, not the stall.
 
+154. **Guest shaders translated \~5x faster: no SPIR-V legalization (first sight of an area / effect)**
+    - After fix 153 a shader seen for the first time still cost its translation on the render thread. Offline, on
+      the 253 real shaders of the Boletaria scene (the SPIR-V cache files hold the HLSL): 7.1 s in all, median
+      28 ms, max 78 ms; 83-85% of it SPIRV-Tools, running glslang's HLSL legalization pass list (the same 32 passes
+      RegisterLegalizationPasses gives -- reproduced bit for bit).
+    - Legalization exists for opaque objects (textures, samplers) in locals or function parameters; the
+      decompilers keep every texture and sampler global. libs/video/rsx_shader_spirv.cpp translate() now sets
+      SpvOptions.disableOptimizer (RSX_SPIRV_FAST=0 = legalized, word for word as before; the mode is in the
+      cache header's format word, so the two never mix). 253 shaders: 1.35 s, median 4.7 ms. spirv-val (vulkan1.0)
+      passes all 253; RADV's final ISA (VK_KHR_pipeline_executable_properties) is byte-identical for 252, the last
+      the same math scheduled differently (+2 SALU); RADV pipeline creation \~1-2 ms more each.
+    - In game, same build, SPIR-V cache empty, Mesa cache warm, load + walk + fight: legalized 63 hitches of 50 ms+,
+      8.4 s stalled, worst 704 ms, 12 of 200 ms+, area load worst 3011 ms -> fast 44, 3.8 s, worst 197 ms, none of
+      200 ms+, area load worst 625 ms; game time 0.955 -> 0.980. Screenshots after the load: the same picture.
+      The first run after the update recompiles Mesa's pipelines once (new SPIR-V): that run was 9.8 s stalled.
+
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
 with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:
