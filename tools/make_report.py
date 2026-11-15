@@ -20,7 +20,10 @@ KEEP_AROUND_MARK_S = 90            # seconds of recording kept before / after ea
 # error-looking log lines for log_notable.txt; the routine per-wait / per-frame status lines (which carry counters
 # such as "decodefail=0" and "timeout=0") are left out
 NOTABLE = re.compile(r'\berror|\bfail(ed|ure|s)?\b|not found|missing|exception|crash|abort|null-read|exit-chain'
-                     r'|\bwarn|refus|reject|cannot|could not|timed out|\bstall|unsupported(?!=)|unknown', re.I)
+                     r'|\bwarn|refus|reject|cannot|could not|timed out|\bstall|unsupported(?!=)|unknown'
+                     # sound and pad lines that settle GitHub #47 / #48 (NOTES fixes 204, 205)
+                     r'|^\[cellAtrac\]|ran dry|^\[audio-rate\]|^\[cellSail\]|^\[cellPad\] port 0 <-'
+                     r'|^\[live-draw\] texture colour flags', re.I)
 NOT_NOTABLE = re.compile(r'^\[(WAIT|evt|live-draw\] frame)')
 
 

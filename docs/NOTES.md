@@ -3417,6 +3417,59 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       gpu_smoothing=1). If it still happens, add `LD_GPU_WARM=3` in Extra settings, which wins over the box. A
       launcher.ini without gpu_smoothing that has `LD_GPU_WARM=2` in Extra settings gets it moved into the box once.
       Lowering the GPU's power limit is the other workaround.
+204. **An Xbox pad in XInput slot 2-4 drives the game (GitHub #47, 2026-11-15):**
+    - Report: an original wired Xbox 360 pad did nothing in the port (it works elsewhere); an MSI GC30 wireless
+      pad worked; with the MSI unplugged, the 360 pad still did nothing.
+    - Cause: pad_poll_xinput (cellPad.c) made XInput slot i PS3 port i, and the game reads port 0 only. XInput
+      numbers pads in the order Windows found them and keeps the numbers when one goes away. So a pad in slot 1-3
+      (slot 0 empty, or held by a wireless receiver, Steam Input, DS4Windows or another virtual pad) reached a
+      port nothing reads.
+    - Fix: port 0 follows the pad in use: a button, a trigger, or a stick pushed past halfway (a resting or
+      drifting stick does not count). Otherwise it keeps the pad it had, else takes the lowest connected slot.
+      The slot it takes from swaps with port 0, so every pad keeps one port. Rumble goes to the slot behind the
+      port. XInput holds a motor at its last setting, so a slot that changes port is sent that port's current
+      level at once: a rumble running at the swap stops on the old pad and goes on on the new one. The map is
+      built aside and stored once per change, so SetActDirect on another thread never reads a half-built one.
+      One line in the log when it changes: `[cellPad] port 0 <- XInput slot N (follows the pad in use)`. PAD_PORT0_FOLLOW=0 gives
+      the old slot = port. The choice is in libs/input/pad_xi_route.h.
+    - Checked: libs/input/tests/test_pad_xi_route.c runs the real pad_poll_xinput over fake XInput slots. A pad
+      alone in slot 1 is port 0, with its buttons and stick, and rumble reaches slot 1. An idle slot-0 pad loses
+      port 0 to the pad pressed in slot 1 and does not take it back by stick drift. Unplugging falls back.
+      A rumble running when port 0 moves to slot 1 or 2 stops on slot 0 and continues on the new pad, the
+      game's stop reaches it, and polls with no change send nothing.
+      PAD_PORT0_FOLLOW=0 is the old mapping. Built from the patch on a clean base. Not tried with a real second
+      pad (none here).
+
+205. **Sound loop at the start (GitHub #48): logs to settle it (2026-11-15):**
+    - Report (v2026.11.11, i7-4770 4 cores / 8 threads, unlimited fps, 165 Hz, skip-intro): the sound loops
+      right at the start, every run. Not settled from the report. The host output cannot replay a block:
+      cellAudio clears each block after mixing it and drops a backlog over 50 ms. Still open:
+      - the CPU (the synth2 thread at 86-96% of a core from ~37 s; fixes 143-145, which free CPU on exactly
+        such a machine, came after that release);
+      - a late music stream (cellAtrac answers NODATA, and MagicOrchestra's stream handler then stops the loader);
+      - the movies this PC refuses (no MPEG-2 decoder in Windows).
+    - Diagnostics, so the next report shows which:
+      - cellAtracDecode logs its first 16 "frame not received" answers without ATRAC_STREAM_LOG, with bytes
+        received of the file.
+      - tools/make_report.py keeps `[cellAtrac]`, "ran dry", `[audio-rate]`, `[cellSail]` and `[cellPad] port 0 <-`
+        lines in log_notable.txt (the report keeps only 400 head and tail lines of each log).
+    - Asked of the player: update, then compare 60 fps with unlimited, and say what repeats (a short piece or the
+      song restarting).
+
+206. **Shiny bumpy layer on some surfaces (GitHub #46): a log for the texture colour flags (2026-11-15):**
+    - Report: bricks and buckets at the start of Stonefang Tunnel (2-1) have a shiny bumpy layer that RPCS3 does
+      not show. The report predates fixes 146-149 (cube-map face stride, anisotropy).
+    - Lead: the D3D12 path does not apply two per-texture flags that the fragment-program translator supports
+      and the shared draw engine (macOS) applies. These are SET_TEXTURE_ADDRESS gamma (sRGB decode, bits 23:20)
+      and UNSIGNED_REMAP_BIASED (bit 12, normals as -1..1). Every live-draw shader is built with NULL masks. It is
+      not known whether the game sets them on these materials. Applying gamma decode alone would also need the
+      draw engine's sRGB output (shader packer 0x1FEC) to match.
+    - Diagnostic: LD_TEXFLAG_LOG=1 logs the first 64 program/unit pairs that sample a flagged texture:
+      `[live-draw] texture colour flags: fp <loc>:<offset> unit <n> fmt .. gamma .. expand .. wrap .. filter ..
+      remap .. packer .. colour fmt ..`. Log only, nothing changes. It costs a little CPU per draw until its 64 lines are out, then nothing. Next: run at the 2-1 start with it on. Then
+      compare with the macOS build at the same spot, which applies the flags.
+    - Also not applied on Windows: the texture LOD bias (SET_TEXTURE_FILTER bits 12:0). If it is added, it goes
+      into sampler_key at bits 51-63 (anisotropy uses 48-50).
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

@@ -515,10 +515,10 @@ index 02b751b..f83428b 100644
  {
      uint32_t tag_ea = (uint32_t)(uintptr_t)tag;
 diff --git a/libs/codec/cellAtrac.c b/libs/codec/cellAtrac.c
-index 6138658..cde6dd2 100644
+index 6138658..accd63f 100644
 --- a/libs/codec/cellAtrac.c
 +++ b/libs/codec/cellAtrac.c
-@@ -14,16 +14,27 @@
+@@ -14,16 +14,28 @@
   * Game's three tracks: first + fact[0] lands exactly on the last frame
   * boundary of the data chunk, and each loop spans the whole track.
   *
@@ -544,13 +544,14 @@ index 6138658..cde6dd2 100644
  
  #include "cellAtrac.h"
  #include "../../runtime/ppu/ppu_memory.h"
++#include "ps3emu/log_first.h"
  #include "../../third_party/at3_standalone/at3_bridge.h"
  #include <stdio.h>
 +#include <stdlib.h>
  #include <string.h>
  
  #define AT3P_SAMPLES   2048
-@@ -46,6 +57,11 @@ typedef struct {
+@@ -46,6 +58,11 @@ typedef struct {
      s32 loop_num;              /* -1 forever, 0 none, n more laps */
      s32 next_frame;            /* frame the decoder expects next */
      s32 pcm_frame;             /* frame held in pcm[], -1 = none */
@@ -562,7 +563,7 @@ index 6138658..cde6dd2 100644
      float pcm[2][AT3P_SAMPLES];
  } AtracSlot;
  
-@@ -139,6 +155,45 @@ static int decode_frame(AtracSlot* s, s32 k)
+@@ -139,6 +156,45 @@ static int decode_frame(AtracSlot* s, s32 k)
  
  static int looping(const AtracSlot* s) { return s->t.loop_start >= 0 && s->loop_num != 0; }
  
@@ -608,7 +609,7 @@ index 6138658..cde6dd2 100644
  s32 cellAtracSetDataAndGetMemSize(u32 pHandle, u32 pucBufferAddr, u32 uiReadByte,
                                    u32 uiBufferByte, u32 puiWorkMemByte)
  {
-@@ -153,19 +208,29 @@ s32 cellAtracSetDataAndGetMemSize(u32 pHandle, u32 pucBufferAddr, u32 uiReadByte
+@@ -153,19 +209,29 @@ s32 cellAtracSetDataAndGetMemSize(u32 pHandle, u32 pucBufferAddr, u32 uiReadByte
          fprintf(stderr, "[cellAtrac] SetData: not an ATRAC3plus file (0x%08X)\n", (u32)rc);
          return rc;
      }
@@ -646,7 +647,7 @@ index 6138658..cde6dd2 100644
      if (puiWorkMemByte) vm_write32(puiWorkMemByte, 0x1000);
      fprintf(stderr, "[cellAtrac] SetData handle=0x%08X ch=%u frames=%u first=%d end=%d loop=[%d,%d)\n",
              pHandle, t.channels, t.data_bytes / t.block_align, t.first, t.end,
-@@ -196,8 +261,7 @@ s32 cellAtracDeleteDecoder(u32 pHandle)
+@@ -196,8 +262,7 @@ s32 cellAtracDeleteDecoder(u32 pHandle)
  {
      AtracSlot* s = slot_of(pHandle);
      if (!s) return (s32)CELL_ATRAC_ERROR_UNSET_DATA;
@@ -656,21 +657,25 @@ index 6138658..cde6dd2 100644
      return CELL_OK;
  }
  
-@@ -222,6 +286,13 @@ s32 cellAtracDecode(u32 pHandle, u32 pfOutAddr, u32 puiSamples, u32 puiFinishfla
+@@ -222,6 +287,17 @@ s32 cellAtracDecode(u32 pHandle, u32 pfOutAddr, u32 puiSamples, u32 puiFinishfla
      const s32 k = s->pos / AT3P_SAMPLES, at = s->pos - k * AT3P_SAMPLES;
      s32 n = AT3P_SAMPLES - at;
      if (n > limit - s->pos) n = limit - s->pos;
 +    if (k >= frames_received(s)) {   /* streaming: this frame has not arrived yet */
 +        if (puiFinishflag) vm_write32(puiFinishflag, 0);
 +        if (piRemainFrame) vm_write32(piRemainFrame, 0);
-+        if (stream_log()) fprintf(stderr, "[cellAtrac] Decode 0x%08X: frame %d not received (have %d)\n",
-+                                  pHandle, k, frames_received(s));
++        /* The first 16 always (GitHub #48, NOTES fix 205): music that loops or restarts may be the game's
++         * own stream handler reacting to this answer, and a player's log should show whether it came. */
++        static int _nodata = 0;
++        if (stream_log() || PS3_LOG_FIRST(_nodata, 16))
++            fprintf(stderr, "[cellAtrac] Decode 0x%08X: frame %d not received (have %d, %u of %u bytes)\n",
++                    pHandle, k, frames_received(s), s->recv, s->file_bytes);
 +        return (s32)CELL_ATRAC_ERROR_NODATA_IN_BUFFER;
 +    }
      decode_frame(s, k);
      const u32 ch = s->t.channels;
      for (s32 i = 0; i < n; i++)
-@@ -233,14 +304,101 @@ s32 cellAtracDecode(u32 pHandle, u32 pfOutAddr, u32 puiSamples, u32 puiFinishfla
+@@ -233,14 +309,101 @@ s32 cellAtracDecode(u32 pHandle, u32 pfOutAddr, u32 puiSamples, u32 puiFinishfla
      s->pos += n;
      if (puiSamples) vm_write32(puiSamples, (u32)n);
      if (puiFinishflag) vm_write32(puiFinishflag, !looping(s) && s->pos >= s->t.end);
@@ -774,7 +779,7 @@ index 6138658..cde6dd2 100644
      return CELL_OK;
  }
  
-@@ -319,9 +477,12 @@ s32 cellAtracSetLoopNum(u32 pHandle, s32 iLoopNum)
+@@ -319,9 +482,12 @@ s32 cellAtracSetLoopNum(u32 pHandle, s32 iLoopNum)
  
  s32 cellAtracResetPlayPosition(u32 pHandle, u32 uiSample, u32 uiWriteByte)
  {
@@ -5533,7 +5538,7 @@ index 0000000..d9edd4d
 +
 +#endif /* PS3RECOMP_VDEC_MF_H */
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index afdd93d..5cb455a 100644
+index afdd93d..30238b1 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -9,6 +9,23 @@
@@ -5716,10 +5721,14 @@ index afdd93d..5cb455a 100644
 +    if (v > 200) v = 200;
 +    return (int)v;
 +}
-+
+ 
+-/* The two host motor levels (0-65535) for a PS3 actuator request. */
+-static void pad_rumble_levels(u8 small_on, u8 large, u16* lo, u16* hi)
 +static int s_rumble_pct = -1;
 +static int pad_rumble_strength(void)
-+{
+ {
+-    *lo = (u16)(large * 257u);
+-    *hi = small_on ? 0xFFFFu : 0u;
 +    int s = s_rumble_pct;
 +    if (s < 0) {
 +        s = pad_rumble_strength_from(getenv("PS3_RUMBLE"), getenv("PS3_RUMBLE_STRENGTH"));
@@ -5728,15 +5737,11 @@ index afdd93d..5cb455a 100644
 +    }
 +    return s;
 +}
- 
--/* The two host motor levels (0-65535) for a PS3 actuator request. */
--static void pad_rumble_levels(u8 small_on, u8 large, u16* lo, u16* hi)
++
 +/* The two host motor levels (0-65535) for a PS3 actuator request, at `pct`
 + * percent strength. */
 +static void pad_rumble_levels(u8 small_on, u8 large, int pct, u16* lo, u16* hi)
- {
--    *lo = (u16)(large * 257u);
--    *hi = small_on ? 0xFFFFu : 0u;
++{
 +    unsigned long l = (unsigned long)large * 257ul * (unsigned long)pct / 100ul;
 +    unsigned long h = small_on ? 65535ul * (unsigned long)pct / 100ul : 0;
 +    *lo = (u16)(l > 65535ul ? 65535ul : l);
@@ -5927,7 +5932,7 @@ index afdd93d..5cb455a 100644
 +                vk_of[i] = v ? (int)v : 'A' + i;
 +            }
 +        }
-     }
++    }
 +    return vk_of[us_letter - 'A'];
 +}
 +/* Keys for the game layouts (fix 73 review): a key or mouse button that is already down when the
@@ -5946,7 +5951,7 @@ index afdd93d..5cb455a 100644
 +    if (s_key_gate) s_key_stale[vk] = 1;
 +    return !s_key_stale[vk];
 +}
- 
++
 +/* Key bindings of the souls layout (Demon's Souls NOTES fix 103). The defaults are the layout below;
 + * PAD_KEYS="<action>=<key>[+<key>];..." (the launcher's Controls window writes it) replaces an action's keys,
 + * "<action>=" unbinds it. Keys: a letter or digit (by position like the defaults, fix 69, unless
@@ -6005,7 +6010,7 @@ index afdd93d..5cb455a 100644
 +        }
 +        if (!end) break;
 +        e = end + 1;
-+    }
+     }
 +    if (changed) { printf("[cellPad] key bindings: %d action(s) from PAD_KEYS\n", changed); fflush(stdout); }
 +}
 +static int pad_kb_down(int i)
@@ -6053,7 +6058,7 @@ index afdd93d..5cb455a 100644
 +        if (s_kb[i].vk[0] == vk || s_kb[i].vk[1] == vk) b |= s_kb[i].btn;
 +    return b;
 +}
-+
+ 
 +/* Port hotkeys (Demon's Souls god mode, NOTES fix 44): ps3_host_hotkey(vk) is 1 once per press of
 + * vk while the game window is in front (or from PAD_KEY_SCRIPT). Call it from one thread only.
 + * ps3_host_title_suffix(s) shows s after the game window's title ("" = the plain title again); a
@@ -6661,9 +6666,63 @@ index afdd93d..5cb455a 100644
            fflush(stdout); } }
  }
  #endif
-@@ -379,14 +1321,11 @@ static void pad_poll_xinput(void)
+@@ -334,28 +1276,44 @@ static void pad_poll_keyboard(void)
+ #define PAD_EMPTY_RECHECK_MS 1000
+ static unsigned long long s_pad_empty_until[PAD_MAX_HOST_PORTS];
  
-         s_host_state[i].buttons = btns;
++/* Which XInput slot plays as PS3 port 0 (NOTES fix 204, GitHub #47). XInput numbers pads in the order
++ * Windows found them and keeps the numbers when one goes away, so a pad can sit in slot 1-3 with slot 0
++ * empty, or with slot 0 held by a receiver, Steam Input or another virtual pad. Slot i used to be port i,
++ * and a single-player game reads port 0 only: such a pad did nothing. Port 0 now follows the pad last
++ * used (a button, a trigger or a stick pushed past halfway), else the one it had, else the lowest
++ * connected slot; the slot it takes from swaps with port 0, so every pad keeps exactly one port.
++ * PAD_PORT0_FOLLOW=0: slot i = port i, as before. Rumble goes to the slot behind the port. */
++static int s_xi_slot_of_port[PAD_MAX_HOST_PORTS] = {0, 1, 2, 3};
++static int s_xi_port0_slot = -1;
++static int s_xi_follow = -1;   /* PAD_PORT0_FOLLOW, read on the first poll */
++
++#include "pad_xi_route.h"
++
+ static void pad_poll_xinput(void)
+ {
++    if (s_xi_follow < 0) { const char* e = getenv("PAD_PORT0_FOLLOW"); s_xi_follow = !(e && *e == '0'); }
++    const int follow = s_xi_follow;
+     const unsigned long long now = pad_now_ms();
++    PadHostState t[PAD_MAX_HOST_PORTS];
++    int ok[PAD_MAX_HOST_PORTS], act[PAD_MAX_HOST_PORTS];
+     for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
+-        if (s_pad_empty_until[i] && now < s_pad_empty_until[i]) {
+-            s_host_state[i].connected = 0;
++        pad_host_release(&t[i]);
++        ok[i] = act[i] = 0;
++        if (s_pad_empty_until[i] && now < s_pad_empty_until[i])
+             continue;
+-        }
+         XINPUT_STATE state;
+         memset(&state, 0, sizeof(state));
+ 
+         DWORD result = p_xi_get_state ? p_xi_get_state((DWORD)i, &state)
+                                       : ERROR_DEVICE_NOT_CONNECTED;
+         if (result != ERROR_SUCCESS) {
+-            pad_host_release(&s_host_state[i]);
+             s_pad_empty_until[i] = now + PAD_EMPTY_RECHECK_MS
+                                  + (unsigned long long)i * (PAD_EMPTY_RECHECK_MS / PAD_MAX_HOST_PORTS);
+             continue;
+         }
+         s_pad_empty_until[i] = 0;
+-
+-        s_host_state[i].connected = 1;
++        ok[i] = 1;
++        t[i].connected = 1;
+         XINPUT_GAMEPAD* gp = &state.Gamepad;
+ 
+         /* Map XInput buttons to PS3 CELL_PAD_CTRL_* */
+@@ -377,33 +1335,57 @@ static void pad_poll_xinput(void)
+         if (gp->wButtons & XINPUT_GAMEPAD_A)              btns |= CELL_PAD_CTRL_CROSS;
+         if (gp->wButtons & XINPUT_GAMEPAD_X)              btns |= CELL_PAD_CTRL_SQUARE;
+ 
+-        s_host_state[i].buttons = btns;
++        t[i].buttons = btns;
  
 -        /* Analog sticks. PS3 Y axis is inverted vs XInput (up = 0). Reflect about
 -         * 128 (256 - x), NOT 255 - x: the latter turns a centered stick into 127,
@@ -6675,13 +6734,69 @@ index afdd93d..5cb455a 100644
 -        s_host_state[i].analog_ry = (u8)(256 - pad_xinput_stick_to_u8(gp->sThumbRY, PAD_STICK_DEADZONE));
 +        /* Analog sticks, each as one 2-D vector (radial deadzone, Y flipped). */
 +        pad_xinput_stick(gp->sThumbLX, gp->sThumbLY, PAD_STICK_DEADZONE,
-+                         &s_host_state[i].analog_lx, &s_host_state[i].analog_ly);
++                         &t[i].analog_lx, &t[i].analog_ly);
 +        pad_xinput_stick(gp->sThumbRX, gp->sThumbRY, PAD_STICK_DEADZONE,
-+                         &s_host_state[i].analog_rx, &s_host_state[i].analog_ry);
++                         &t[i].analog_rx, &t[i].analog_ry);
  
          /* Triggers */
-         s_host_state[i].trigger_l2 = gp->bLeftTrigger;
-@@ -443,12 +1382,34 @@ static u8 pad_sdl_trigger_to_u8(int raw)
+-        s_host_state[i].trigger_l2 = gp->bLeftTrigger;
+-        s_host_state[i].trigger_r2 = gp->bRightTrigger;
++        t[i].trigger_l2 = gp->bLeftTrigger;
++        t[i].trigger_r2 = gp->bRightTrigger;
+ 
+         /* Pressure-sensitive buttons: XInput has digital only, so 0 or 255 */
+-        s_host_state[i].press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
+-        s_host_state[i].press_down     = (btns & CELL_PAD_CTRL_DOWN)     ? 255 : 0;
+-        s_host_state[i].press_left     = (btns & CELL_PAD_CTRL_LEFT)     ? 255 : 0;
+-        s_host_state[i].press_right    = (btns & CELL_PAD_CTRL_RIGHT)    ? 255 : 0;
+-        s_host_state[i].press_triangle = (btns & CELL_PAD_CTRL_TRIANGLE) ? 255 : 0;
+-        s_host_state[i].press_circle   = (btns & CELL_PAD_CTRL_CIRCLE)   ? 255 : 0;
+-        s_host_state[i].press_cross    = (btns & CELL_PAD_CTRL_CROSS)    ? 255 : 0;
+-        s_host_state[i].press_square   = (btns & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
+-        s_host_state[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
+-        s_host_state[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
++        t[i].press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
++        t[i].press_down     = (btns & CELL_PAD_CTRL_DOWN)     ? 255 : 0;
++        t[i].press_left     = (btns & CELL_PAD_CTRL_LEFT)     ? 255 : 0;
++        t[i].press_right    = (btns & CELL_PAD_CTRL_RIGHT)    ? 255 : 0;
++        t[i].press_triangle = (btns & CELL_PAD_CTRL_TRIANGLE) ? 255 : 0;
++        t[i].press_circle   = (btns & CELL_PAD_CTRL_CIRCLE)   ? 255 : 0;
++        t[i].press_cross    = (btns & CELL_PAD_CTRL_CROSS)    ? 255 : 0;
++        t[i].press_square   = (btns & CELL_PAD_CTRL_SQUARE)   ? 255 : 0;
++        t[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
++        t[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
++        act[i] = pad_xi_state_active(&t[i]);
++    }
++
++    const int p0 = follow ? pad_xi_pick_port0(s_xi_port0_slot, ok, act) : (ok[0] ? 0 : -1);
++    if (p0 >= 0 && p0 != s_xi_port0_slot) {
++        printf("[cellPad] port 0 <- XInput slot %d%s\n", p0,
++               follow ? " (follows the pad in use)" : "");
++        fflush(stdout);
+     }
++    if (p0 >= 0) s_xi_port0_slot = p0;
++    /* The new map is built aside and each entry stored once, so cellPadSetActDirect on another thread never
++     * reads a half-built one. XInput holds the motors at what they were last set to and SetActDirect sends
++     * only changes: a slot that moves to another port gets that port's current level, so the pad that gave
++     * up port 0 stops a rumble still running and the pad that took it gets it. */
++    int map[PAD_MAX_HOST_PORTS];
++    pad_xi_port_map(follow ? s_xi_port0_slot : 0, map);
++    for (int port = 0; port < PAD_MAX_HOST_PORTS; port++) {
++        if (map[port] == s_xi_slot_of_port[port]) continue;
++        s_xi_slot_of_port[port] = map[port];
++        if (p_xi_set_state && ok[map[port]]) {
++            XINPUT_VIBRATION vib;
++            vib.wLeftMotorSpeed  = (WORD)s_rumble[port].lo;
++            vib.wRightMotorSpeed = (WORD)s_rumble[port].hi;
++            p_xi_set_state((DWORD)map[port], &vib);
++        }
++    }
++    for (int port = 0; port < PAD_MAX_HOST_PORTS; port++)
++        s_host_state[port] = t[s_xi_slot_of_port[port]];
+ }
+ 
+ static void pad_init_backend(void)
+@@ -443,12 +1425,34 @@ static u8 pad_sdl_trigger_to_u8(int raw)
      return (u8)val;
  }
  
@@ -6717,7 +6832,7 @@ index afdd93d..5cb455a 100644
      const int on = r->lo || r->hi;
      SDL_GameControllerRumble(gc, r->lo, r->hi, on ? PAD_RUMBLE_HOLD_MS : 0);
      r->sent_ms = on ? pad_now_ms() : 0;
-@@ -562,9 +1523,14 @@ static void pad_sdl_hotplug(int force)
+@@ -562,9 +1566,14 @@ static void pad_sdl_hotplug(int force)
  
  static void pad_poll_sdl2(void)
  {
@@ -6732,7 +6847,7 @@ index afdd93d..5cb455a 100644
      for (int i = 0; i < PAD_MAX_HOST_PORTS; i++) {
          SDL_GameController* gc = s_sdl_controllers[i];
          if (!gc) {
-@@ -575,43 +1541,59 @@ static void pad_poll_sdl2(void)
+@@ -575,43 +1584,59 @@ static void pad_poll_sdl2(void)
  
          s_host_state[i].connected = 1;
  
@@ -6821,7 +6936,7 @@ index afdd93d..5cb455a 100644
  
          /* Pressure: SDL has digital buttons, so 0 or 255 */
          s_host_state[i].press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
-@@ -629,6 +1611,7 @@ static void pad_poll_sdl2(void)
+@@ -629,6 +1654,7 @@ static void pad_poll_sdl2(void)
  
  static void pad_init_backend(void)
  {
@@ -6829,7 +6944,7 @@ index afdd93d..5cb455a 100644
      if (!s_sdl_inited) {
          if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0) {
              /* The game is not always the focused app: on macOS its window
-@@ -643,6 +1626,17 @@ static void pad_init_backend(void)
+@@ -643,6 +1669,17 @@ static void pad_init_backend(void)
               * cared. SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=0 in the
               * environment still wins over this. */
              SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -6847,7 +6962,7 @@ index afdd93d..5cb455a 100644
              SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
          }
          s_sdl_inited = 1;
-@@ -650,6 +1644,11 @@ static void pad_init_backend(void)
+@@ -650,6 +1687,11 @@ static void pad_init_backend(void)
      memset(s_sdl_controllers, 0, sizeof(s_sdl_controllers));
      for (int p = 0; p < PAD_MAX_HOST_PORTS; p++) s_sdl_ids[p] = -1;
  
@@ -6859,7 +6974,7 @@ index afdd93d..5cb455a 100644
      /* Open any controllers already connected */
      pad_sdl_hotplug(1);
  }
-@@ -684,7 +1683,13 @@ static void pad_shutdown_backend(void)
+@@ -684,7 +1726,13 @@ static void pad_shutdown_backend(void)
  static unsigned long long pad_now_ms(void)
  {
  #ifdef _WIN32
@@ -6874,7 +6989,7 @@ index afdd93d..5cb455a 100644
  #else
      struct timespec ts;
      clock_gettime(CLOCK_MONOTONIC, &ts);
-@@ -693,6 +1698,483 @@ static unsigned long long pad_now_ms(void)
+@@ -693,6 +1741,483 @@ static unsigned long long pad_now_ms(void)
  #endif
  }
  
@@ -7358,7 +7473,7 @@ index afdd93d..5cb455a 100644
  static void pad_poll_backend(void)
  {
      static unsigned long long s_last_ms = 0;
-@@ -706,17 +2188,63 @@ static void pad_poll_backend(void)
+@@ -706,17 +2231,63 @@ static void pad_poll_backend(void)
      for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++) s_data_fresh[_i] = 1;
  
  #if PAD_BACKEND_XINPUT
@@ -7424,7 +7539,7 @@ index afdd93d..5cb455a 100644
  /* ---------------------------------------------------------------------------
   * API implementations
   * -----------------------------------------------------------------------*/
-@@ -735,6 +2263,7 @@ s32 cellPadInit(u32 max_connect)
+@@ -735,6 +2306,7 @@ s32 cellPadInit(u32 max_connect)
      if (max_connect == 0 || max_connect > 127)
          return CELL_PAD_ERROR_INVALID_PARAMETER;
  
@@ -7432,7 +7547,7 @@ index afdd93d..5cb455a 100644
      s_pad_initialized = 1;
      s_max_connect = max_connect > CELL_PAD_MAX_PORT_NUM ? CELL_PAD_MAX_PORT_NUM : max_connect;
      memset(s_port_setting, 0, sizeof(s_port_setting));
-@@ -865,6 +2394,7 @@ skip_inject: ;
+@@ -865,6 +2437,7 @@ skip_inject: ;
          len = CELL_PAD_LEN_CHANGE_PRESS_ON;
  
      data->len = len;
@@ -7440,7 +7555,7 @@ index afdd93d..5cb455a 100644
      /* Finalize this call's packet freshness before any injected hold budget
       * advances. len=0 drain reads still build the ordinary payload, but do
       * not consume a PAD_FILE report. See the emission contract below. */
-@@ -875,6 +2405,20 @@ skip_inject: ;
+@@ -875,6 +2448,20 @@ skip_inject: ;
              if (!s_data_fresh[port_no]) data->len = 0;   /* nothing new: end the drain */
              else                        s_data_fresh[port_no] = 0;
          }
@@ -7461,7 +7576,7 @@ index afdd93d..5cb455a 100644
      }
      /* button[0] is reserved and 0 on hardware; button[1] carries the pad mode
       * in its high nibble (0x7) and len/2 in its low one. GH3 drops any packet
-@@ -947,13 +2491,28 @@ skip_inject: ;
+@@ -947,13 +2534,28 @@ skip_inject: ;
                    held[i]--;
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(ev[i].mask & 0xFF);
                    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((ev[i].mask >> 8) & 0xFF);
@@ -7492,7 +7607,7 @@ index afdd93d..5cb455a 100644
      /* PAD_FILE=<path> -- closed-loop input. Each poll, if the file holds a
       * button mask (same encoding as PAD_SCRIPT), press it for a fixed number
       * of positive guest reports and empty the file on admission. A driver
-@@ -967,6 +2526,7 @@ skip_inject: ;
+@@ -967,6 +2569,7 @@ skip_inject: ;
       *   echo 0x0040 4 > pad.txt  # DOWN for 4 reports (menus auto-repeat a
       *                            # long hold; the default is 40)
       */
@@ -7500,7 +7615,7 @@ index afdd93d..5cb455a 100644
      { static int s_pf = -1; static char pf_path[512];
        static unsigned held_mask = 0; static int held_n = 0;
        if (s_pf < 0) { const char* e = getenv("PAD_FILE");
-@@ -978,11 +2538,25 @@ skip_inject: ;
+@@ -978,11 +2581,25 @@ skip_inject: ;
                if (f) {
                    char buf[64]; buf[0] = 0;
                    if (fgets(buf, sizeof buf, f)) {
@@ -7531,7 +7646,7 @@ index afdd93d..5cb455a 100644
                    }
                    fclose(f);
                    if (held_n > 0) { FILE* w = fopen(pf_path, "wb"); if (w) fclose(w); }
-@@ -1015,6 +2589,30 @@ skip_inject: ;
+@@ -1015,6 +2632,30 @@ skip_inject: ;
        if (s_st && pad_clock(s_t0) >= s_from && pad_clock(s_t0) < s_until) { hs->analog_lx = s_v[0]; hs->analog_ly = s_v[1];
                    hs->analog_rx = s_v[2]; hs->analog_ry = s_v[3];
                    hs->connected = 1; }
@@ -7562,7 +7677,7 @@ index afdd93d..5cb455a 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
-@@ -1042,8 +2640,16 @@ skip_inject: ;
+@@ -1042,8 +2683,16 @@ skip_inject: ;
                  fprintf(stderr, "[PADSWEEP] step %d: l=(%u,%u) r=(%u,%u)%c", k,
                          steps[k][0], steps[k][1], steps[k][2], steps[k][3], 10); } }
          } } }
@@ -7581,7 +7696,7 @@ index afdd93d..5cb455a 100644
      data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_X]  = hs->analog_lx;
      data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_Y]  = hs->analog_ly;
  
-@@ -1122,6 +2728,21 @@ emit:
+@@ -1122,6 +2771,21 @@ emit:
       * PAD_ALWAYS_CHANGE=1 restores the old always-a-packet behaviour. */
      {
          unsigned int ea = (unsigned int)(uintptr_t)data_guest;
@@ -7603,7 +7718,7 @@ index afdd93d..5cb455a 100644
          vm_write32((unsigned long long)ea + 0, (unsigned int)data->len);   /* len (s32) */
          for (int _i = 0; _i < CELL_PAD_MAX_CODES; _i++)                    /* button[] u16 */
              vm_write16((unsigned long long)ea + 4 + (unsigned int)_i * 2, data->button[_i]);
-@@ -1395,18 +3016,26 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1395,22 +3059,31 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  
      param = GUEST_PTR(param, CellPadActParam*);
  
@@ -7635,7 +7750,13 @@ index afdd93d..5cb455a 100644
          XINPUT_VIBRATION vib;
          vib.wLeftMotorSpeed  = (WORD)lo;
          vib.wRightMotorSpeed = (WORD)hi;
-@@ -1419,7 +3048,7 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+-        if (p_xi_set_state) p_xi_set_state((DWORD)port_no, &vib);
++        const int slot = port_no < PAD_MAX_HOST_PORTS ? s_xi_slot_of_port[port_no] : (int)port_no;
++        if (p_xi_set_state) p_xi_set_state((DWORD)slot, &vib);
+     }
+ #endif
+ 
+@@ -1419,7 +3092,7 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
      pad_sdl_rumble_send((int)port_no);
      pad_unlock();
  #endif
@@ -8566,6 +8687,270 @@ index 0000000..9b83eda
 +}
 +
 +#endif /* PS3RECOMP_PAD_INPUT_MAP_H */
+diff --git a/libs/input/pad_xi_route.h b/libs/input/pad_xi_route.h
+new file mode 100644
+index 0000000..deb61c1
+--- /dev/null
++++ b/libs/input/pad_xi_route.h
+@@ -0,0 +1,40 @@
++/* Which XInput slot plays as PS3 port 0 (cellPad.c pad_poll_xinput, Demon's Souls NOTES fix 204).
++ * Plain functions over plain arrays, so tests/test_pad_xi_route.c checks them without a pad. */
++#ifndef PAD_XI_ROUTE_H
++#define PAD_XI_ROUTE_H
++
++/* A pad counts as in use while a button or trigger is down or a stick is pushed past about halfway
++ * (after the deadzone): a resting or slightly drifting stick never takes port 0 from the pad in use. */
++#define PAD_XI_ACTIVE_STICK 64
++static int pad_xi_axis_out(unsigned char v) { return v < 128 - PAD_XI_ACTIVE_STICK || v > 128 + PAD_XI_ACTIVE_STICK; }
++static int pad_xi_active(unsigned buttons, unsigned char l2, unsigned char r2,
++                         unsigned char lx, unsigned char ly, unsigned char rx, unsigned char ry)
++{
++    return buttons != 0 || l2 > 30 || r2 > 30 ||
++           pad_xi_axis_out(lx) || pad_xi_axis_out(ly) || pad_xi_axis_out(rx) || pad_xi_axis_out(ry);
++}
++#define pad_xi_state_active(hs) \
++    pad_xi_active((hs)->buttons, (hs)->trigger_l2, (hs)->trigger_r2, \
++                  (hs)->analog_lx, (hs)->analog_ly, (hs)->analog_rx, (hs)->analog_ry)
++
++/* prev: the slot port 0 had (-1: none yet). ok/active: per slot (4). Returns the slot for port 0, -1
++ * if no slot is connected. The pad in use keeps it; another pad in use takes it (lowest first);
++ * nobody in use: the slot it had while still connected, else the lowest connected one. */
++static int pad_xi_pick_port0(int prev, const int ok[4], const int active[4])
++{
++    const int have_prev = prev >= 0 && prev < 4 && ok[prev];
++    if (have_prev && active[prev]) return prev;
++    for (int i = 0; i < 4; i++) if (ok[i] && active[i]) return i;
++    if (have_prev) return prev;
++    for (int i = 0; i < 4; i++) if (ok[i]) return i;
++    return -1;
++}
++
++/* map[port] = slot: port 0 and the port numbered like p0 swap, the rest stay. p0 < 0 or 0: identity. */
++static void pad_xi_port_map(int p0, int map[4])
++{
++    for (int i = 0; i < 4; i++) map[i] = i;
++    if (p0 > 0 && p0 < 4) { map[0] = p0; map[p0] = 0; }
++}
++
++#endif
+diff --git a/libs/input/tests/test_pad_xi_route.c b/libs/input/tests/test_pad_xi_route.c
+new file mode 100644
+index 0000000..325141a
+--- /dev/null
++++ b/libs/input/tests/test_pad_xi_route.c
+@@ -0,0 +1,212 @@
++/* cellPad's XInput slots -> PS3 ports (Demon's Souls NOTES fix 204, GitHub #47): a pad that XInput put
++ * in slot 1-3 drives port 0 (the one a single-player game reads) when it is the pad in use or the only
++ * one; a pad in use takes port 0 from an idle one (a receiver or virtual pad in slot 0); every pad keeps
++ * exactly one port; rumble reaches the pad behind the port; PAD_PORT0_FOLLOW=0 is the old slot = port.
++ *
++ * Windows only (the XInput backend). From the ps3recomp root:
++ *   clang -std=gnu17 -I include -D_CRT_SECURE_NO_WARNINGS libs/input/tests/test_pad_xi_route.c \
++ *         -o test_pad_xi_route.exe -luser32 && test_pad_xi_route.exe
++ *
++ * No controller is opened: XInputGetState / XInputSetState are fakes over four slots.
++ */
++#include "../cellPad.c"
++#include <assert.h>
++uint8_t* vm_base;
++uint32_t ppu_vm_size;
++int g_resv_store_active;
++uint32_t g_ww_lo, g_ww_hi;
++void ppu_resv_break_store(uint64_t ea) { (void)ea; }
++void ps3_ww_report_inline(uint32_t a, uint64_t v, int w) { (void)a; (void)v; (void)w; }
++int spu_coh_is_reserved(uint32_t a) { (void)a; return 0; }
++u32 cellGcm_flip_request_count(void) { return 0; }
++void spu_coh_notify_write(uint32_t a) { (void)a; }
++void spu_lockline_lock(void) {}
++void spu_lockline_unlock(void) {}
++volatile long g_osk_host_window_open;   /* the Windows keyboard / mouse layer's links */
++int ps3_host_client_to_guest(int cx, int cy, int cw, int ch, float* gx, float* gy)
++{ (void)cx; (void)cy; (void)cw; (void)ch; (void)gx; (void)gy; return 0; }
++
++/* ---- the fake XInput ---------------------------------------------------------- */
++static int s_plugged[4];
++static XINPUT_GAMEPAD s_gp[4];
++static int s_rumble_slot = -1, s_rumble_calls;
++static WORD s_rumble_lo, s_rumble_hi;
++static DWORD WINAPI fake_get(DWORD i, XINPUT_STATE* st)
++{
++    if (i >= 4 || !s_plugged[i]) return ERROR_DEVICE_NOT_CONNECTED;
++    st->Gamepad = s_gp[i];
++    return ERROR_SUCCESS;
++}
++static WORD s_motor_lo[4], s_motor_hi[4];   /* what each slot's motors were last set to */
++static DWORD WINAPI fake_set(DWORD i, XINPUT_VIBRATION* v)
++{
++    s_rumble_slot = (int)i; s_rumble_calls++;
++    s_rumble_lo = v->wLeftMotorSpeed; s_rumble_hi = v->wRightMotorSpeed;
++    if (i < 4) { s_motor_lo[i] = v->wLeftMotorSpeed; s_motor_hi[i] = v->wRightMotorSpeed; }
++    return ERROR_SUCCESS;
++}
++
++static void reset(int follow)
++{
++    memset(s_plugged, 0, sizeof s_plugged);
++    memset(s_gp, 0, sizeof s_gp);
++    memset(s_pad_empty_until, 0, sizeof s_pad_empty_until);
++    s_xi_port0_slot = -1;
++    for (int i = 0; i < 4; i++) s_xi_slot_of_port[i] = i;
++    _putenv(follow ? "PAD_PORT0_FOLLOW=" : "PAD_PORT0_FOLLOW=0");
++    s_xi_follow = -1;   /* read the variable again */
++}
++/* One poll; empty slots are looked at again at once (the 1 s recheck is a separate concern). */
++static void poll(void) { memset(s_pad_empty_until, 0, sizeof s_pad_empty_until); pad_poll_xinput(); }
++/* Which slot's pad a port shows: each slot's pad holds a distinct right trigger (10 + slot). */
++static int shows(int port)
++{
++    if (!s_host_state[port].connected) return -1;
++    return s_host_state[port].trigger_r2 - 10;
++}
++static void plug(int slot) { s_plugged[slot] = 1; s_gp[slot].bRightTrigger = (BYTE)(10 + slot); }
++
++static void test_pure(void)
++{
++    int ok[4] = {0, 1, 0, 0}, act[4] = {0};
++    assert(pad_xi_pick_port0(-1, ok, act) == 1);           /* only pad in slot 1 */
++    int ok2[4] = {1, 1, 0, 0};
++    assert(pad_xi_pick_port0(-1, ok2, act) == 0);          /* lowest when nobody is in use */
++    int act1[4] = {0, 1, 0, 0};
++    assert(pad_xi_pick_port0(0, ok2, act1) == 1);          /* the pad in use takes it */
++    assert(pad_xi_pick_port0(1, ok2, act) == 1);           /* and keeps it when idle */
++    int act01[4] = {1, 1, 0, 0};
++    assert(pad_xi_pick_port0(1, ok2, act01) == 1);         /* both in use: the holder keeps it */
++    int none[4] = {0};
++    assert(pad_xi_pick_port0(2, none, act) == -1);
++    int map[4];
++    pad_xi_port_map(2, map);  assert(map[0] == 2 && map[1] == 1 && map[2] == 0 && map[3] == 3);
++    pad_xi_port_map(0, map);  assert(map[0] == 0 && map[1] == 1 && map[2] == 2 && map[3] == 3);
++    pad_xi_port_map(-1, map); assert(map[0] == 0 && map[3] == 3);
++    /* resting / drifting sticks are not "in use"; half a push is */
++    assert(!pad_xi_active(0, 0, 0, 128, 128, 128, 128));
++    assert(!pad_xi_active(0, 30, 0, 128 + 64, 128 - 64, 128, 128));
++    assert(pad_xi_active(0, 0, 0, 128 + 65, 128, 128, 128));
++    assert(pad_xi_active(0, 31, 0, 128, 128, 128, 128));
++    assert(pad_xi_active(CELL_PAD_CTRL_CROSS, 0, 0, 128, 128, 128, 128));
++}
++
++static void test_poll(void)
++{
++    p_xi_get_state = fake_get;
++    p_xi_set_state = fake_set;
++    s_xi_tried = 1;
++
++    /* #47: the 360 pad alone in slot 1 (the MSI pad, slot 0, unplugged): it is port 0. */
++    reset(1);
++    plug(1);
++    poll();
++    assert(shows(0) == 1 && shows(1) == -1 && shows(2) == -1 && shows(3) == -1);
++
++    /* Its buttons and sticks come through on port 0. */
++    s_gp[1].wButtons = XINPUT_GAMEPAD_A;
++    s_gp[1].sThumbLY = 32767;
++    poll();
++    assert(shows(0) == 1 && (s_host_state[0].buttons & CELL_PAD_CTRL_CROSS));
++    assert(s_host_state[0].analog_ly < 10);
++
++    /* Rumble on port 0 reaches slot 1. */
++    vm_base = (uint8_t*)VirtualAlloc(NULL, 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
++    assert(vm_base);
++    s_pad_initialized = 1;
++    CellPadActParam* ap = (CellPadActParam*)(vm_base + 0x100);
++    ap->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] = 1;
++    ap->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] = 0;
++    s_rumble_calls = 0;   /* port 0 moving to slot 1 already sent it the port's level (0) */
++    assert(cellPadSetActDirect(0, (CellPadActParam*)(uintptr_t)0x100) == CELL_OK);
++    assert(s_rumble_calls == 1 && s_rumble_slot == 1);
++
++    /* A receiver / virtual pad sitting idle in slot 0, the real pad in slot 1: at first port 0 is the
++     * lowest (slot 0); the moment the real pad is used it takes port 0, and keeps it once idle. The
++     * slot-0 pad moves to port 1: one port each. */
++    reset(1);
++    plug(0); plug(1);
++    poll();
++    assert(shows(0) == 0 && shows(1) == 1);
++    s_gp[1].wButtons = XINPUT_GAMEPAD_START;
++    poll();
++    assert(shows(0) == 1 && shows(1) == 0 && (s_host_state[0].buttons & CELL_PAD_CTRL_START));
++    s_gp[1].wButtons = 0;
++    poll();
++    assert(shows(0) == 1 && shows(1) == 0);
++    /* a slightly drifting stick on the idle pad does not take it back */
++    s_gp[0].sThumbLX = 12000;
++    poll();
++    assert(shows(0) == 1);
++    /* pressing on the other pad does */
++    s_gp[0].wButtons = XINPUT_GAMEPAD_B;
++    poll();
++    assert(shows(0) == 0 && shows(1) == 1);
++    s_gp[0].wButtons = 0; s_gp[0].sThumbLX = 0;
++
++    /* The port-0 pad unplugged: port 0 falls back to the remaining one. */
++    s_gp[1].wButtons = XINPUT_GAMEPAD_X;
++    poll();
++    assert(shows(0) == 1);
++    s_plugged[1] = 0;
++    poll();
++    assert(shows(0) == 0 && shows(1) == -1);
++
++    /* Everything unplugged: port 0 is not connected (the keyboard / virtual pad take over later in the
++     * poll, as before); plugging a pad into slot 3 makes it port 0 again. */
++    s_plugged[0] = 0;
++    poll();
++    assert(shows(0) == -1 && shows(1) == -1 && shows(2) == -1 && shows(3) == -1);
++    plug(3);
++    poll();
++    assert(shows(0) == 3 && shows(3) == -1);
++
++    /* A rumble running when port 0 moves: the pad that gave it up stops, the pad that took it rumbles; the
++     * game's later stop reaches the new pad. Two pads in slots 0 and 1, then slots 0 and 2 (other ports
++     * keep theirs). */
++    for (int other = 1; other <= 2; other++) {
++        reset(1);
++        memset(s_rumble, 0, sizeof s_rumble);
++        memset(s_motor_lo, 0, sizeof s_motor_lo); memset(s_motor_hi, 0, sizeof s_motor_hi);
++        plug(0); plug(other);
++        poll();
++        assert(shows(0) == 0);
++        ap->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] = 0;
++        ap->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] = 200;
++        assert(cellPadSetActDirect(0, (CellPadActParam*)(uintptr_t)0x100) == CELL_OK);
++        assert(s_motor_lo[0] == 200 * 257 && s_motor_lo[other] == 0);
++        s_gp[other].wButtons = XINPUT_GAMEPAD_A;
++        poll();
++        assert(shows(0) == other && shows(other) == 0);
++        assert(s_motor_lo[0] == 0 && s_motor_hi[0] == 0);           /* the old pad stopped */
++        assert(s_motor_lo[other] == 200 * 257);                     /* the new one rumbles */
++        ap->motor[CELL_PAD_ACTUATOR_PARAM_LARGE] = 0;
++        assert(cellPadSetActDirect(0, (CellPadActParam*)(uintptr_t)0x100) == CELL_OK);
++        assert(s_motor_lo[other] == 0 && s_motor_lo[0] == 0);       /* the stop reaches it */
++        s_gp[other].wButtons = 0;
++        /* no needless sends while nothing moves */
++        const int calls = s_rumble_calls;
++        poll(); poll();
++        assert(s_rumble_calls == calls);
++    }
++
++    /* PAD_PORT0_FOLLOW=0: slot = port, as before the fix. */
++    reset(0);
++    plug(1);
++    poll();
++    assert(shows(0) == -1 && shows(1) == 1);
++    s_rumble_calls = 0;
++    s_rumble[1].lo = s_rumble[1].hi = 0;
++    ap->motor[CELL_PAD_ACTUATOR_PARAM_SMALL] = 1;
++    assert(cellPadSetActDirect(1, (CellPadActParam*)(uintptr_t)0x100) == CELL_OK);
++    assert(s_rumble_calls == 1 && s_rumble_slot == 1);
++    _putenv("PAD_PORT0_FOLLOW=");
++}
++
++int main(void)
++{
++    test_pure();
++    test_poll();
++    printf("test_pad_xi_route: ok\n");
++    return 0;
++}
 diff --git a/libs/misc/cellOskDialog.c b/libs/misc/cellOskDialog.c
 index 17e7c67..51a17d2 100644
 --- a/libs/misc/cellOskDialog.c
@@ -11850,7 +12235,7 @@ index de06362..66a3f7e 100644
  
  _Static_assert(sizeof(rsx_host_control) <= RSX_HOST_CONTROL_BYTES, "control page");
 diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
-index 2579117..8bb0bb0 100644
+index 2579117..69a7e62 100644
 --- a/libs/video/rsx_live_draw.c
 +++ b/libs/video/rsx_live_draw.c
 @@ -55,7 +55,10 @@ void rsx_live_draw_present_rgba(const uint8_t* r, u32 w, u32 h) { (void)r; (void
@@ -16442,7 +16827,7 @@ index 2579117..8bb0bb0 100644
      else
          key = fnv1a(fp_uc, fp_size, key);
      if (!key) {
-@@ -4766,8 +8150,56 @@ static ID3D12PipelineState* get_pso(
+@@ -4766,8 +8150,88 @@ static ID3D12PipelineState* get_pso(
      key = fnv1a(&fp_ctrl_key, sizeof(fp_ctrl_key), key);
      key = fnv1a(&cube_mask, sizeof(cube_mask), key);
      key = fnv1a(&vtex_mask, sizeof(vtex_mask), key);
@@ -16494,13 +16879,45 @@ index 2579117..8bb0bb0 100644
 +      } }
 +    if (any_shadow) key = fnv1a(shadow, sizeof shadow, key);
 +    if (any_shadow_sc) key = fnv1a(shadow_sc, sizeof shadow_sc, key);
++    /* LD_TEXFLAG_LOG=1 (GitHub #46, Demon's Souls NOTES fix 206): the per-texture colour flags this path does
++     * not apply yet -- SET_TEXTURE_ADDRESS gamma (sRGB decode, bits 23:20) and UNSIGNED_REMAP_BIASED (bit 12,
++     * -1..1 normals) -- which the shared draw engine (macOS) does apply. Logs the first 64 program/unit pairs
++     * that sample a flagged texture, with the shader packer (0x1FEC, sRGB output) and the colour format, so a
++     * run where a surface looks wrong shows whether the game uses them there. Log only: nothing is changed. */
++    { static int on = -1;
++      if (on < 0) { const char* e = getenv("LD_TEXFLAG_LOG"); on = e && *e == '1'; }
++      static u32 said, seen_n; static u64 seen[64];
++      if (on && said < 64) {
++          u8 gm[RSX_DSP_NUM_TEXTURES] = {0}, em[RSX_DSP_NUM_TEXTURES] = {0};
++          for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++)
++              if (tex[u].enabled) {
++                  gm[u] = rsx_texture_gamma_mask(tex[u].format, tex[u].remap, tex[u].filter, tex[u].wrap);
++                  em[u] = rsx_texture_expand_mask(tex[u].format, tex[u].remap, tex[u].filter, tex[u].wrap);
++              }
++          const u32 gu = rsx_fp_texture_gamma_units(fp_uc, fp_size, gm);
++          const u32 eu = rsx_fp_texture_expand_units(fp_uc, fp_size, em);
++          for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES && said < 64; u++) {
++              if (!((gu | eu) & (1u << u))) continue;
++              const u64 id = ((u64)fp_loc << 63) ^ ((u64)fp_off << 8) ^ u;
++              int dup = 0;
++              for (u32 i = 0; i < seen_n; i++) if (seen[i] == id) { dup = 1; break; }
++              if (dup) continue;
++              if (seen_n < 64) seen[seen_n++] = id;
++              said++;
++              fprintf(stderr, "[live-draw] texture colour flags: fp %u:0x%08X unit %u fmt 0x%02X gamma 0x%X%s "
++                      "expand 0x%X%s wrap 0x%08X filter 0x%08X remap 0x%08X packer 0x%X colour fmt 0x%X\n",
++                      fp_loc, fp_off, u, tex[u].format, gm[u], (gu >> u) & 1 ? "" : "(unused)",
++                      em[u], (eu >> u) & 1 ? "" : "(unused)", tex[u].wrap, tex[u].filter, tex[u].remap,
++                      rsx_dsp_reg(&g.rsx, 0x1FECu), rsx_dsp_reg(&g.rsx, 0x0208u) & 0x1Fu);
++          }
++      } }
      /* BRB/CLB outcomes are baked into the program (rsx_vp_set_branch_bits). */
 -    const int vp_branch_bits_used = rsx_vp_uses_branch_bits(vp_uc, vp_instrs * 16);
 +    const int vp_branch_bits_used = vpm.brb;   /* fix 115: memoised with the program */
      const u32 vp_branch_bits = vp_branch_bits_used ? rsx_dsp_reg(&g.rsx, 0x1FF8u) : 0;
      if (vp_branch_bits_used)
          key = fnv1a(&vp_branch_bits, sizeof(vp_branch_bits), key);
-@@ -4778,7 +8210,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4778,7 +8242,7 @@ static ID3D12PipelineState* get_pso(
      u32 unnorm_mask = 0;
      u32 unnorm_dim[16][3] = {{0}};
      for (u32 uu = 0; uu < 16; uu++) {
@@ -16509,7 +16926,7 @@ index 2579117..8bb0bb0 100644
          if (!ut.enabled || !(ut.format & TEX_FMT_UNNORM)) continue;
          if (!ut.width || !ut.height) continue;
          unnorm_mask |= 1u << uu;
-@@ -4811,6 +8243,12 @@ static ID3D12PipelineState* get_pso(
+@@ -4811,6 +8275,12 @@ static ID3D12PipelineState* get_pso(
      }
      key = fnv1a(&unnorm_mask, sizeof(unnorm_mask), key);
      if (unnorm_mask) key = fnv1a(unnorm_dim, sizeof(unnorm_dim), key);
@@ -16522,7 +16939,7 @@ index 2579117..8bb0bb0 100644
      if (masked_layout) {
          static const u32 masked_layout_tag = 0x314B534Du; /* "MSK1" */
          const u32 payload_stride =
-@@ -4834,8 +8272,7 @@ static ID3D12PipelineState* get_pso(
+@@ -4834,8 +8304,7 @@ static ID3D12PipelineState* get_pso(
  #endif
      g_ld_current_pso.valid = 1;
      g_ld_current_pso.key = key;
@@ -16532,21 +16949,21 @@ index 2579117..8bb0bb0 100644
      g_ld_current_pso.vp_start = start;
      g_ld_current_pso.vp_instrs = vp_instrs;
      g_ld_current_pso.fp_location = fp_loc;
-@@ -4856,17 +8293,17 @@ static ID3D12PipelineState* get_pso(
+@@ -4856,17 +8325,17 @@ static ID3D12PipelineState* get_pso(
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.pso_lookups++;
  #endif
 -    for (u32 i = 0; i < g.n_psos; i++) {
+-#if defined(YZ_PERF_PROFILE)
+-        g_ld_profile.total.pso_probes++;
+-#endif
+-        if (g.psos[i].key == key) {
 +    { const u32 i = ld_pso_find(key);   /* fix 115: hashed index instead of a scan */
 +      if (i != UINT32_MAX) {
  #if defined(YZ_PERF_PROFILE)
--        g_ld_profile.total.pso_probes++;
+-            g_ld_profile.total.pso_hits++;
 +          g_ld_profile.total.pso_hits++;
  #endif
--        if (g.psos[i].key == key) {
--#if defined(YZ_PERF_PROFILE)
--            g_ld_profile.total.pso_hits++;
--#endif
 -            return g.psos[i].pso;
 -        }
 -    }
@@ -16559,7 +16976,7 @@ index 2579117..8bb0bb0 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.pso_misses++;
  #endif
-@@ -4895,9 +8332,21 @@ static ID3D12PipelineState* get_pso(
+@@ -4895,9 +8364,21 @@ static ID3D12PipelineState* get_pso(
      u32 decompiled_constant_count = 0;
      int fi;
      if (ld_fp_constants_buffered()) {
@@ -16584,7 +17001,7 @@ index 2579117..8bb0bb0 100644
          if (fi > 0 &&
              decompiled_constant_count != g.fp_constants.count)
              fi = -1;
-@@ -4930,6 +8379,25 @@ static ID3D12PipelineState* get_pso(
+@@ -4930,6 +8411,25 @@ static ID3D12PipelineState* get_pso(
                  unnorm_dim, cube_mask, 0u) < 0)
              fi = -1;
      }
@@ -16610,7 +17027,7 @@ index 2579117..8bb0bb0 100644
  #if defined(YZ_PERF_PROFILE)
      g_ld_profile.total.decompile_qpc +=
          (u64)(ld_profile_qpc() - decompile_begin);
-@@ -4953,7 +8421,8 @@ static ID3D12PipelineState* get_pso(
+@@ -4953,7 +8453,8 @@ static ID3D12PipelineState* get_pso(
             * only the return still showed nothing for a failing alpha. */
            for (char* d = strstr(ps_hlsl, "discard;"); d; d = strstr(d, "discard;"))
                memcpy(d, "        ", 8);
@@ -16620,7 +17037,7 @@ index 2579117..8bb0bb0 100644
            if (r) {
                char* semi = strchr(r, ';');
                if (semi) {
-@@ -4977,6 +8446,27 @@ static ID3D12PipelineState* get_pso(
+@@ -4977,6 +8478,27 @@ static ID3D12PipelineState* get_pso(
        char* c0 = fc && vi > 0 && (!fk || fk == live_legacy_pso_key())
                   ? strstr(vs_hlsl, "Out.col0 = o[1];") : NULL;
        if (c0) memcpy(c0, "Out.col0=1+0*_p;", 16); }   /* same length, in place */
@@ -16648,7 +17065,7 @@ index 2579117..8bb0bb0 100644
      /* LD_HLSL_DUMP=<dir>: files named by the PSO key the draw CSV prints. */
      { static const char* hd = (const char*)-1;
        if (hd == (const char*)-1) hd = getenv("LD_HLSL_DUMP");
-@@ -4986,14 +8476,42 @@ static ID3D12PipelineState* get_pso(
+@@ -4986,14 +8508,42 @@ static ID3D12PipelineState* get_pso(
          f = fopen(fn, "wb"); if (f) { fputs(vi > 0 ? vs_hlsl : "<vp fail>", f); fclose(f); }
          snprintf(fn, sizeof fn, "%s/hlsl_%016llx.ps.txt", hd, (unsigned long long)live_legacy_pso_key());
          f = fopen(fn, "wb"); if (f) { fputs(fi > 0 ? ps_hlsl : "<fp fail>", f); fclose(f); }
@@ -16696,7 +17113,7 @@ index 2579117..8bb0bb0 100644
      return pso;
  }
  
-@@ -5067,6 +8585,11 @@ static int ld_upload_pixel_constants(u32* out_offset)
+@@ -5067,6 +8617,11 @@ static int ld_upload_pixel_constants(u32* out_offset)
   * -----------------------------------------------------------------------*/
  typedef struct { float a[16][4]; } vtx_t;
  typedef struct { u32 first, count; } batch_t;
@@ -16708,7 +17125,7 @@ index 2579117..8bb0bb0 100644
  
  typedef struct {
      /* INLINE_ARRAY source for this primitive, or NULL. The stream is the
-@@ -5077,8 +8600,8 @@ typedef struct {
+@@ -5077,8 +8632,8 @@ typedef struct {
       * index order, which is what makes the offsets derivable at all (an
       * inline stream carries no per-array offset registers). */
      const u8* inl; u32 inl_bytes, inl_stride; u32 inl_off[16];
@@ -16719,7 +17136,7 @@ index 2579117..8bb0bb0 100644
      u32     n_packets;
      vtx_t*  verts; u32 n_verts, cap_verts;
      rsx_vertex_ref* refs; u32 n_refs, cap_refs;
-@@ -5251,7 +8774,7 @@ static int fetch_attr(u32 i, u32 base, u32 vertex_id, u32 base_index,
+@@ -5251,7 +8806,7 @@ static int fetch_attr(u32 i, u32 base, u32 vertex_id, u32 base_index,
              break;
          case RSX_VTX_TYPE_SNORM16: {
              const s16 v = (s16)((p[c * 2] << 8) | p[c * 2 + 1]);
@@ -16728,7 +17145,7 @@ index 2579117..8bb0bb0 100644
              break;
          }
          case RSX_VTX_TYPE_SINT16: {
-@@ -5423,14 +8946,12 @@ static void fetch_batches_hoisted(
+@@ -5423,14 +8978,12 @@ static void fetch_batches_hoisted(
              dc.fetch_ok = 0;
              return;
          }
@@ -16749,7 +17166,7 @@ index 2579117..8bb0bb0 100644
          }
      } else {
          /*
-@@ -6187,7 +9708,8 @@ static void ld_movie_capture_overlay(void)
+@@ -6187,7 +9740,8 @@ static void ld_movie_capture_overlay(void)
  {
      if (!ld_movie_overlay_ensure()) return;
      const u32 target = current_surface();
@@ -16759,7 +17176,7 @@ index 2579117..8bb0bb0 100644
          g.movie_overlay_valid = 0;
          return;
      }
-@@ -6314,7 +9836,7 @@ static void sink_draw_arrays(void* u, const rsx_dispatch* r, u32 first, u32 coun
+@@ -6314,7 +9868,7 @@ static void sink_draw_arrays(void* u, const rsx_dispatch* r, u32 first, u32 coun
          return;
      }
      dc.n_packets++;
@@ -16768,7 +17185,7 @@ index 2579117..8bb0bb0 100644
      dc.arr[dc.n_arr].first = first; dc.arr[dc.n_arr].count = count; dc.n_arr++;
      g_ld_stats.packets_queued++;
  }
-@@ -6338,7 +9860,7 @@ static void sink_inline_array(void* u, const rsx_dispatch* r,
+@@ -6338,7 +9892,7 @@ static void sink_inline_array(void* u, const rsx_dispatch* r,
  
      dc.inl = data; dc.inl_bytes = bytes; dc.inl_stride = stride;
      dc.n_packets++;
@@ -16777,7 +17194,7 @@ index 2579117..8bb0bb0 100644
      dc.arr[dc.n_arr].first = 0; dc.arr[dc.n_arr].count = bytes / stride;
      dc.n_arr++;
      g_ld_stats.packets_queued++;
-@@ -6352,7 +9874,7 @@ static void sink_draw_index(void* u, const rsx_dispatch* r, u32 first, u32 count
+@@ -6352,7 +9906,7 @@ static void sink_draw_index(void* u, const rsx_dispatch* r, u32 first, u32 count
          return;
      }
      dc.n_packets++;
@@ -16786,7 +17203,7 @@ index 2579117..8bb0bb0 100644
      dc.idx[dc.n_idx].first = first; dc.idx[dc.n_idx].count = count; dc.n_idx++;
      g_ld_stats.packets_queued++;
  }
-@@ -6438,8 +9960,123 @@ static u64 live_decoded_vertex_hash(u64 attr_hash[16])
+@@ -6438,8 +9992,123 @@ static u64 live_decoded_vertex_hash(u64 attr_hash[16])
  static FILE* s_csv_file;
  static int   s_csv_gate_open = 1;
  
@@ -16910,7 +17327,7 @@ index 2579117..8bb0bb0 100644
  #if defined(YZ_PERF_CLEAN) && !defined(YZ_PERF_PROFILE)
      (void)prim;
      (void)n_tri;
-@@ -6450,6 +10087,17 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6450,6 +10119,17 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
      static u64 draw = 0;
      /* RSX_DRAW_CSV_FROM=<frame>: skip rows before that frame. Logging every
       * draw from boot slows a 10-minute run to an hour. */
@@ -16928,7 +17345,7 @@ index 2579117..8bb0bb0 100644
      { static long from = -1;
        if (from < 0) { const char* e = getenv("RSX_DRAW_CSV_FROM"); from = e ? atol(e) : 0; }
        if ((long)g_ld_frames < from) return; }
-@@ -6472,7 +10120,7 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6472,7 +10152,7 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
      }
      if (!inited) {
          inited = 1;
@@ -16937,7 +17354,7 @@ index 2579117..8bb0bb0 100644
          if (path && path[0]) {
              file = fopen(path, "w");
              s_csv_file = file;
-@@ -6509,11 +10157,16 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6509,11 +10189,16 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
        if (dir == (const char*)-1) { dir = getenv("LD_DRAW_DUMP");
            const char* e = getenv("LD_DRAW_DUMP_EVERY"); every = e ? (u32)atoi(e) : 10; if (!every) every = 10; }
        if (frame != g_ld_frames) { frame = g_ld_frames; idx = 0; }
@@ -16957,7 +17374,7 @@ index 2579117..8bb0bb0 100644
            ld_dump_surface_ppm(path, &g.surfaces[target]);
        }
        idx++; }
-@@ -6580,6 +10233,9 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
+@@ -6580,6 +10265,9 @@ static void live_draw_csv_emit(u32 prim, u32 n_tri, const char* outcome)
          fprintf(file, "bf=%X/%X/%X/%X eq=%X/%X ", rs.sf_rgb, rs.df_rgb, rs.sf_a, rs.df_a,
                  rs.eq_rgb, rs.eq_a);
      fprintf(file, "at=%u/0x%X/0x%X ", rs.alpha_test_enable, rs.alpha_func, rs.alpha_ref_raw);
@@ -16967,7 +17384,7 @@ index 2579117..8bb0bb0 100644
      fprintf(file, "sc=%08X/%08X ", rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL), rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL));
      if (rs.stencil_enable)
          fprintf(file, "st=%X/%X/%X/%X/%X/%X ref=%X ", rs.s_func, rs.s_func_mask, rs.s_write_mask, rs.s_fail, rs.s_zfail, rs.s_zpass, rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC + 4));
-@@ -7000,67 +10656,498 @@ static u32 topology_index_count(u32 prim)
+@@ -7000,67 +10688,498 @@ static u32 topology_index_count(u32 prim)
      }
  }
  
@@ -17522,7 +17939,7 @@ index 2579117..8bb0bb0 100644
  }
  
  static void sink_end_impl(void* user, const rsx_dispatch* r)
-@@ -7124,7 +11211,48 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7124,7 +11243,48 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g_ld_profile.total_used_attribute_max = used_layout.count;
      const LONGLONG fetch_pack_begin = ld_profile_qpc();
  #endif
@@ -17572,7 +17989,7 @@ index 2579117..8bb0bb0 100644
          fetch_batches_hoisted(&used_layout, 1);
      } else if (ld_vertex_hoist_fetch()) {
          rsx_vertex_layout_plan legacy_layout;
-@@ -7144,11 +11272,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7144,11 +11304,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      /* Preserve validated occurrence order while allowing repeated compact
       * vertex references to share one fetched and uploaded payload. */
      int indexed = 0;
@@ -17588,7 +18005,7 @@ index 2579117..8bb0bb0 100644
          ? topology_index_count(prim)
          : dc.n_source_refs - dc.n_source_refs % 3;
  
-@@ -7162,16 +11292,83 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7162,16 +11324,83 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      const u32 vertex_stride =
          ld_vertex_compact_payload() ? used_layout.stride : VERT_STRIDE;
      const u32 uploaded_vertices = indexed ? dc.n_verts : n_tri;
@@ -17674,7 +18091,7 @@ index 2579117..8bb0bb0 100644
      if ((u64)g.vb_used + draw_vb_bytes > vb_capacity ||
          (u64)g.ib_used + draw_ib_bytes > INDEX_BUFFER_SIZE) {
          /*
-@@ -7189,17 +11386,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7189,17 +11418,30 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g.srv_ring_used = 0;
          g.smp_ring_used = 0;
      }
@@ -17707,7 +18124,7 @@ index 2579117..8bb0bb0 100644
      if (!pso) {
  #if defined(YZ_PERF_PROFILE)
          ld_profile_note_rejected_pso();
-@@ -7242,7 +11452,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7242,7 +11484,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          return;
      }
  
@@ -17718,7 +18135,7 @@ index 2579117..8bb0bb0 100644
      if (target == LD_INVALID_SURFACE) {
          live_draw_csv_emit(prim, n_tri, "drop_surface");
          g_ld_stats.group_drop_surface++;
-@@ -7346,15 +11558,11 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7346,15 +11590,11 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      u32 mrt[4] = { target, 0, 0, 0 };
      u32 n_mrt = 1;
      {
@@ -17738,7 +18155,7 @@ index 2579117..8bb0bb0 100644
              if (s == LD_INVALID_SURFACE || s == target) break;
              mrt[n_mrt++] = s;
          }
-@@ -7364,13 +11572,18 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7364,13 +11604,18 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          g_ld_a010_probe_touched |= 1ull << target;
      { static u32 last_target = LD_INVALID_SURFACE;
        if (target != last_target) { ld_trace_target("draw", target, 0); last_target = target; } }
@@ -17759,7 +18176,7 @@ index 2579117..8bb0bb0 100644
      u32 slots[SRV_TABLE_SIZE], smp_slots[SMP_TABLE_SIZE];
      u32 surf_used[SRV_TABLE_SIZE], n_surf_used = 0;
      u32 zdepth_used[SRV_TABLE_SIZE], n_zdepth_used = 0;
-@@ -7424,6 +11637,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7424,6 +11669,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
            }
        } }
      for (u32 u = 0; u < SRV_TABLE_SIZE; u++) {
@@ -17770,7 +18187,7 @@ index 2579117..8bb0bb0 100644
          rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
          /* LD_PS1_BUF0=1 -- DIAGNOSTIC, not a fix. Force a 24-bit PS1 VRAM
           * bind at buffer 1 (offset 0x4003C0) to sample buffer 0 (0x400000).
-@@ -7471,13 +11688,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7471,13 +11720,36 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                      zeta_pref = 1;
                      break;
                  }
@@ -17809,7 +18226,7 @@ index 2579117..8bb0bb0 100644
                if (sampled < 0 || sf_i->last_draw_generation > best_gen) {
                    sampled = (int)i;
                    best_gen = sf_i->last_draw_generation;
-@@ -7559,6 +11799,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7559,6 +11831,26 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                    }
                }
            } }
@@ -17836,7 +18253,7 @@ index 2579117..8bb0bb0 100644
          if (sampled < 0 && LD_DIAG_ENABLED("LD_ALIAS_DBG")) {
              static u32 n_dbg = 0;
              if (PS3_LOG_FIRST(n_dbg, 24)) {
-@@ -7576,6 +11836,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7576,6 +11868,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              slots[u] = surface_feedback_srv(target);
              g_ld_bind_surf++;
          } else if (sampled >= 0) {
@@ -17844,7 +18261,7 @@ index 2579117..8bb0bb0 100644
              /* LD_ALIAS_DBG also reports the HIT. A texture that aliases a render
               * surface when it should not is exactly as interesting as one that
               * fails to alias when it should, and only the miss was visible --
-@@ -7641,7 +11902,20 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7641,7 +11934,20 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
                          }
                          break;
                      }
@@ -17866,7 +18283,7 @@ index 2579117..8bb0bb0 100644
                  slots[u] = SRV_ZDEPTH_BASE + sampled_depth;
                  g_ld_zdepth_srv_binds++;
                  int seen = 0;
-@@ -7652,6 +11926,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7652,6 +11958,13 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              } else {
                  slots[u] = texture_srv_slot(&t);
                  if (slots[u] == SRV_WHITE) g_ld_bind_white++; else g_ld_bind_real++;
@@ -17880,7 +18297,7 @@ index 2579117..8bb0bb0 100644
              }
          }
      }
-@@ -7719,35 +12000,54 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7719,35 +12032,54 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              g_ld_stats.implicit_depth_clears++;
          }
      }
@@ -17953,7 +18370,7 @@ index 2579117..8bb0bb0 100644
      float xf[8] = {1, 1, 1, 0, 0, 0, 0, 0};
      if (vp.scale[0] != 0.0f || vp.translate[0] != 0.0f) {
          xf[0] = vp.scale[0] / (Wv * 0.5f);
-@@ -7761,8 +12061,12 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7761,8 +12093,12 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      memcpy(cbdst, g.rsx.constants, RSX_DSP_NUM_CONSTANTS * 16);
      memcpy(cbdst + 512 * 16, xf, sizeof(xf));
  
@@ -17968,7 +18385,7 @@ index 2579117..8bb0bb0 100644
      g.list->lpVtbl->SetGraphicsRootConstantBufferView(
          g.list, 0, g.cb->lpVtbl->GetGPUVirtualAddress(g.cb) + g.cb_used);
      if (ld_fp_constants_buffered())
-@@ -7771,7 +12075,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7771,7 +12107,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              g.ps_cb->lpVtbl->GetGPUVirtualAddress(g.ps_cb) +
                  ps_cb_offset);
      g.list->lpVtbl->SetGraphicsRootDescriptorTable(g.list, 1, table);
@@ -17980,7 +18397,7 @@ index 2579117..8bb0bb0 100644
      if (vtex_mask)
          g.list->lpVtbl->SetGraphicsRootDescriptorTable(
              g.list, 3, vtex_table);
-@@ -7780,8 +12087,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7780,8 +12119,8 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      D3D12_VIEWPORT dvp = {0, 0, W, H, 0.0f, 1.0f};
      D3D12_RECT sc = {
          0, 0,
@@ -17991,7 +18408,7 @@ index 2579117..8bb0bb0 100644
      };
      /* Guest scissor, intersected with the surface rect. The nv40 reset value
       * is a full-window 4096x4096; never-written regs read 0 here, so an
-@@ -7794,9 +12101,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7794,9 +12133,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          const u32 sh = rsx_dsp_reg(&g.rsx, M_SCISSOR_HORIZONTAL);
          const u32 sv = rsx_dsp_reg(&g.rsx, M_SCISSOR_VERTICAL);
          /* The scissor is in pixels too: scale it to the sample grid. */
@@ -18005,7 +18422,7 @@ index 2579117..8bb0bb0 100644
          const int written = g.rsx.seen[M_SCISSOR_HORIZONTAL >> 2] != 0 ||
                              g.rsx.seen[M_SCISSOR_VERTICAL >> 2] != 0;
          if (written) {
-@@ -7808,19 +12116,24 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7808,19 +12148,24 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              if (sc.bottom < sc.top)      sc.bottom = sc.top;
          }
      }
@@ -18036,7 +18453,7 @@ index 2579117..8bb0bb0 100644
      {
          const u64 serial = ++g_ld_recent_draw_total;
          ld_recent_draw* draw =
-@@ -7829,7 +12142,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7829,7 +12174,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          draw->serial = serial;
          draw->frame = g_ld_frames;
          draw->pso_key = g_ld_current_pso.key;
@@ -18048,7 +18465,7 @@ index 2579117..8bb0bb0 100644
          draw->vp_start = g_ld_current_pso.vp_start;
          draw->vp_instrs = g_ld_current_pso.vp_instrs;
          draw->fp_location = g_ld_current_pso.fp_location;
-@@ -7855,32 +12171,37 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7855,32 +12203,37 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
      }
      if (indexed) {
          D3D12_INDEX_BUFFER_VIEW ibv;
@@ -18094,7 +18511,7 @@ index 2579117..8bb0bb0 100644
              z->had_write = 1;
      }
      g_ld_stats.groups_executed++;
-@@ -7899,6 +12220,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7899,6 +12252,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
          bar.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
          g.list->lpVtbl->ResourceBarrier(g.list, 1, &bar);
      }
@@ -18104,7 +18521,7 @@ index 2579117..8bb0bb0 100644
      /* A guest-side failure can occur before the next flip even though useful
       * orphanage draws have already reached internal world targets.  Preserve
       * a few progressively later surface snapshots directly from the draw
-@@ -7937,8 +12261,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+@@ -7937,8 +12293,10 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
              fflush(stderr);
          }
      }
@@ -18117,7 +18534,7 @@ index 2579117..8bb0bb0 100644
      ld_profile_note_ring_highwater();
  }
  
-@@ -8134,10 +12460,10 @@ static int make_depth_snapshot_pipeline(void)
+@@ -8134,10 +12492,10 @@ static int make_depth_snapshot_pipeline(void)
      static const char source[] =
          "Texture2D<float> depth_source : register(t0);\n"
          "RWTexture2D<float> depth_destination : register(u0);\n"
@@ -18130,7 +18547,7 @@ index 2579117..8bb0bb0 100644
          "    if (id.x < width && id.y < height)\n"
          "        depth_destination[id.xy] = "
          "depth_source.Load(int3(id.xy, 0));\n"
-@@ -8167,7 +12493,7 @@ static int make_depth_snapshot_pipeline(void)
+@@ -8167,7 +12525,7 @@ static int make_depth_snapshot_pipeline(void)
      ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
      ranges[1].NumDescriptors = 1;
      ranges[1].BaseShaderRegister = 0;
@@ -18139,7 +18556,7 @@ index 2579117..8bb0bb0 100644
      for (u32 i = 0; i < 2; ++i) {
          parameters[i].ParameterType =
              D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-@@ -8175,8 +12501,14 @@ static int make_depth_snapshot_pipeline(void)
+@@ -8175,8 +12533,14 @@ static int make_depth_snapshot_pipeline(void)
          parameters[i].DescriptorTable.pDescriptorRanges = &ranges[i];
          parameters[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
      }
@@ -18155,7 +18572,7 @@ index 2579117..8bb0bb0 100644
      description.pParameters = parameters;
      ID3DBlob* serialized = NULL;
      ID3DBlob* signature_errors = NULL;
-@@ -8217,7 +12549,248 @@ static int make_depth_snapshot_pipeline(void)
+@@ -8217,7 +12581,248 @@ static int make_depth_snapshot_pipeline(void)
          g.dev, &pipeline, &IID_ID3D12PipelineState,
          (void**)&g.depth_snapshot_pso);
      shader->lpVtbl->Release(shader);
@@ -18405,7 +18822,7 @@ index 2579117..8bb0bb0 100644
  }
  
  int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
-@@ -8339,8 +12912,39 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8339,8 +12944,39 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      ld_enable_dred();
      IDXGIFactory4* factory = NULL;
      if (FAILED(CreateDXGIFactory1(&IID_IDXGIFactory4, (void**)&factory))) return -1;
@@ -18447,7 +18864,7 @@ index 2579117..8bb0bb0 100644
      }
  #if defined(YZ_PERF_PROFILE)
      {
-@@ -8351,6 +12955,10 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8351,6 +12987,10 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
              (void**)&g_ld_profile.adapter);
      }
  #endif
@@ -18458,7 +18875,7 @@ index 2579117..8bb0bb0 100644
      ld_open_info_queue();
      D3D12_COMMAND_QUEUE_DESC qd = {0};
      g.dev->lpVtbl->CreateCommandQueue(g.dev, &qd, &IID_ID3D12CommandQueue, (void**)&g.queue);
-@@ -8362,12 +12970,31 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8362,12 +13002,31 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      if (g.list) g.list->lpVtbl->SetName(g.list, L"rsx-live-list");
      g.dev->lpVtbl->CreateFence(g.dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void**)&g.fence);
      g.fence_event = CreateEventA(NULL, FALSE, FALSE, NULL);
@@ -18491,7 +18908,7 @@ index 2579117..8bb0bb0 100644
      IDXGISwapChain1* sc1 = NULL;
      if (FAILED(factory->lpVtbl->CreateSwapChainForHwnd(factory, (IUnknown*)g.queue,
              (HWND)hwnd, &scd, NULL, NULL, &sc1))) {
-@@ -8375,15 +13002,34 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8375,15 +13034,34 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      }
      sc1->lpVtbl->QueryInterface(sc1, &IID_IDXGISwapChain3, (void**)&g.swap);
      sc1->lpVtbl->Release(sc1);
@@ -18528,7 +18945,7 @@ index 2579117..8bb0bb0 100644
          g.swap->lpVtbl->GetBuffer(g.swap, i, &IID_ID3D12Resource, (void**)&g.backbuf[i]);
          g.dev->lpVtbl->CreateRenderTargetView(g.dev, g.backbuf[i], NULL, rtv_handle(i));
      }
-@@ -8428,7 +13074,9 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8428,7 +13106,9 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
      hd.NumDescriptors = SRV_CPU_HEAP_SLOTS; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
      g.dev->lpVtbl->CreateDescriptorHeap(g.dev, &hd, &IID_ID3D12DescriptorHeap, (void**)&g.srv_cpu_heap);
@@ -18539,7 +18956,7 @@ index 2579117..8bb0bb0 100644
      hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
      g.dev->lpVtbl->CreateDescriptorHeap(g.dev, &hd, &IID_ID3D12DescriptorHeap, (void**)&g.srv_heap);
      g.srv_step = g.dev->lpVtbl->GetDescriptorHandleIncrementSize(g.dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-@@ -8452,6 +13100,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8452,6 +13132,13 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
                  (void*)g.smp_cpu_heap, (void*)g.smp_heap);
          return -1;
      }
@@ -18553,7 +18970,7 @@ index 2579117..8bb0bb0 100644
      {
          D3D12_SAMPLER_DESC def = {0};
          def.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-@@ -8471,7 +13126,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8471,7 +13158,7 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
          D3D12_HEAP_PROPERTIES dhp = {0}; dhp.Type = D3D12_HEAP_TYPE_DEFAULT;
          D3D12_RESOURCE_DESC drd = {0};
          drd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -18562,7 +18979,7 @@ index 2579117..8bb0bb0 100644
          drd.MipLevels = 1; drd.Format = DXGI_FORMAT_D32_FLOAT_S8X24_UINT; drd.SampleDesc.Count = 1;
          drd.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
          D3D12_CLEAR_VALUE dcv = {0}; dcv.Format = drd.Format; dcv.DepthStencil.Depth = 1.0f;
-@@ -8504,7 +13159,18 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+@@ -8504,7 +13191,18 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
      sink.draw_index_array = sink_draw_index;
      sink.flip = sink_flip;
      rsx_dispatch_init(&g.rsx, &sink);
@@ -18581,7 +18998,7 @@ index 2579117..8bb0bb0 100644
      g.ready = 1;
      g.enabled = 1;
      return 0;
-@@ -8540,6 +13206,7 @@ void rsx_live_draw_set_display_buffer(
+@@ -8540,6 +13238,7 @@ void rsx_live_draw_set_display_buffer(
              buffer_id, location, offset, pitch, width, height);
  }
  
@@ -18589,7 +19006,7 @@ index 2579117..8bb0bb0 100644
  void rsx_live_draw_method(u32 method, u32 arg)
  {
      /* Bounded ingress trace for the a010 live-vs-capture comparison.  Keep the
-@@ -8547,10 +13214,10 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8547,10 +13246,10 @@ void rsx_live_draw_method(u32 method, u32 arg)
       * command list binds NV4097 on a different subchannel, feeding the raw
       * 0x2xxx-shifted method into the canonical dispatcher silently stores the
       * state in the wrong register bank. */
@@ -18603,7 +19020,7 @@ index 2579117..8bb0bb0 100644
      if (state_trace && state_trace_lines < 512) {
          const u32 canonical = method & 0x1FFCu;
          const int vertex_texture =
-@@ -8590,7 +13257,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8590,7 +13289,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
                          return;
                      }
                  }
@@ -18612,7 +19029,7 @@ index 2579117..8bb0bb0 100644
                  ReleaseSRWLockExclusive(&g_ld_access_lock);
                  return;
              }
-@@ -8598,7 +13265,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8598,7 +13297,7 @@ void rsx_live_draw_method(u32 method, u32 arg)
              MemoryBarrier();
              if (!g_ld_movie_mode && !g_ld_host_waiting) {
                  if (g.ready)
@@ -18621,7 +19038,7 @@ index 2579117..8bb0bb0 100644
                  InterlockedDecrement(&g_ld_guest_active);
                  return;
              }
-@@ -8612,7 +13279,32 @@ void rsx_live_draw_method(u32 method, u32 arg)
+@@ -8612,7 +13311,32 @@ void rsx_live_draw_method(u32 method, u32 arg)
              g_ld_movie_track_rsx = getenv("RSX_MOVIE_TRACK") ? 1 : 0;
          if (!g_ld_movie_track_rsx) return;
      }
@@ -18655,7 +19072,7 @@ index 2579117..8bb0bb0 100644
  }
  
  void rsx_live_draw_set_movie_mode(int on)
-@@ -8738,6 +13430,10 @@ static u32 g_ld_last_frame_draws = 0;
+@@ -8738,6 +13462,10 @@ static u32 g_ld_last_frame_draws = 0;
   * "presenting fresh content" from "flipping a static image" -- the dead
   * journal-consumer limp state renders ~0 draws/frame while flips tick). */
  u32 rsx_live_draw_get_last_draws(void) { return g_ld_last_frame_draws; }
@@ -18666,7 +19083,7 @@ index 2579117..8bb0bb0 100644
  
  double rsx_live_draw_get_present_fps(void)
  {
-@@ -8929,12 +13625,137 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
+@@ -8929,12 +13657,137 @@ static void ld_dump_texel_rgb(const u8* p, int fp16, u8* out)
   * through here while recording). */
  static FILE* g_ld_record_to;
  
@@ -18806,7 +19223,7 @@ index 2579117..8bb0bb0 100644
      if (!width || !height) return UINT64_MAX;
      const int fp16 = surface->fmt == DXGI_FORMAT_R16G16B16A16_FLOAT;
      const u32 texel = fp16 ? 8u : 4u;
-@@ -9025,6 +13846,183 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+@@ -9025,6 +13878,183 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
      return nonblack;
  }
  
@@ -18990,7 +19407,7 @@ index 2579117..8bb0bb0 100644
  #if !defined(YZ_PERF_CLEAN)
  static void ld_parity_capture_surface(
      const char* directory, const char* phase, u32 serial,
-@@ -9199,6 +14197,78 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
+@@ -9199,6 +14229,78 @@ static void ld_vertex_diag_emit(const char* reason, int dump_surface)
      fflush(stderr);
  }
  
@@ -19069,7 +19486,7 @@ index 2579117..8bb0bb0 100644
  void rsx_live_draw_present(u32 buffer_id)
  {
      if (!g.ready) return;
-@@ -9300,9 +14370,9 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9300,9 +14402,9 @@ void rsx_live_draw_present(u32 buffer_id)
          char path[MAX_PATH * 2];
          snprintf(path, sizeof(path), "%s\\frame_%06u.ppm", dump_dir, dump_n - 1u);
          const u64 nb = ld_dump_surface_ppm(path, &g.surfaces[target]);
@@ -19081,7 +19498,7 @@ index 2579117..8bb0bb0 100644
          fflush(stderr);
      }
      /* LD_RECORD=<out.mp4> (boot_main's --record): every presented frame, as
-@@ -9332,6 +14402,7 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9332,6 +14434,7 @@ void rsx_live_draw_present(u32 buffer_id)
            g_ld_record_to = NULL;
            fflush(rec);
        } }
@@ -19089,7 +19506,7 @@ index 2579117..8bb0bb0 100644
      const u32 current = current_surface();
      surface_t* presented_surface = &g.surfaces[target];
      /* LD_PRESENT_DBG=1: is this surface actually finished? A surface whose last
-@@ -9399,10 +14470,90 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9399,10 +14502,90 @@ void rsx_live_draw_present(u32 buffer_id)
            ld_trace_target("present", target, buffer_id);
            last_present_target = target;
        } }
@@ -19180,7 +19597,7 @@ index 2579117..8bb0bb0 100644
      D3D12_RESOURCE_BARRIER bar[2] = {0};
      bar[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
      bar[0].Transition.pResource = srcimg;
-@@ -9423,10 +14574,124 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9423,10 +14606,124 @@ void rsx_live_draw_present(u32 buffer_id)
      bar[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
      bar[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
      g.list->lpVtbl->ResourceBarrier(g.list, 2, bar);
@@ -19307,7 +19724,7 @@ index 2579117..8bb0bb0 100644
          if (SUCCEEDED(present_hr))
              ld_present_measure_record(g_ld_frames + 1u);
          else {
-@@ -9475,6 +14740,18 @@ void rsx_live_draw_present(u32 buffer_id)
+@@ -9475,6 +14772,18 @@ void rsx_live_draw_present(u32 buffer_id)
        g_ld_last_frame_draws = (u32)(g_ld_stats.packets_seen - packets_at_last_frame);
        packets_at_last_frame = g_ld_stats.packets_seen; }
      g_ld_frames++;
@@ -19326,7 +19743,7 @@ index 2579117..8bb0bb0 100644
  #if defined(YZ_PERF_PROFILE)
      ld_profile_present(g_ld_frames);
  #endif
-@@ -10498,10 +15775,17 @@ void rsx_live_draw_shutdown(void)
+@@ -10498,10 +15807,17 @@ void rsx_live_draw_shutdown(void)
                  (unsigned long long)g_ld_shader_disk_writes[1],
                  (unsigned long long)g_ld_shader_disk_rejects);
      }
@@ -19344,7 +19761,7 @@ index 2579117..8bb0bb0 100644
      for (u32 i = 0; i < g.n_vtex; i++) if (g.vtex[i].tex) g.vtex[i].tex->lpVtbl->Release(g.vtex[i].tex);
      for (u32 i = 0; i < g.n_surfaces; i++) if (g.surfaces[i].tex) g.surfaces[i].tex->lpVtbl->Release(g.surfaces[i].tex);
      for (u32 i = 0; i < g.n_zdepths; i++) {
-@@ -10510,6 +15794,8 @@ void rsx_live_draw_shutdown(void)
+@@ -10510,6 +15826,8 @@ void rsx_live_draw_shutdown(void)
          if (g.zdepths[i].snapshot)
              g.zdepths[i].snapshot->lpVtbl->Release(
                  g.zdepths[i].snapshot);
@@ -19353,7 +19770,7 @@ index 2579117..8bb0bb0 100644
      }
      if (g.movie_upload) g.movie_upload->lpVtbl->Release(g.movie_upload);
      if (g.movie_overlay_readback) g.movie_overlay_readback->lpVtbl->Release(g.movie_overlay_readback);
-@@ -10520,6 +15806,8 @@ void rsx_live_draw_shutdown(void)
+@@ -10520,6 +15838,8 @@ void rsx_live_draw_shutdown(void)
      if (g.ps_cb) g.ps_cb->lpVtbl->Release(g.ps_cb);
      if (g.depth_snapshot_pso)
          g.depth_snapshot_pso->lpVtbl->Release(g.depth_snapshot_pso);
@@ -19362,7 +19779,7 @@ index 2579117..8bb0bb0 100644
      for (u32 i = 0; i < 4; i++)
          if (g.downsample_pso[i]) g.downsample_pso[i]->lpVtbl->Release(g.downsample_pso[i]);
      if (g.downsample_rootsig)
-@@ -10541,6 +15829,7 @@ void rsx_live_draw_shutdown(void)
+@@ -10541,6 +15861,7 @@ void rsx_live_draw_shutdown(void)
  #endif
      if (g.dev) g.dev->lpVtbl->Release(g.dev);
      memset(&g, 0, sizeof(g));
