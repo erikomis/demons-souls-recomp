@@ -3413,8 +3413,10 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
     - The perf log (LD_PRESENT_LOG) gets a line once a second: `gpu <busy%> <idle ms> <max idle ms>
       <idle gaps over 2 ms> <submits> <warm chunks> <warm ms>`, plus `info gpu_warm <level>` at start.
       LD_GPU_TS=1 prints the same line to stderr without a perf log.
-    - Use: put `LD_GPU_WARM=2` in the launcher's extra settings (try 3 if it still happens). Lowering the GPU's
-      power limit is the other workaround.
+    - Use: the launcher's "Smooth GPU power (if your PC switches off)" box (LD_GPU_WARM=2, launcher.ini
+      gpu_smoothing=1). If it still happens, add `LD_GPU_WARM=3` in Extra settings, which wins over the box. A
+      launcher.ini without gpu_smoothing that has `LD_GPU_WARM=2` in Extra settings gets it moved into the box once.
+      Lowering the GPU's power limit is the other workaround.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

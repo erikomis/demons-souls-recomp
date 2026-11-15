@@ -73,6 +73,7 @@ struct Settings {
     bool skip_intro = false;  // DES_SKIP_INTRO: straight to PRESS START
     bool vrr = false;         // DES_VRR: a G-Sync / FreeSync screen (vsync off may tear, 60 fps vsync off)
     int br_souls = 2;         // DES_BR_SOULS: boss rush souls multiplier (BR_SOULS_CHOICES); 2x unless chosen
+    bool gpu_warm = false;    // LD_GPU_WARM=2: GPU power smoothing (NOTES fix 203); other levels by hand
     wstring extra;            // NAME=value NAME=value ...
 };
 static Settings g_set;
@@ -136,6 +137,32 @@ static int ini_int(const wchar_t* k, int def) { return (int)GetPrivateProfileInt
 static void ini_put(const wchar_t* k, const wstring& v) { WritePrivateProfileStringW(L"launcher", k, v.c_str(), g_ini.c_str()); }
 static void ini_put(const wchar_t* k, int v) { ini_put(k, std::to_wstring(v)); }
 
+// Removes an LD_GPU_WARM=2 token from the extra settings and ticks the GPU power smoothing box instead.
+// Any other value (0, 1, 3, 4, junk) stays where it is: typed by hand, it still wins over the box.
+static void take_extra_gpu_warm(Settings& s) {
+    const wstring& t = s.extra;
+    size_t i = 0;
+    while (i < t.size()) {
+        while (i < t.size() && iswspace(t[i])) ++i;
+        size_t j = i;
+        while (j < t.size() && !iswspace(t[j])) ++j;
+        if (j > i) {
+            wstring tok = t.substr(i, j - i);
+            static const wchar_t K[] = L"LD_GPU_WARM=";
+            const size_t kn = wcslen(K);
+            if (tok.size() == kn + 1 && _wcsnicmp(tok.c_str(), K, kn) == 0 && tok[kn] == L'2') {
+                s.gpu_warm = true;
+                size_t a = i, b = j;
+                while (b < t.size() && iswspace(t[b])) ++b;               // the space after it
+                if (b == t.size()) while (a > 0 && iswspace(t[a - 1])) --a;   // last token: the space before it
+                s.extra = t.substr(0, a) + t.substr(b);
+                return;
+            }
+        }
+        i = j;
+    }
+}
+
 static void load_settings() {
     Settings& s = g_set;
     s.fps = std::clamp(ini_int(L"fps", s.fps), 0, (int)FPS_CUSTOM);
@@ -158,6 +185,9 @@ static void load_settings() {
     wchar_t buf[2048];
     GetPrivateProfileStringW(L"launcher", L"extra", L"", buf, 2048, g_ini.c_str());
     s.extra = buf;
+    int warm = ini_int(L"gpu_smoothing", -1);
+    if (warm < 0) take_extra_gpu_warm(s);   // no line yet: LD_GPU_WARM=2 typed in Extra settings (fix 203) ticks it
+    else s.gpu_warm = warm != 0;
     load_keys();
 }
 
@@ -180,6 +210,7 @@ static void save_settings() {
     ini_put(L"skip_intro", s.skip_intro);
     ini_put(L"vrr", s.vrr);
     ini_put(L"boss_rush_souls", s.br_souls);
+    ini_put(L"gpu_smoothing", s.gpu_warm);
     ini_put(L"extra", s.extra);
     save_keys();
 }
@@ -272,6 +303,7 @@ static wstring game_env(const Settings& s) {
     envif(L"DES_NO_REBUILD", s.no_rebuild, L"1");
     envif(L"DES_SKIP_INTRO", s.skip_intro, L"1");
     envif(L"DES_VRR", s.vrr, L"1");
+    envif(L"LD_GPU_WARM", s.gpu_warm, L"2");
     std::vector<std::pair<wstring, wstring>> extra;
     parse_extra(s.extra, &extra, nullptr);
     for (auto& kv : extra)
@@ -393,7 +425,7 @@ static HANDLE start_game(const Settings& s) {
 enum {
     ID_PLAY = IDOK, ID_FPS = 100, ID_CUSTOM, ID_FPS_HINT, ID_RES, ID_SHADOW, ID_GAME0, ID_GAME1, ID_GAME2, ID_GAME3,
     ID_FULLSCREEN, ID_MOVIES, ID_GOD, ID_RECORD, ID_DUMP, ID_LETTER, ID_PIN, ID_NOREBUILD, ID_SKIPINTRO, ID_VRR, ID_EXTRA,
-    ID_UPDATE, ID_REPORT, ID_CONTROLS, ID_FOLDERS, ID_STATUS, ID_BRSOULS,
+    ID_UPDATE, ID_REPORT, ID_CONTROLS, ID_FOLDERS, ID_STATUS, ID_BRSOULS, ID_GPUWARM,
     ID_F_SAVES = 200, ID_F_LOGS, ID_F_PERF, ID_F_REPLACE, ID_F_DUMP, ID_F_CAPTURES, ID_F_MODELS, ID_F_ROOT,
 };
 static const UINT WM_GAME_DONE = WM_APP + 1, WM_UPDATE_CHECKED = WM_APP + 2;
@@ -549,6 +581,7 @@ static void read_controls() {
         int i = (int)SendMessageW(item(ID_BRSOULS), CB_GETCURSEL, 0, 0);
         if (i >= 0 && i < BR_SOULS_N) s.br_souls = BR_SOULS_CHOICES[i];
     }
+    s.gpu_warm = checked(ID_GPUWARM);
     GetWindowTextW(item(ID_EXTRA), b, 2048);
     s.extra = b;
 }
@@ -582,6 +615,7 @@ static void write_controls() {
         SendMessageW(item(ID_BRSOULS), CB_SETCURSEL, sel, 0);
         EnableWindow(item(ID_BRSOULS), game == GAME_BOSS_RUSH);
     }
+    check(ID_GPUWARM, s.gpu_warm);
     SetWindowTextW(item(ID_EXTRA), s.extra.c_str());
     g_loading = false;
     update_fps_hint();
@@ -1269,6 +1303,13 @@ static void create_controls() {
         L"Tick this if your monitor has G-Sync, FreeSync or another variable refresh rate (and it is on). The game "
         L"then lets the monitor follow its frames: 60 fps is smooth at any refresh rate. Without such a monitor "
         L"leave it off: the picture would tear.");
+    y += 26;
+    add(WC_BUTTONW, L"Smooth GPU power (if your PC switches off)", BS_AUTOCHECKBOX | WS_TABSTOP, ID_GPUWARM, L, y, 320, 22,
+        L"Only if your PC switches itself off (or restarts) while the port runs but not in other games. The port's "
+        L"GPU work comes in short bursts, and a big graphics card jumping between idle and full power many times a "
+        L"second can trip a power supply. This fills the gaps with light GPU work so the power draw stays steady. "
+        L"No change to the picture or the frame rate; the card draws more power and runs warmer. If it still "
+        L"happens, put LD_GPU_WARM=3 in Extra settings.");
     y += 34;
 
     label(L"Extra settings", L, y + 3, 92);
@@ -1294,7 +1335,7 @@ static void create_controls() {
     label(L"", L, y, W, 20, ID_STATUS);
 }
 
-static int client_h() { return 12 + banner_h() + 10 + 28 + 40 + 28 + 32 + 30 + 34 + 26 * 5 + 34 + 36 + 54 + 36 + 20 + 12; }
+static int client_h() { return 12 + banner_h() + 10 + 28 + 40 + 28 + 32 + 30 + 34 + 26 * 6 + 34 + 36 + 54 + 36 + 20 + 12; }
 
 static LRESULT CALLBACK wndproc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
     switch (m) {

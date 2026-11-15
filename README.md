@@ -113,7 +113,7 @@ then press Play.
 ## Play
 
 Start **`DemonsSoulsLauncher.exe`** and press **PLAY**. It holds every option (frame rate, resolution, mods,
-fullscreen, movies, god mode, recording, keys by letter, CPU pinning) and saves them in `launcher.ini`.
+fullscreen, movies, god mode, recording, keys by letter, CPU pinning, GPU power smoothing) and saves them in `launcher.ini`.
 *Extra settings* takes any `NAME=value` switch from this page or from an issue. `--play` starts the game
 straight away, for a shortcut. Without the launcher, set the switches before running `PLAY.bat`.
 
@@ -126,6 +126,7 @@ straight away, for a shortcut. Without the launcher, set the switches before run
 | *Dump textures* | `LD_TEX_DUMP=1` | saves every texture drawn, for texture packs |
 | *Skip the intro* | `DES_SKIP_INTRO=1` | starts at PRESS START; story movies still play |
 | *Keep my build after updates* | `DES_NO_REBUILD=1` | plays your current build instead of rebuilding |
+| *Smooth GPU power* | `LD_GPU_WARM=2` (1-4) | only if your PC switches itself off or restarts while the port runs (but not in other games): keeps the GPU's power draw steady between frames so a power supply does not trip. No change to the picture or frame rate; the card draws more power. If it still happens, `LD_GPU_WARM=3` in Extra settings |
 
 Other switches: `DES_MOVIES=0` skips movies, `DES_CUT_BLEND=0` restores the original 30 fps cutscene camera,
 `DES_FULLSCREEN=1` starts fullscreen.
