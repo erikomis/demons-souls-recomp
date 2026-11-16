@@ -104,7 +104,7 @@ static BOOL find_root(void) {
 // ---------------------------------------------------------------------------------------------
 // fps keeps the Windows launcher's numbers (0 Auto, 1 30, 2 50, 3 60, 4 Unlimited, 5 Custom); the Mac
 // build has 60 and 30, so everything but 1 is 60 here and is left as it was in the file unless changed.
-enum { FPS_30 = 1, FPS_60 = 3 };
+enum { FPS_30 = 1, FPS_60 = 3, FPS_UNLIMITED = 4, FPS_CUSTOM = 5 };
 // Game choices: the folder each plays (Boss rush: mac/play.sh makes game_bossrush from game, so game must be there)
 static NSString* const GAME_DIRS[4] = {@"game", @"game_remaster", @"game_mod", @"game"};
 enum { GAME_BOSS_RUSH = 3, GAME_COUNT = 4 };
@@ -120,7 +120,7 @@ enum { N_RES = 4 };
 static NSString* const INPUT_MODES[] = {@"both", @"controller", @"keyboard"};
 
 typedef struct {
-    int fps, size, res, game, input, br_souls;
+    int fps, fps_custom, size, res, game, input, br_souls;
     BOOL movies, god, skip_intro, log;
 } Settings;
 static Settings g_set;
@@ -227,7 +227,12 @@ static void ini_put_int(NSString* k, int v) { ini_put(k, [NSString stringWithFor
 static void load_settings(void) {
     g_ini = [Ini load:g_ini_path];
     Settings* s = &g_set;
-    s->fps = ini_int(@"fps", FPS_60) == FPS_30 ? FPS_30 : FPS_60;
+    {   // 30, Unlimited and Custom as saved; Auto and 50 show as 60 (save_settings keeps them)
+        int f = ini_int(@"fps", FPS_60);
+        s->fps = (f == FPS_30 || f == FPS_UNLIMITED || f == FPS_CUSTOM) ? f : FPS_60;
+        s->fps_custom = ini_int(@"custom_fps", 120);
+        if (s->fps_custom < 31 || s->fps_custom > 240) s->fps_custom = 120;
+    }
     s->game = MAX(0, MIN(GAME_COUNT - 1, ini_int(@"game", 0)));
     s->br_souls = MAX(1, MIN(100, ini_int(@"boss_rush_souls", 2)));   // 2x unless chosen, as the Windows launcher
     s->movies = ini_int(@"movies", 1) != 0;
@@ -257,7 +262,9 @@ static BOOL save_settings(void) {
     const Settings* s = &g_set;
     // 60 keeps a Windows choice the Mac shows as 60 (Auto, 50, Unlimited, Custom) as it was
     int was = ini_int(@"fps", FPS_60);
-    if (s->fps == FPS_30 || was == FPS_30 || ![g_ini get:@"launcher" key:@"fps"]) ini_put_int(@"fps", s->fps);
+    if (s->fps != FPS_60 || was == FPS_30 || was == FPS_UNLIMITED || was == FPS_CUSTOM ||
+        ![g_ini get:@"launcher" key:@"fps"]) ini_put_int(@"fps", s->fps);
+    if (s->fps == FPS_CUSTOM) ini_put_int(@"custom_fps", s->fps_custom);
     ini_put_int(@"game", s->game);
     ini_put_int(@"boss_rush_souls", s->br_souls);
     ini_put_int(@"movies", s->movies);
@@ -346,7 +353,8 @@ static NSString* write_input_map(void) {
 // cleared, so a variable left over in this session does not change what the window says.
 static NSDictionary<NSString*, NSString*>* game_env(const Settings* s) {
     NSMutableDictionary<NSString*, NSString*>* e = [NSProcessInfo.processInfo.environment mutableCopy];
-    e[@"DES_FPS"] = s->fps == FPS_30 ? @"30" : @"60";
+    e[@"DES_FPS"] = s->fps == FPS_30 ? @"30" : s->fps == FPS_UNLIMITED ? @"unlimited"
+                  : s->fps == FPS_CUSTOM ? [NSString stringWithFormat:@"%d", s->fps_custom] : @"60";
     e[@"DES_SIZE"] = [SIZES[s->size] isEqualToString:@"fit"] ? fit_size() : SIZES[s->size];
     [e removeObjectForKey:@"LD_RES_SCALE"];   // it would win over DES_RES_SCALE
     e[@"DES_RES_SCALE"] = RES_ENV[s->res];
@@ -581,7 +589,7 @@ enum { K_SLOT = 1000 };   // a Controls slot button's tag: K_SLOT + action * 2 +
     CGFloat y = 12 + bh + 12;
 
     [self label:@"Frame rate" x:L y:y + 4 w:92 h:20 in:v];
-    _fps = [self popup:@[@"60 fps", @"30 fps (the original game)"] x:X y:y w:240
+    _fps = [self popup:@[@"60 fps", @"30 fps (the original game)", [NSString stringWithFormat:@"%d fps", g_set.fps_custom], @"Unlimited"] x:X y:y w:240
                    tip:@"How many frames a second the game runs at. The game runs at real speed at both." in:v];
     y += 30;
     _fpsHint = [self label:@"" x:X y:y w:W - (X - L) h:34 in:v];
@@ -596,7 +604,7 @@ enum { K_SLOT = 1000 };   // a Controls slot button's tag: K_SLOT + action * 2 +
     [self label:@"Resolution" x:L y:y + 4 w:92 h:20 in:v];
     _res = [self popup:@[@"1x  1280 x 720 (the original)", @"1.5x  1920 x 1080", @"2x  2560 x 1440", @"3x  3840 x 2160"] x:X y:y w:240
                    tip:@"The resolution the game is drawn at, before it is scaled to the window. Higher is sharper and shimmers less; "
-                       @"it costs frame rate (on an M2 Pro in Boletaria: 1x about 58 fps, 1.5x about 47, 2x about 45). Textures and the HUD keep their detail." in:v];
+                       @"it costs GPU time (an M2 Pro holds 60 fps at the Boletarian Palace start up to 3x). Textures and the HUD keep their detail." in:v];
     y += 38;
 
     [self label:@"Game" x:L y:y + 3 w:92 h:20 in:v];
@@ -694,7 +702,7 @@ enum { K_SLOT = 1000 };   // a Controls slot button's tag: K_SLOT + action * 2 +
 
 - (void)writeControls {
     const Settings* s = &g_set;
-    [_fps selectItemAtIndex:s->fps == FPS_30 ? 1 : 0];
+    [_fps selectItemAtIndex:s->fps == FPS_30 ? 1 : s->fps == FPS_CUSTOM ? 2 : s->fps == FPS_UNLIMITED ? 3 : 0];
     [_size selectItemAtIndex:s->size];
     [_res selectItemAtIndex:s->res];
     int game = game_present(s->game) ? s->game : 0;
@@ -717,7 +725,8 @@ enum { K_SLOT = 1000 };   // a Controls slot button's tag: K_SLOT + action * 2 +
 }
 - (void)readControls {
     Settings* s = &g_set;
-    s->fps = _fps.indexOfSelectedItem == 1 ? FPS_30 : FPS_60;
+    { static const int codes[] = { FPS_60, FPS_30, FPS_CUSTOM, FPS_UNLIMITED };
+      s->fps = codes[MAX(0, MIN(3, (int)_fps.indexOfSelectedItem))]; }
     s->size = (int)_size.indexOfSelectedItem;
     s->res = MAX(0, MIN(N_RES - 1, (int)_res.indexOfSelectedItem));
     for (int g = 0; g < GAME_COUNT; g++)
@@ -743,6 +752,8 @@ enum { K_SLOT = 1000 };   // a Controls slot button's tag: K_SLOT + action * 2 +
 - (void)updateHint {
     long hz = NSScreen.mainScreen.maximumFramesPerSecond;
     if (_fps.indexOfSelectedItem == 1) _fpsHint.stringValue = @"The game's original frame rate.";
+    else if (_fps.indexOfSelectedItem >= 2)
+        _fpsHint.stringValue = [NSString stringWithFormat:@"Above 60 nothing paces frames to the screen yet: it can look uneven. Your screen: %ld Hz.", hz];
     else if (hz % 60 == 0)
         _fpsHint.stringValue = [NSString stringWithFormat:@"Twice the original, at real game speed. Your screen goes up to %ld Hz, a multiple of 60.", hz];
     else

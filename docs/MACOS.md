@@ -102,17 +102,19 @@ Settings for `mac/play.sh` on its own, as environment variables:
 | Variable | Effect |
 |---|---|
 | `DES_NAME=<name>` | the character name |
-| `DES_FPS=30` | the console's 30 fps; the default is 60 |
+| `DES_FPS=30`, `unlimited`, `<31-240>` | the console's 30 fps; as fast as the Mac runs it; or a cap of that many fps. The default is 60. Above 60 nothing paces the frames to the screen yet, and the game's speed wavers a little (NOTES fix 302) |
 | `DES_MOVIES=0` | skip the movies; they are on whenever FFmpeg is found |
 | `DES_LOG=1` | the runtime's per-event log; off by default, because it costs frames |
 | `PS3_INPUT_MAP=<file>` | another key layout |
 | `PS3_INPUT_MODE=controller` or `keyboard` | only that input; the default takes both |
 | `DES_SIZE=<w>x<h>` | the window's size (default 1280x720) |
-| `DES_RES_SCALE=1.5`, `2`, `3` | the internal resolution: the game is drawn at that many times 1280x720 and scaled to the window (default 1; quarter steps from 1 to 4). On an M2 Pro in Boletaria: 1x about 58 fps, 1.5x about 47, 2x about 45. `PS3RECOMP_METAL_RES_SHADOWS=1` scales the shadow maps too |
+| `DES_RES_SCALE=1.5`, `2`, `3` | the internal resolution: the game is drawn at that many times 1280x720 and scaled to the window (default 1; quarter steps from 1 to 4). An M2 Pro holds 60 fps at the Boletarian Palace start at 1x, 2x and 3x (NOTES fix 301). `PS3RECOMP_METAL_RES_SHADOWS=1` scales the shadow maps too |
 | `DES_LOG_DIR=<dir>` | where the two logs go (default `logs/`) |
 | `DES_GAME=game_remaster` | the PC Remaster mod's copy instead of `game/` |
 | `DES_BOSS_RUSH=1` | boss rush mode: its own copy of the game (`game_bossrush`, hard links) and its own saves (`bossrush/`); `DES_BR_SOULS=2`, `3`, `5` or `10` multiplies the souls (the launcher picks 2x unless you choose) |
 | `DES_GOD=1`, `DES_SKIP_INTRO=1` | god mode from the start; straight to PRESS START |
+| `SPU_DISPQ_WAIT=0` | the SPU command dispatcher spins while idle instead of sleeping (the old behaviour; about half a core more) |
+| `RSX_ENGINE_FLOAT_DEFER=0` | the exposure read-back waits for the GPU every frame again (before NOTES fix 301), to rule it out |
 | `RSX_ENGINE_VCACHE=0` | turns off the decoded-vertex cache (NOTES fix 136), to rule it out |
 
 The logs go to `logs/last_run_out.txt` and `logs/last_run_err.txt`.

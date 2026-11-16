@@ -13,8 +13,10 @@
 #
 # Settings (environment):
 #   DES_NAME=<name>   the character name the game's on-screen keyboard gets (default "Slayer")
-#   DES_FPS=60|30     the frame rate (default 60, as PLAY.bat on a desktop: the port's 60 fps patch with
-#                     120 Hz vblanks and the guest clock at 200 %; 30 = the console's own rate)
+#   DES_FPS=60|30|unlimited|<31-240>   the frame rate (default 60, as PLAY.bat on a desktop: the port's
+#                     60 fps patch with 120 Hz vblanks and the guest clock at 200 %; 30 = the console's
+#                     own rate; unlimited = as fast as the Mac runs it, a number = that cap, both set
+#                     up as PLAY.bat does. Above 60 nothing paces the frames to the screen yet)
 #   DES_MOVIES=0|1    the movies (MPEG-2) are decoded by FFmpeg, loaded at run time: on by default when
 #                     its libavcodec is found (Homebrew's, or PS3RECOMP_FFMPEG_AVCODEC / _AVUTIL), off
 #                     without it -- the opening movie never ends with no decoder. "brew install ffmpeg"
@@ -68,6 +70,10 @@ export PS3_HDD0_ROOT="${PS3_HDD0_ROOT:-$D/hdd0}" PS3_HDD1_ROOT="${PS3_HDD1_ROOT:
 rm -rf "${PS3_HDD1_ROOT:?}/cache"
 mkdir -p "$PS3_HDD0_ROOT" "$PS3_HDD1_ROOT" "$PS3_DEV_FLASH" "$LOGS"
 export GCM_NO_TITLE_RECYCLE=1 PS3_NP_STRICT_OFFLINE=1 SPU_INTERP_UNLIFTED=1 SPURS_JC_EVENTS=0
+# The SPU command dispatcher sleeps while its queue is empty (NOTES fix 145; off by default outside
+# Windows because it was only measured there). On an M2 Pro: the same 60 fps with about half a core
+# less (NOTES fix 301). SPU_DISPQ_WAIT=0 is the old spin.
+export SPU_DISPQ_WAIT="${SPU_DISPQ_WAIT:-1}"
 export PS3_INPUT_MAP="${PS3_INPUT_MAP:-$D/mac/input.toml}"
 # Translated shaders (HLSL -> SPIR-V -> MSL) kept on disk, as deadpool-recomp's run.sh does: a new
 # material hitches the game the first time it is ever seen, not once per run. macOS keeps the compiled
@@ -92,7 +98,13 @@ if [ "$DES_MOVIES" = 1 ]; then unset PS3_NO_SAIL; else export PS3_NO_SAIL=1; fi
 case "${DES_FPS:-60}" in
   60) export DES_60FPS=1 PS3_VBLANK_HZ=120 PS3_CLOCK_SCALE=200 ;;
   30) unset DES_60FPS PS3_VBLANK_HZ PS3_CLOCK_SCALE ;;
-  *)  die "DES_FPS=$DES_FPS: the macOS build runs at 60 or 30 fps (50 and above 60 need the D3D12 present pacing)." ;;
+  unlimited) export DES_60FPS=1 PS3_VBLANK_HZ=480 PS3_CLOCK_SCALE=200 DES_MAX_FPS=240 ;;
+  *)  # a whole number 31-240, as PLAY.bat's :custom_fps (DES_MAX_FPS lets the game's step go below 1/60 s)
+      case "$DES_FPS" in ''|*[!0-9]*) die "DES_FPS=$DES_FPS: use 30, 60, unlimited, or a whole number from 31 to 240." ;; esac
+      [ "$DES_FPS" -ge 31 ] && [ "$DES_FPS" -le 240 ] || die "DES_FPS=$DES_FPS: use 30, 60, unlimited, or a whole number from 31 to 240."
+      CS=$(( (DES_FPS * 100 + 15) / 30 )); [ $CS -gt 200 ] && CS=200
+      export DES_60FPS=1 PS3_VBLANK_HZ=$(( DES_FPS * 2 )) PS3_CLOCK_SCALE=$CS
+      [ "$DES_FPS" -gt 60 ] && export DES_MAX_FPS="$DES_FPS" ;;
 esac
 if [ "${DES_LOG:-0}" = 1 ]; then export PS3_VERBOSE=1; else export PS3_VERBOSE="${PS3_VERBOSE:-0}"; fi
 

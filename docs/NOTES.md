@@ -3655,6 +3655,65 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
        file undefines for macOS and glibc (the Mac build stopped there after the 2026-11-12 update):
        HOST_STAT_MTIME picks st_mtime (Windows, unchanged), st_mtimespec.tv_sec (macOS) or st_mtim.tv_sec.
        Not built on Linux.
+301. **macOS: 2x from 42 to 60 fps -- the exposure read-back no longer waits for the GPU; dispatcher sleep on (2026-11-15, MacBook M2 Pro):**
+     - User: a stable 60 and beyond on Apple silicon. Measured at the Boletarian Palace start (sandbox, 120 s runs,
+       `sample` of the game for 8 s): no frame thread was at its limit on its own -- HighGraphics 74% busy, the
+       RSX thread 67% busy and 31% inside -[MTLCommandBuffer waitUntilCompleted]; one SPU thread (the command
+       dispatcher, image 1) at 99.6%.
+     - Cause 1: eng_float_targets_to_guest (the Mac's own fix for the exposure, MACOS.md) stores the small float
+       targets to guest memory every frame through submit_and_wait + readback, so the RSX thread waited out the
+       whole frame's GPU time once a frame. With RSX_ENGINE_FLOAT_WRITEBACK=0 (no store, wrong exposure) 2x ran
+       at 59.9 fps instead of 40.6: the wait was the entire cost of 2x.
+     - Fix 1 (rsx_metal_backend.m): the Metal backend implements readback_begin / readback_end, the two
+       optional entries the native Linux build added to rsx_draw_engine.h for the same store (its Vulkan
+       backend has them; they arrived on main while this was being measured, and the engine side here is
+       theirs). The copy of the target is a record in command order, into a shared buffer, so it goes out
+       in the frame's own command buffer; the engine collects it at the next flip, when that command buffer
+       has normally completed (readback_end waits when it has not), scaled back to the guest's size at an
+       internal resolution above 1x. The value reaches the guest one flip later than before.
+       RSX_ENGINE_FLOAT_DEFER=0 is the old wait. Measured with an engine-side version of the same idea
+       (a fetch that never waited); the adopted one was run again after the merge, see the last line.
+     - Cause 2 / fix 2: fix 145's dispatcher sleep is opt-in outside Windows ("measured on Windows only").
+       mac/play.sh now sets SPU_DISPQ_WAIT=1 unless it is set. Stats on the Mac: about 900-1250 waits a second,
+       about 100 a second ended by a notify, wake latency mean 19-24 us, re-poll 0.
+     - Result (same spot, old = RSX_ENGINE_FLOAT_WRITEBACK_WAIT=1 SPU_DISPQ_WAIT=0 on the same build):
+       1x 57.7 (lowest second 55) -> 59.8 (54) fps, CPU time 6:55 -> 5:46 of a 120 s run;
+       2x 42.4 (37) -> 60.0 (59) fps, CPU time 6:22 -> 5:52. Captures at 1x and 2x: mean brightness unchanged
+       (33.2 / 38.7 / 34.4), mean difference from the earlier captures 0.5-0.7 of 255. 3x (3840x2160): 59.9 (55)
+       fps, no capture looked at.
+     - After it (2x, sample): HighGraphics 84% busy with 11% in its own frame limiter's sleep, the RSX thread 83%
+       busy (texture and fragment program hashing 20% of it), synth2 61%. Not done: that hashing; rates above 60
+       (needs present pacing the Metal path does not have). Not checked: other areas, a long session, how the
+       later exposure value looks when walking from dark to bright.
+302. **macOS: frame rates above 60 (DES_FPS=unlimited / a number); less hashing on the RSX thread (2026-11-15, MacBook M2 Pro):**
+     - User: an unlimited test, as high as it goes. PLAY.bat's unlimited mode is not D3D12-only: DES_60FPS=1,
+       PS3_VBLANK_HZ=480, PS3_CLOCK_SCALE=200 and DES_MAX_FPS=240 (fix 43: the adaptive step's floor; without it
+       the game itself runs fast above 60 steps a second -- the first Mac run at 70 fps did).
+     - mac/play.sh takes DES_FPS=unlimited and a whole number 31-240 with PLAY.bat's arithmetic; the launcher's
+       Frame rate has "120 fps" (custom_fps) and "Unlimited", saved with the Windows launcher's codes 5 and 4.
+     - Measured (sandbox, 1x, god mode, per archstone: stand 10 s, camera spin 15 s, walk 12 s, walk and turn
+       13 s, walk back 10 s; frames the game published a second, mean / lowest second):
+       Nexus 145/136, 131/122, 128/114, 135/126, 117/103; Boletaria 1-1 74/71, 96/91, 99/79, 93/78, 99/92;
+       Shrine of Storms 131/128, 135/117, 134/129, 131/127, 135/132; Latria 4-2 74/71, 110/99, 119/114, 118/117,
+       116/110; Valley 135/131, 165/145, 185/177, 169/151, 182/169; Stonefang 146/125, 155/152, 165/160, 157/153,
+       154/147. The window shows at most the screen's 120.
+     - Game speed (DES_STEP_STATS, 5 s windows over the last minute of each stop): mean 1.00-1.03 of real time,
+       but single windows from 0.84 to 1.43 (Latria 4-2) -- the adaptive step chases a rate that moves. Not
+       compared with the same statistic at the 60 cap.
+     - What holds Boletaria at ~70 standing (sample, uncapped): HighGraphics 84% busy (14% of it in
+       spu_coh_notify_write_ppu) and 15% in its usleep poll for the SPU dispatcher; the dispatcher 79% busy; the
+       RSX thread 82%. HighGraphics and the dispatcher hand work back and forth, so both are the limit.
+     - RSX thread (rsx_draw_engine.c), 82% -> 73% busy at that spot, the rate unchanged there, measured with
+       two changes: (a) a memo for the fragment program's structural hash, computed twice per draw before;
+       the native Linux merge brought its own program memo (eng_prog_memo) for the same cost, and that one
+       is what is in the tree. (b) Textures: one whose bytes have ever changed under the engine is hashed in
+       full on every frame it is used, as rsx_live_draw.c does since fix 138; one that never has gets the
+       sparse check each frame and the full hash every 16th frame (was every 8th, and every frame up to
+       16 KB; now every frame only up to 2 KB). PS3RECOMP_ENG_TEXHASH_FULL=1 is still the full hash every
+       frame.
+     - Not done: present pacing above 60 (frames go to the window as they finish), the game-speed swings,
+       HighGraphics' own time. Not checked: a picture comparison after the texture hashing change beyond the
+       tour's runs finishing without renderer errors; menus and movies above 60.
 
 150. **Branch dispq-batch, opt-in: the SPU dispatcher takes the rest of a fetched queue line without re-reserving
      (DES_DISPQ_BATCH=1); 1-1 walk 24.7 -> 29.2 real pictures a second with frame skip off (2026-11-12, GTX 1070
