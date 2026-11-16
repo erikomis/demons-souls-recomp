@@ -87,13 +87,18 @@ non-Steam game, with *Start in* set to `~/DemonsSoulsRecomp` and no forced Proto
 checkout** instead: install Python 3.10+, git, and clang + lld 17 or newer, then run
 `sh linux/setup.sh /path/to/image.iso` and `sh linux/play.sh`. Troubleshooting: [docs/LINUX.md](docs/LINUX.md).
 
-**Native Linux build (experimental):** the game as a Linux program drawn with Vulkan, with no Proton. On
-the Steam Deck five of the seven archstones hold 60 fps; the two heaviest spots (Boletarian Palace 1-1 and Latria's
-second archstone) run at 55-56, and Boletaria around 48 mid-fight ([frame rates](docs/LINUX_NATIVE.md#steam-deck-frame-rates)). Build it with
-`linux/native/install.sh` from a `git clone` (or from the release's Linux ZIP; the launcher's Update
-button needs the clone) (a one-click installer window: your disc image, its disc key, then Install), and
-play with `python3 linux/native/launcher.py` (a launcher window) or `linux/native/play.sh`. So far it is tested on the Steam Deck only:
-[docs/LINUX_NATIVE.md](docs/LINUX_NATIVE.md).
+**Native Linux build, with its own launcher:** the game as a Linux program drawn with Vulkan, with no Proton.
+On the Steam Deck five of the seven archstones hold 60 fps; the two heaviest spots (Boletarian Palace 1-1 and
+Latria's second archstone) run at 55-56, and Boletaria around 48 mid-fight
+([frame rates](docs/LINUX_NATIVE.md#steam-deck-frame-rates)).
+- **Install:** run `linux/native/install.sh` from a `git clone` (or from the release's Linux ZIP; the launcher's
+  Update button needs the clone). It opens a one-click installer window: your disc image, its disc key, then
+  Install.
+- **Play:** `python3 linux/native/launcher.py` opens the native launcher, which is confirmed to work great. It
+  keeps your settings, updates and rebuilds, adds the game to the applications menu, and **Add to Steam** makes a
+  shortcut for game mode (a controller works the launcher). `linux/native/play.sh` starts the game directly.
+
+Details: [docs/LINUX_NATIVE.md](docs/LINUX_NATIVE.md).
 
 ### macOS (Apple silicon)
 
