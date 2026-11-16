@@ -84,7 +84,8 @@ checkout** instead: install Python 3.10+, git, and clang + lld 17 or newer, then
 `sh linux/setup.sh /path/to/image.iso` and `sh linux/play.sh`. Troubleshooting: [docs/LINUX.md](docs/LINUX.md).
 
 **Native Linux build (experimental):** the game as a Linux program drawn with Vulkan, with no Proton. On
-the Steam Deck it is a little faster than Proton, and most areas reach 60 fps. Build it with
+the Steam Deck most areas hold 60 fps, and the heaviest spot (Boletarian Palace 1-1, mid-fight) runs at
+about 48 ([frame rates](docs/LINUX_NATIVE.md#steam-deck-frame-rates)). Build it with
 `linux/native/install.sh` (a one-click installer window: your disc image, its disc key, then Install), and
 play with `python3 linux/native/launcher.py` (a launcher window) or `linux/native/play.sh`. So far it is tested on the Steam Deck only:
 [docs/LINUX_NATIVE.md](docs/LINUX_NATIVE.md).

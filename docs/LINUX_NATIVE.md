@@ -9,19 +9,35 @@ distros, NVIDIA's driver included, should work but are untested. Not there yet c
 build: the resolution setting, the frame-timing recorder, texture dumping/replacement, models, and
 custom frame rates (60, 30 and unlimited only).
 
-## Steam Deck numbers (uncapped, Boletarian Palace 1-1, the heaviest spot)
+## Steam Deck frame rates
 
-| | fps |
-|---|---|
-| Proton (Windows build), GPU clock pinned at 800 MHz | 34.5 |
-| Native | 35.8 |
-| Native, PGO | 37.0 |
-| Native, PGO + ThinLTO | 38.0 |
+Measured 2026-11-15: Steam Deck LCD ("Jupiter"), SteamOS 3.9.5, Mesa/RADV 26.2.7, on AC power,
+started with `linux/native/play.sh` and its defaults (full screen 1280x800, GPU clock held at 800 MHz,
+shaders compiled in the background, the shader caches warm from an earlier run). The scene is the start of
+Boletarian Palace 1-1, the heaviest spot we know: 10 s walking in, then 140 s fighting the soldiers at the
+gate. Frame times are the game's own presents (`HITCH_MS=1` logs every one).
 
-The other areas (Shrine of Storms, Valley of Defilement, Stonefang Tunnel, the Nexus) reach the 60 fps cap
-natively; the Tower of Latria is around 46. On the Deck the game holds the GPU clock at 800 MHz while it
-runs (`DES_GPU_CLOCK`, below): with the automatic clock, the CPU takes the shared 15 W and the GPU sits
-at 200 MHz.
+| 150 s of play | Average | 1% low | 0.1% low | Median frame | 95th pct | 99th pct | Frames over 50 ms |
+|---|---|---|---|---|---|---|---|
+| 60 fps (default) | 47.9 fps | 14.7 fps | 7.0 fps | 20.3 ms | 26.4 ms | 31.8 ms | 40 |
+| Unlimited | 47.8 fps | 15.2 fps | 8.2 fps | 20.4 ms | 27.2 ms | 31.7 ms | 40 |
+
+- **Walking** (the 10 s before the fight): 49.5 fps average, 1% low 33.0 fps, no frame over 32 ms.
+- **The cap isn't the limit here:** unlimited gives the same 48 fps, so this is what the Deck can do in this
+  spot. The APU draws 15.0 W on average, the Deck's whole budget.
+- **The lows** come from about 40 frames in 150 s, around one every 4 s, that take 50-230 ms during the fight (short
+  hitches). Without them, 99% of frames are under 32 ms.
+- **Game speed:** when frames run late the game runs slower instead of skipping ahead (0.97 of real time
+  in this fight), so nothing jumps.
+- **First launch** (empty shader caches, the same scene): 43.9 fps instead of 47.7 in the 5 s averages, and
+  12 pauses of 200 ms or more in the fight instead of 4 (the longest 0.7 s). Each new shader is compiled once
+  and kept, so this goes away after the first visit to an area.
+- **Other areas** (Shrine of Storms, Valley of Defilement, Stonefang Tunnel, the Nexus) hold the 60 fps cap;
+  the Tower of Latria is around 46 (measured with an earlier build).
+- **Earlier builds**, in the same spot, uncapped: Proton (the Windows build) 34.5 fps, native 38.0 fps.
+
+**Why the GPU clock is held:** with the automatic clock, the CPU takes the shared 15 W and the GPU sits at
+200 MHz (`DES_GPU_CLOCK`, below).
 
 ## Install (one click)
 
