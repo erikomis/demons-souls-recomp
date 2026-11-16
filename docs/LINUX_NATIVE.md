@@ -32,9 +32,28 @@ gate. Frame times are the game's own presents (`HITCH_MS=1` logs every one).
 - **First launch** (empty shader caches, the same scene): 43.9 fps instead of 47.7 in the 5 s averages, and
   12 pauses of 200 ms or more in the fight instead of 4 (the longest 0.7 s). Each new shader is compiled once
   and kept, so this goes away after the first visit to an area.
-- **Other areas** (Shrine of Storms, Valley of Defilement, Stonefang Tunnel, the Nexus) hold the 60 fps cap;
-  the Tower of Latria is around 46 (measured with an earlier build).
 - **Earlier builds**, in the same spot, uncapped: Proton (the Windows build) 34.5 fps, native 38.0 fps.
+
+### Every world, at its archstone
+
+The same settings, warped to each world's archstone in one run (the port's `DES_WARP_AT` test helper, god
+mode). 50 s per stop: standing, a camera pan, a short walk, standing again. Second visit (shaders cached);
+a run like this the first time gives about the same averages (within 1 fps) but 2-7 hitches of 50-360 ms per stop while the new
+shaders compile.
+
+| 50 s at the archstone | Average | 1% low | Median frame | 99th pct | Worst frame | Frames at 60 fps | APU power |
+|---|---|---|---|---|---|---|---|
+| The Nexus | 59.7 fps | 37.9 fps | 16.6 ms | 24.7 ms | 32 ms | 95% | 7.6 W |
+| Boletarian Palace 1-1 | 56.1 fps | 34.4 fps | 17.4 ms | 27.6 ms | 32 ms | 87% | 15.0 W |
+| Shrine of Storms | 59.8 fps | 38.1 fps | 16.5 ms | 24.8 ms | 29 ms | 95% | 8.4 W |
+| Tower of Latria (first archstone) | 59.8 fps | 37.2 fps | 16.5 ms | 25.3 ms | 46 ms | 94% | 15.0 W |
+| Tower of Latria (second archstone) | 55.1 fps | 34.5 fps | 17.8 ms | 26.9 ms | 45 ms | 83% | 13.6 W |
+| Valley of Defilement | 59.7 fps | 37.0 fps | 16.5 ms | 25.2 ms | 34 ms | 94% | 9.4 W |
+| Stonefang Tunnel | 59.8 fps | 37.6 fps | 16.5 ms | 25.2 ms | 31 ms | 96% | 7.0 W |
+
+"Frames at 60 fps": frames shown within 20.8 ms (a 60 fps frame plus a quarter). No frame took 50 ms or more at
+any stop. Five of the seven hold 60; Boletaria and Latria's second archstone, the two heaviest views on the tour,
+run at 55-56 standing and walking; Boletaria drops to around 48 in a fight (above).
 
 **Why the GPU clock is held:** with the automatic clock, the CPU takes the shared 15 W and the GPU sits at
 200 MHz (`DES_GPU_CLOCK`, below).
