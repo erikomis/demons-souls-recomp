@@ -83,6 +83,13 @@ non-Steam game, with *Start in* set to `~/DemonsSoulsRecomp` and no forced Proto
 checkout** instead: install Python 3.10+, git, and clang + lld 17 or newer, then run
 `sh linux/setup.sh /path/to/image.iso` and `sh linux/play.sh`. Troubleshooting: [docs/LINUX.md](docs/LINUX.md).
 
+**Native Linux build (experimental):** the game as a Linux program drawn with Vulkan, with no Proton. On
+the Steam Deck five of the seven archstones hold 60 fps; the two heaviest spots (Boletarian Palace 1-1 and Latria's
+second archstone) run at 55-56, and Boletaria around 48 mid-fight ([frame rates](docs/LINUX_NATIVE.md#steam-deck-frame-rates)). Build it with
+`linux/native/install.sh` (a one-click installer window: your disc image, its disc key, then Install), and
+play with `python3 linux/native/launcher.py` (a launcher window) or `linux/native/play.sh`. So far it is tested on the Steam Deck only:
+[docs/LINUX_NATIVE.md](docs/LINUX_NATIVE.md).
+
 ### macOS (Apple silicon)
 
 A native arm64 build on Metal (by erikomis). **It is playable, but very behind on updates:** most of the
@@ -167,7 +174,8 @@ Saves go to `gamedata/`, and logs to `logs/`; they grow ~600 MB an hour, and the
 
 ### Boss rush mode
 
-*Game: Boss rush* in the launcher (or `DES_BOSS_RUSH=1 linux/play.sh`; not on macOS yet). Make a new character:
+*Game: Boss rush* in the launcher (or `DES_BOSS_RUSH=1 linux/play.sh`, or `linux/native/play.sh` for the native
+Linux build; not on macOS yet). Make a new character:
 you skip the tutorial and start in the Nexus in soul form, with 7,000 souls and every trader there. Boldwin also
 sells every weapon and shield, every armour piece and ring, every upgrade material, Turpentine and Firebombs,
 priced by tier: the best weapons 40,000-75,000, top armour sets 30,000-50,000, rings 5,000-50,000, and items normal

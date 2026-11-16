@@ -3616,7 +3616,8 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       raises it everywhere that qualifies, LD_ANISO=0 turns it off (1x, as before; for weak integrated GPUs).
     - Checked at 1-1: the stone floor shows clearly more detail at a distance, HUD identical; 59.5 vs 59.2 fps at
       the 60 cap on the RTX 3070 (no measurable cost there). A launcher option is the main rig's (launcher) side.
-150. **macOS: internal resolution (DES_RES_SCALE; 2026-11-13, MacBook M2 Pro):**
+300. **macOS: internal resolution (DES_RES_SCALE; 2026-11-13, MacBook M2 Pro; was "fix 150" until the merge
+     with the native Linux branch, which has its own 150 -- Mac fixes number from 300):**
      - User: on the Mac a bigger window was only the 1280x720 picture stretched; the Windows build has had a
        resolution scale since fix 74.
      - How (rsx_metal_backend.m, a hook in rsx_draw_engine.c): the draw engine keeps working in the guest's
@@ -3646,6 +3647,193 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
        file undefines for macOS and glibc (the Mac build stopped there after the 2026-11-12 update):
        HOST_STAT_MTIME picks st_mtime (Windows, unchanged), st_mtimespec.tv_sec (macOS) or st_mtim.tv_sec.
        Not built on Linux.
+
+150. **Branch dispq-batch, opt-in: the SPU dispatcher takes the rest of a fetched queue line without re-reserving
+     (DES_DISPQ_BATCH=1); 1-1 walk 24.7 -> 29.2 real pictures a second with frame skip off (2026-11-12, GTX 1070
+     Max-Q laptop, i7-8750H):**
+    - Correction to fix 145: with frame skip off the frame is HighGraphics' own work (\~26-30 ms) plus its 0x9023
+      poll (11-16 ms), and the poll is dispatcher time (the dispatcher is busy without a break until the reply; two
+      new skip-off timelines). The "\~34 ms of HighGraphics CPU" there included the poll spin. The cond_wait at
+      0xB5D65C is a PPU chain (ChrInsManThread \~7, main \~7, Havok PPU \~3 ms), not the SPU anim tasks.
+    - Per command the native loop (fix 112) still did a GETLLAR of the control line 0x01B51080 (LS 0x13480), the
+      compare, fix 111's no-op PUTLLC and a 128-byte GET of the entry line. HighGraphics writes an entry, syncs, then
+      moves the producer, and a slot below the producer stays as written until the cursor passes it, so every entry
+      in the fetched line below the producer that GETLLAR saw is already in hand.
+    - Change (lifted-code.patch, spu_0001_at_0176C200 des_dispq_native, branch only): after a full pass the loop
+      keeps that line; while the cursor is inside it, at or past the first entry taken and below the producer seen,
+      and LS 0x13480 / r82 / r85 are untouched, the next pass skips the GETLLAR, the PUTLLC and the GET (atomic stat
+      4 / 0 as they would leave it, the kept line copied to LS as the GET would) and runs everything else as before
+      -- the 3C90 bookkeeping, the per-command cursor PUT, the handlers. Any hand-off (another command than 7 / 8,
+      the burst limit, 3C90's rare branches, an empty queue) ends it; its state is des_dispq_native's locals.
+      DES_DISPQ_BATCH=1 on, 2 = skip only the GETLLAR / PUTLLC, 3 = verify (run everything, compare each entry the
+      batch would have taken with the fetched one), unset / 0 = the old loop exactly. DES_DISPQ_BATCH_STATS=1.
+    - Verify mode at 1-1 (two runs, 205 s, the second with the window opened after empty-queue wakes too): 104 M and
+      95 M entries compared, 0 mismatches; 70.7% of passes take the batch.
+    - A/B (same exe, frame skip off, PS3_FTRACE runs, 4 pairs in alternating order, walk window): on 29.4 / 29.7 /
+      28.3 / 29.3 vs off 25.4 / 27.1 / 21.9 / 24.5 real pictures a second, game time 0.94-0.96 vs 0.73-0.90, 95th
+      percentile gap 43-46 vs 47-56 ms; 0x9023 poll 7.3-8.5 vs 11.3-16.1 ms a frame (21-23% vs 28-33% of it).
+      HighGraphics' own time a frame also falls a little (fewer reservations on the line it stores to, fix 90). An
+      earlier 3 + 3 untraced batch was inside the noise (24.8 vs 24.1); the poll share is the steadier measure here.
+    - Review (3 lenses + refuters): protocol none; fixed: verify mode missed the post-wake window, mode 0 bumped a
+      counter. Refuted: halting a shut-down taskset later (Join waits for the task; the window existed before). A
+      guard on g_spu_tasksets_down was tried and removed: that count stays non-zero in play, so it disabled the
+      batch. Noted: in mode 1 the cursor PUTs run back to back, so keep SPU_DMA_REPEAT_LIMIT above 7 (default 256).
+    - Tour (god mode, warps every 70 s: Boletaria 2,0,999 > Shrine 3,1,999 > Latria 4,0,998 (4-1 then 4-2) > Valley
+      5,0,999 > Stonefang 6,0,999 > the Nexus 1,0,999; a 10 s camera pan and a 10 s walk at each stop; 570 s runs):
+      verify mode with frame skip on 187 M entries compared, 0 mismatches, 70% batched; mode 1 with frame skip off
+      and on, and mode 0 both ways: every map reached, no HALT / [dispq] lines, screenshots at each stop render
+      normally. Per-stop fps is not comparable across runs (arrival views differ, e.g. 361 vs 910 draws at 1-1);
+      the 1-1 pairs above are the measurement.
+    - Measured on main c18e241 (fix 145); rebased onto 08867e3 (fixes 146-149, 201) without a new build -- lifted-code.patch
+      did not change there, selftest_patches ok.
+    - Not yet: other PCs (the 3070 / desktop at Latria 4-2, the uncapped benchmark); then it can be offered as a setting.
+
+151. **Native Linux (Vulkan): real ZPASS occlusion counts, a clean quit on the window's X, the controller from Steam
+     (2026-11-14, Steam Deck):**
+    - User: "the lens flare is way too bright again". The Vulkan backend had no occlusion path, so every ZPASS report
+      was the walker's 0xFFFF: fixes 38 / 132's bug on Vulkan. rsx_vulkan_backend.c vk_occ_*, after Metal's
+      eng_occ_*: one VkQueryPool of 1024 occlusion queries per submission slot (precise when the device has
+      occlusionQueryPrecise; RADV does), begun / ended around each draw made while 0x17CC is on, reset in vk_begin
+      (outside any render pass; re-reset when a recorded reset never got submitted), read in vk_slot_completed after
+      the slot's fence, a report stored with gcm_report_store_value once all its draws are read. Same switches as
+      Metal: RSX_ENGINE_OCCLUSION=0 = old 0xFFFF, RSX_ENGINE_OCC_DBG=1 / 3.
+    - The engine's method observer used to force word-by-word dispatch (losing fix 117's run path, a cost in the
+      CPU-bound 1-1). rsx_draw_engine.c now splits a run only at the four methods an observer needs (0x01A8, 0x17C8,
+      0x17CC, 0x1800, found arithmetically) and calls the observer only for them, in stream order; Metal gets the
+      run path back too (not compiled here: no macOS toolchain).
+    - Checked: Nexus (test save, DES_WARP_AT=125:1,0,999): every report 0 samples (probe behind the ceiling, as on
+      D3D12 / Metal), no flare through it. 1-1 60 fps mode, same exe, 2 pairs: occlusion off 46.5 / 46.6, on 46.4 /
+      46.9 fps. Review: 3 lenses + refuters; one minor (error path) fixed.
+    - Closing the window: SDL's quit event stopped the pump and the presents (rsx_ok = 0) and the game ran on behind
+      a dead window until KDE offered to kill it. boot_main.cpp now calls ps3_host_quit("window closed") (the
+      console's Quit Game: REQUEST_EXITGAME, a save in flight finishes, exit 0) and keeps pumping and presenting.
+    - The controller from Steam: through `distrobox enter` (podman exec) the game ran under conmon, outside Steam's
+      process tree, so Steam took its (native Wayland) window for a desktop one and gave the Deck's controls its
+      desktop layout. play.sh now enters the running container with nsenter -U -m (the game stays play.sh's child;
+      DES_NSENTER=0 = distrobox enter), and under Steam (SteamGameId / SteamAppId set) opens an X11 window. A Steam
+      PULSE_SERVER pointing into its runtime container is dropped when the socket is not there (with it SDL had no
+      sound device at all).
+    - Sound "desynced" (sound effects late): not reproduced. The mix runs at 187.5 blocks/s with the SDL queue at
+      \~21 ms, no underruns; SDL's pulseaudio driver (PipeWire's pulse server), 256-frame device buffer, PipeWire
+      quantum 256. Press -> sound (title Start / in-game Start / Circle, 60 fps mode, AUDIO_WAV + PAD_SCRIPT, now
+      also on Linux on the monotonic clock: native-tools press_sound.py / env.py): native 180-240 ms, the Windows
+      build under Proton on the same Deck and save 240-280 ms. cellAudio logs its SDL driver and device buffer.
+
+152. **synth2 a third of its old cost: sound effects late, then missing, in busy scenes on the Steam Deck**
+    - The user's tutorial session (play.sh now logs the voice thread's CPU every 5 s, AUDIO_RATE; game speed,
+      DES_STEP_STATS; SPU event-queue backlog, EVT_BACKLOG): synth2 at 90-96% of a Zen 2 core for minutes while
+      the mix itself ran at 187.5 blocks/s with no underruns. Once the rest of the game got faster, the voices it
+      could not fit were dropped rather than late. A 32-entry event queue caps the backlog at ~170 ms.
+    - perf on synth2 (walking + attacking): the resampler 1090 36% (fix 143's fast loop most of it), the
+      voice-to-bus mixer loop 63C8 (inlined into 62E8) 21%, the gain ramp 2C20 (inlined into 2BE0) 18% plus
+      spu__x8_fa_fix / fm_fix 18% (its lanes 1-3 hold exponent-255 neighbours, so every pass took the fix tier).
+    - Three exact native fast paths in the lifted file (PORT PATCH blocks; each runs all passes but the last,
+      which the lifted loop runs so every register leaves as before; anything uncertain falls back):
+      SYNTH2_RESAMPLE (a native resampler loop under fix 143's), SYNTH2_RAMP (lane 0 pass by pass with the
+      exact helpers, then the settled gain a quadword at a time; lanes 1-3 solved per lane, settled or drifting
+      one word per pass, vector fallback), SYNTH2_MIX (the pan mix with round-toward-zero FMAs, x86-64 AVX2+FMA
+      only). =0 disables each; _CHECK=1 replays a sample of calls with the lifted code on a copy and compares LS
+      and all 128 registers. Check run in Boletaria, walking and fighting: 0 mismatches over 33 M resampler,
+      528 M ramp and 87 M mixer passes.
+    - Same scene, Deck, 60 fps mode: synth2 85-96% -> 26-32% of a core, fps ~42 -> ~44.
+
+153. **Native Linux: shaders kept between runs, SPURS task threads reused (stalls loading areas / breaking things)**
+    - User (Deck): the game struggles loading new areas and assets, and when a barrel or box breaks into debris.
+      boot_main.cpp's HITCH_MS=N logs every present more than N ms after the last, with the monotonic time
+      (play.sh: 100); native-tools hitch_prof.py lines the hitches up with `perf record -k CLOCK_MONOTONIC -p`.
+    - Boletaria (testsave, load + walk + fight, 60 fps mode), perf: in stalls of 100 ms and more the render thread
+      was \~83% busy in glslang + SPIRV-Tools (the HLSL -> SPIR-V translation of a first-seen guest program),
+      RADV itself \~1% (Mesa's disk cache has the pipelines). rsx_shader_spirv.cpp has a disk cache, but only with
+      PS3RECOMP_SPIRV_CACHE set, and nothing on Linux set it: every run translated every shader again.
+      play.sh now sets it (XDG cache dir, demons-souls-recomp/spirv; 253 files, 12 MB for this scene).
+      Same scene, cache empty -> warm: in game 58 -> 27 hitches of 50 ms+, 7.5 -> 2.7 s stalled, worst 705 ->
+      205 ms; the area load's worst 2965 -> 198 ms; game time 0.960 -> 0.983. A shader seen for the first time
+      still stalls once.
+    - Fix 126's task-thread pool was Windows-only: on Linux every short SPURS task (Havok, Edge zlib, the HighGraphics
+      and ChrInsMan tasks; perf saw \~90,000 distinct short threads in 270 s) got a new pthread with a 256 MB stack
+      (more than glibc's stack cache holds: a map and unmap per task). Ported (spu_workload.c, POSIX): a per-worker
+      condvar, one lock for list + job + timeout so a take racing a timeout cannot lose a job, CLOCK_MONOTONIC
+      waits, the same thread-local reset (POSIX audit: nothing POSIX-only needs it), and instead of Windows' exit
+      on a deep stack, madvise(DONTNEED) of the stack more than 16 MB below the top after each task. Threads are
+      named "spu job". SPU_TASK_POOL=0 = a thread per task. Stress test (4 dispatchers, timeouts provoked):
+      200,000 jobs each run once, TSan clean. Same scene, SPU_TASK_POOL=0 / 1: 43.6 -> 45.2 fps; the hitches are
+      unchanged (57 / 60) -- thread creation was a cost, not the stall.
+
+154. **Guest shaders translated \~5x faster: no SPIR-V legalization (first sight of an area / effect)**
+    - After fix 153 a shader seen for the first time still cost its translation on the render thread. Offline, on
+      the 253 real shaders of the Boletaria scene (the SPIR-V cache files hold the HLSL): 7.1 s in all, median
+      28 ms, max 78 ms; 83-85% of it SPIRV-Tools, running glslang's HLSL legalization pass list (the same 32 passes
+      RegisterLegalizationPasses gives -- reproduced bit for bit).
+    - Legalization exists for opaque objects (textures, samplers) in locals or function parameters; the
+      decompilers keep every texture and sampler global. libs/video/rsx_shader_spirv.cpp translate() now sets
+      SpvOptions.disableOptimizer (RSX_SPIRV_FAST=0 = legalized, word for word as before; the mode is in the
+      cache header's format word, so the two never mix). 253 shaders: 1.35 s, median 4.7 ms. spirv-val (vulkan1.0)
+      passes all 253; RADV's final ISA (VK_KHR_pipeline_executable_properties) is byte-identical for 252, the last
+      the same math scheduled differently (+2 SALU); RADV pipeline creation \~1-2 ms more each.
+    - In game, same build, SPIR-V cache empty, Mesa cache warm, load + walk + fight: legalized 63 hitches of 50 ms+,
+      8.4 s stalled, worst 704 ms, 12 of 200 ms+, area load worst 3011 ms -> fast 44, 3.8 s, worst 197 ms, none of
+      200 ms+, area load worst 625 ms; game time 0.955 -> 0.980. Screenshots after the load: the same picture.
+      The first run after the update recompiles Mesa's pipelines once (new SPIR-V): that run was 9.8 s stalled.
+
+155. **Vulkan: first-seen shaders translated off the render thread -- fix 128's pop-in, as a launcher toggle**
+    - The user (doesn't mind pop-in, others do) asked for fix 128 on Linux as an option. launcher.py: "Compile new
+      shaders in the background (brief pop-in instead of a stutter)", default on -> play.sh DES_ASYNC_SHADERS ->
+      RSX_VK_ASYNC_SHADERS (0 = exactly the synchronous path). play.sh now forwards RSX_* into the container.
+    - rsx_shader_spirv.cpp: the map lock is held only for lookups / inserts; glslang runs under its own lock
+      (serialized), so a cache hit never waits behind a translation; rsx_hlsl_to_spirv_cached (memory or valid
+      disk entry, never translates) and rsx_hlsl_to_spirv_prewarm (glslang's builtin tables at init).
+    - rsx_vulkan_backend.c: vk_eng_pipeline_create builds at once when both shaders are cached (a warm session
+      never pops in); otherwise the slot is queued to 2 workers (RSX_VK_SHADER_WORKERS) that translate and make
+      the shader modules. Engine hook pipeline_ready (optional vtable member; NULL elsewhere): draw, skip, or
+      failed (forgotten like a failed synchronous build). Per-frame wait budget RSX_VK_SHADER_WAIT_US (3000).
+      Never skipped (a queued job is built on the render thread, a started one waited for): display buffers,
+      full-screen passes (no depth test, <= 6 vertices), passes that write no colour (shadow maps, stencil),
+      draws into a target no draw rendered last frame (stricter than D3D12's rule), and draws inside a ZPASS
+      occlusion count (fix 151). "[vk-async]" every 5 s: queued / ready / skipped / waited / sync / forced.
+    - Review (3 lenses + verify): 9 findings, all refuted; the stencil-only pass was made never-skip anyway.
+      Harness tests (scratch): 6 threads x 48 shaders, no duplicate translations, outputs word for word; job
+      lifecycle with random releases / shutdown, TSan + ASan clean.
+    - Boletaria, SPIR-V cache empty, Mesa warm, load + walk + fight: off 44 hitches of 50 ms+, 3.9 s stalled; on 23,
+      2.3 s (the warm-cache level), 0 failed builds, up to \~290 skipped draws per 5 s while new things appear.
+      Screenshot after the load: the same picture.
+
+156. **Vulkan: the pipelines a session built are rebuilt at launch after an update (RSX_VK_PIPELINE_WARM)**
+    - After our update (the translator / backend build changes) or a SteamOS GPU-driver update, every cache misses
+      and the next session recompiled everything in game. Modern games rebuild their known pipelines at launch.
+    - rsx_vulkan_backend.c: each engine pipeline variant built is appended (one O_APPEND write, deduped, 32768 max)
+      to <PS3RECOMP_SPIRV_CACHE>/pipelines.bin: 47-word records (both shaders' cache keys -- the cache file holds the
+      HLSL, so a stale entry can be re-translated -- topology, slots, stride, targets, the render state; check word;
+      torn / foreign records skipped and compacted). The variant builder is factored out (vk_eng_build_pipeline)
+      so a thread with its own identical render passes / layouts / modules makes a create info RADV's cache maps to
+      the same entry (device test: 7.1 ms cold -> 0.7 ms from another process).
+    - A stamp per Mesa cache (pipelines.<hash>.stamp: record version, translator build + glslang + mode, backend
+      build + depth format + features + MRT mode, driver version, GPU, pipelineCacheUUID, which Mesa cache) decides:
+      changed -> one nice-19 thread rebuilds the list (yielding to fix 155's in-game jobs), then writes the stamp;
+      same -> it times ~8 listed builds and re-walks only if Mesa's cache lost them. Quit joins the thread (atexit
+      too: the game exits with exit()). RSX_VK_PIPELINE_WARM=0 = neither recorded nor rebuilt; =force = always.
+    - Review (2 lenses + verify): backend-only updates did not change the stamp, the stamp ignored which Mesa cache,
+      exit() during a walk -- fixed. Harness tests: record round trip / bit flips / torn tails / 4 writers, stale-
+      file re-translation, exit ordering; ASan / UBSan / TSan clean.
+    - Boletaria, simulated driver update (an empty MESA_SHADER_CACHE_DIR), load + walk + fight: off 52 hitches of
+      50 ms+, 8.6 s stalled, worst 646 ms, area load worst 1939 ms; on: 487 pipelines rebuilt during boot in
+      10.0 s, 0 failed -> 22 hitches, 2.0 s, worst 197 ms, area load worst 198 ms (the warm-cache level).
+
+157. **Native Linux: the boss rush timer (ps3_overlay_image / ps3_overlay_set on Vulkan)**
+    - Both were no-op stubs on Linux (rsx_live_draw.c; only D3D12 and Metal drew them), so boss rush ran without its
+      timer. rsx_vulkan_backend.c now defines both (rsx_live_draw.c keeps the stubs only for builds without
+      PS3RECOMP_RSX_VULKAN): any thread copies its picture / text lines under a lock and bumps a generation; the
+      render side uploads a changed picture through a 3-buffer staging ring (a buffer is reused only once the
+      submission that read it is done) and draws it with premultiplied blending in a render pass on the swapchain
+      image (load, final PRESENT_SRC) in both present paths (vk_eng_present_direct, play.sh's, and
+      vk_present_window). The text overlay is D3D12's 5x7 font and layout, rasterized on the CPU when it changes.
+      The swapchain gets COLOR_ATTACHMENT usage. No overlay set: one atomic load per present.
+    - Placement in game-picture coordinates through the present's stretch (no letterbox on Linux), so on the Deck's
+      1280x800 the timer sits where it would on a 16:9 screen, stretched like the game's own text.
+    - Offscreen test of the real code on the Deck (RADV): rectangle, blending, no re-upload of an unchanged picture,
+      postponed upload of a busy buffer, text vs a CPU reference of D3D12's (0 mismatches), resize / shutdown.
+    - In game (play.sh, fullscreen 1280x800, DES_BOSS_RUSH=1 DES_BR_SOULS=2, the test save in a scratch boss rush
+      folder): with timer_font.bin the game-font timer "0:00.0 / Souls x2" at the bottom centre; without it the
+      text overlay at the top. make_boss_rush.py ran on Linux (2.4 s) and wrote bossrush/timer_font.bin.
 
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
