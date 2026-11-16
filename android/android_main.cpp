@@ -41,6 +41,15 @@ namespace {
 
 int rm_entry(const char* path, const struct stat*, int, struct FTW*) { return remove(path); }
 
+// Opens what the game made to adb too (folders rwx, files rw for everyone), so saves can be pushed in
+// and pulled out: the app's own files are otherwise its uid's alone (drwxr-s---), which the shell user
+// adb runs as cannot write into. Only the app and adb can reach this folder anyway.
+int open_entry(const char* path, const struct stat* st, int type, struct FTW*) {
+    chmod(path, type == FTW_D || type == FTW_DP ? 0777 : (st->st_mode & 0777) | 0666);
+    return 0;
+}
+void open_up(const std::string& dir) { nftw(dir.c_str(), open_entry, 16, FTW_PHYS); }
+
 void rm_rf(const std::string& dir) { nftw(dir.c_str(), rm_entry, 16, FTW_DEPTH | FTW_PHYS); }
 
 void mkdirs(const std::string& dir) {
@@ -115,11 +124,13 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int, char**) {
     const char* ext = SDL_AndroidGetExternalStoragePath();
     if (!ext) { LOGE("no external files folder: %s", SDL_GetError()); return 1; }
     const std::string F = ext;
+    umask(0);   // what the game creates from here on is open to adb as well (open_up)
     if (chdir(F.c_str()) != 0) { LOGE("chdir %s: %s", F.c_str(), strerror(errno)); return 1; }
 
     // The logs first, unbuffered, so a crash loses nothing (play.sh's > last_run_*.txt).
     const std::string logs = F + "/logs";
     mkdirs(logs);
+    open_up(logs);
     for (const char* n : {"out", "err"}) {
         const std::string cur = logs + "/last_run_" + n + ".txt";
         if (exists(cur)) rename(cur.c_str(), (logs + "/last_run_" + n + "_prev.txt").c_str());
@@ -128,6 +139,9 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int, char**) {
     if (!freopen((logs + "/last_run_err.txt").c_str(), "w", stderr)) LOGE("stderr log: %s", strerror(errno));
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
+    // The storage layer gives new files 0660 whatever the umask: open the logs to adb (shell) by hand.
+    chmod((logs + "/last_run_out.txt").c_str(), 0666);
+    chmod((logs + "/last_run_err.txt").c_str(), 0666);
     LOGI("files: %s; game log: %s/last_run_err.txt", F.c_str(), logs.c_str());
 
     apply_ini(F + "/des.ini");
@@ -151,6 +165,7 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int, char**) {
         if (!d || *d == '\x01') continue;
         if (!strcmp(k, "PS3_HDD1_ROOT")) rm_rf(std::string(d) + "/cache");
         mkdirs(d);
+        open_up(d);
     }
 
     def("PS3_TITLE", "Demon's Souls (ps3recomp)");
