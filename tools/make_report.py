@@ -9,6 +9,7 @@ The zip (perf\\<run>\\report_<run>.zip) holds:
   log_head.txt / log_tail.txt  the first / last 400 lines of logs\\last_run_err.txt, out_head.txt / out_tail.txt
                 the same of logs\\last_run_out.txt (the console log: decoders, save data, start-up), when they
                 are from the same run; log_notable.txt their error / failure / warning lines
+  crash.txt     Windows' own record of a crash in this run (event log, Windows Error Reporting), if any
 Your Windows user name is replaced by %USERNAME% in everything, so the zip has no personal paths.
 """
 import ctypes, glob, io, os, platform, re, subprocess, sys, zipfile
@@ -27,10 +28,24 @@ NOTABLE = re.compile(r'\berror|\bfail(ed|ure|s)?\b|not found|missing|exception|c
 NOT_NOTABLE = re.compile(r'^\[(WAIT|evt|live-draw\] frame)')
 
 
+def short_path(p):
+    """The 8.3 form of a path (C:\\Users\\JEANPI~1), which Windows' own records can use; '' if there is none."""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetShortPathNameW(p, buf, 1024)
+        return buf.value if 0 < n < 1024 and buf.value.lower() != p.lower() else ''
+    except (AttributeError, OSError):
+        return ''
+
+
 def scrub(text, names=True):
     home = os.path.expanduser('~')
     user = os.environ.get('USERNAME') or os.path.basename(home)
-    for h in {home, home.replace('\\', '/')}:
+    homes = {home, home.replace('\\', '/')}
+    sh = short_path(home)
+    if sh:
+        homes |= {sh, sh.replace('\\', '/')}
+    for h in sorted(homes, key=len, reverse=True):
         text = re.sub(re.escape(h), '%USERPROFILE%', text, flags=re.I)
     if names and user and len(user) > 2:
         text = re.sub(r'(?i)(?<![A-Za-z0-9])' + re.escape(user) + r'(?![A-Za-z0-9])', '%USERNAME%', text)
@@ -38,10 +53,15 @@ def scrub(text, names=True):
 
 
 def ps(cmd):
+    """PowerShell's output. It comes back base64-encoded UTF-8: Windows PowerShell writes a pipe in the console code
+    page, which garbled (or, decoded strictly, crashed on) localised event text on non-English Windows."""
+    import base64
     try:
-        return subprocess.run(['powershell', '-NoProfile', '-Command', cmd], capture_output=True, text=True,
-                              timeout=30).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
+        r = subprocess.run(['powershell', '-NoProfile', '-Command',
+                            '[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((& { %s } | Out-String -Width 4096)))'
+                            % cmd], capture_output=True, timeout=30)
+        return base64.b64decode((r.stdout or b'').strip() or b'').decode('utf-8', 'replace').strip()
+    except (OSError, subprocess.SubprocessError, ValueError):
         return ''
 
 
@@ -75,6 +95,86 @@ def system_info(perf_text):
     m = re.search(r'^# \d+ info (.*)$', perf_text, re.M)
     if m:
         L.append('settings: ' + m.group(1))
+    return '\n'.join(L) + '\n'
+
+
+def run_start(run):
+    """The run's start (local time) from its folder name (2026-11-16_08-42-04). The launcher writes that name in
+    the user's calendar, which is not always Gregorian (Thai, Hijri), so a name more than two days away from the
+    folder's creation time is not trusted and the creation time is used instead."""
+    import datetime
+    made = os.path.getctime(run)
+    try:
+        t = datetime.datetime.strptime(os.path.basename(run.rstrip('\\/'))[:19], '%Y-%m-%d_%H-%M-%S').timestamp()
+    except (ValueError, OSError, OverflowError):
+        return made
+    return t if abs(t - made) < 2 * 86400 else made
+
+
+WER_KEEP = re.compile(r'(EventTime|EventType|AppPath|FriendlyEventName|Sig\[\d+\]\.(Name|Value)'
+                      r'|DynamicSig\[\d+\]\.(Name|Value))=')
+
+
+def event_text(msg):
+    """An event message without the WER file lists ('Attached files:' up to 'Analysis symbol:'): those paths can be
+    in 8.3 form under the user's folder and say nothing about the crash."""
+    out, skip = [], False
+    for ln in msg.splitlines():
+        if re.match(r'\s*(Attached files|These files may be available here)\s*:', ln):
+            skip = True
+            continue
+        if skip and re.match(r'\s*Analysis symbol\s*:', ln):
+            skip = False
+        if not skip:
+            out.append(ln)
+    return '\n'.join(out)
+
+
+def crash_records(start, end):
+    """Windows' own record of how the game ended (GitHub #50). A crash Windows handles itself (heap corruption,
+    a fast-fail) skips the game's crash filter, so the logs just stop; the Application event log (no admin
+    needed) and the Windows Error Reporting folders keep the exception code and the faulting module. Only
+    DemonsSoulsRecomp.exe entries between this run's start and a few minutes after its last log line."""
+    import datetime
+
+    def when(t):
+        return datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%dT%H:%M:%S')
+    L = []
+    # The exe name is matched in the event's insertion strings too: Message is empty when Windows cannot load
+    # the provider's (localised) text.
+    ev = ps("Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001,1002; StartTime=[datetime]'%s';"
+            " EndTime=[datetime]'%s'} -ErrorAction SilentlyContinue | Where-Object {"
+            " ($_.Properties | ForEach-Object { [string]$_.Value }) -match 'DemonsSoulsRecomp'"
+            " -or $_.Message -match 'DemonsSoulsRecomp' } | Select-Object -First 6 | ForEach-Object {"
+            " '--- ' + $_.TimeCreated.ToString('s') + ' event ' + $_.Id + ' (' + $_.ProviderName + ')';"
+            " if ($_.Message) { $_.Message } else { ($_.Properties | ForEach-Object { [string]$_.Value }) -join ' | ' }"
+            " } | Out-String -Width 4096" % (when(start - 60), when(end)))
+    if ev:
+        L += ['Windows event log (Application):', event_text(ev)]
+    found = []
+    for base in (os.environ.get('ProgramData') or r'C:\ProgramData', os.environ.get('LOCALAPPDATA') or ''):
+        if not base:
+            continue
+        for sub in ('ReportArchive', 'ReportQueue'):
+            for d in glob.glob(os.path.join(base, 'Microsoft', 'Windows', 'WER', sub, '*DemonsSoulsRec*')):
+                f = os.path.join(d, 'Report.wer')
+                try:
+                    if start - 60 <= os.path.getmtime(f) <= end:
+                        found.append((os.path.getmtime(f), f))
+                except OSError:
+                    pass
+    for _, f in sorted(found)[-3:]:
+        try:
+            raw = open(f, 'rb').read()
+        except OSError:
+            continue
+        utf16 = raw[:2] in (b'\xff\xfe', b'\xfe\xff') or raw[1:2] == b'\x00'
+        text = raw.decode('utf-16' if raw[:2] in (b'\xff\xfe', b'\xfe\xff') else 'utf-16-le', 'replace') if utf16 \
+            else raw.decode('utf-8', 'replace')
+        L.append('--- Windows Error Reporting: ' + os.path.basename(os.path.dirname(f)))
+        L += [ln for ln in text.splitlines() if WER_KEEP.match(ln)]
+    if not L:
+        L.append('No Windows crash record for DemonsSoulsRecomp.exe during this run.')
     return '\n'.join(L) + '\n'
 
 
@@ -138,6 +238,7 @@ def main():
     if notable:
         logs['log_notable.txt'] = scrub('\n'.join(notable[:500]) + '\n')
 
+    crash = scrub(crash_records(run_start(run), os.path.getmtime(perf) + 300))
     out = os.path.join(run, 'report_%s.zip' % name)
 
     def write(perf_part, note):
@@ -145,6 +246,7 @@ def main():
             z.writestr('report.txt', note + report)
             z.writestr('perf.txt', perf_part)
             z.writestr('system.txt', system_info(perf_text))
+            z.writestr('crash.txt', crash)
             for k, v in logs.items():
                 z.writestr(k, v)
     write(perf_text, '')

@@ -3478,6 +3478,52 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       not minimised, frames or not; a minimised or closed window still stops it unless frames are being presented.
     - Checked (sandbox copy, LD_GPU_WARM=2 LD_GPU_TS=1, 45 s from start): the first one-second line already shows
       853 ms of warm chunks, then 960-1000 ms in every second while the game itself used 0.1% of the GPU.
+208. **Crash at the first Nexus arrival (GitHub #50, #44): the render thread dies in free(); Windows' crash record
+     in the REPORT zip (2026-11-16):**
+    - #50 (i7-9700F, RTX 3080, v2026.11.15, 30 fps): tutorial -> Vanguard -> the first arrival in the Nexus. At
+      (0, 479.8, -32.15), turning the camera left, the game closed. #44 (i5-1334U, Iris Xe) crashed at the same
+      coordinates with an access violation on the render thread.
+    - Symbolised: the player's stall-sampler RVAs match the v2026.11.15 SETUP build exactly. All 96 return
+      addresses land after call instructions; the exe was relinked with /MAP and is byte-identical apart from its
+      timestamp.
+    - Where each thread was:
+      - The render/vblank thread sat in _free_base <- ld_pso_harvest (free(j->ps) of a finished pipeline job),
+        9 ntdll frames deep, from 1 ms after the last present.
+      - The main thread and HighGraphics were in waits downstream of that.
+      - Then every thread stopped for about 4.4 s, the audio mixer and the perf thread included. HighGraphics'
+        Sleep(0) poll used 4% instead of 100%. The process ended with no [CRASH] line.
+    - That is Windows ending the process on heap corruption (0xC0000374 via Windows Error Reporting), which
+      skips our exception filters. Inferred, not proven: the sampler keeps no ntdll frames.
+    - The pipeline-job lifecycle reviewed clean (state and SetEvent under g_ld_pq_lock, harvest only on finished
+      jobs). So free() only found damage done elsewhere: the renderer, the runtime or the driver, all on one heap.
+    - Tried and dropped: HeapValidate before those frees (and a whole-heap LD_HEAP_CHECK mode).
+      - A standalone test on Windows 11 26300 (clang-cl, /MT and /MD; the CRT heap is GetProcessHeap()): blocks
+        of 40 B to 600 KB, overrun by 8-64 bytes into the next block.
+      - HeapValidate called every block, its neighbour and the whole heap valid, every time. The next free()
+        then ended the process with 0xC0000374, no message.
+      - So that check would never fire. It does show the #50 signature: a silent death in free() with that
+        code.
+    - Shipped:
+      - tools/make_report.py adds crash.txt to the REPORT zip: Windows' event-log entries (1000/1001/1002) and
+        Windows Error Reporting lines for DemonsSoulsRecomp.exe from the run's start to 5 min after its last log
+        line. The next report says the exception code and the faulting module.
+      - Checked on this PC: it finds a Nov 6 test crash (nvwgf2umx.dll, 0xc0000409), with the user name scrubbed.
+      - Review fixes in the same change:
+        - PowerShell output comes back base64-encoded UTF-8; localised text in the console code page crashed the
+          decode.
+        - Events match on their insertion strings too; Message is empty when the provider's text cannot load.
+        - The WER file lists are dropped, and the 8.3 short home path is scrubbed as well.
+        - Per-user WER folders are searched.
+        - A run folder name written in a non-Gregorian calendar falls back to the folder's creation time.
+      - README troubleshooting: "The game closes by itself with no message: run REPORT.bat right away".
+    - Next: catch the damaging write itself.
+      - Use full page heap on a TEST copy only. Image File Execution Options for DemonsSoulsRecomp.exe with
+        UseFilter + FilterFullPath set to the test copy's exe, so the player's own install is untouched. It
+        needs admin, so the user sets it up.
+      - Play the tutorial into the first Nexus arrival (a warp does not replay it; fix 148's warp repro never
+        crashed) and turn the camera at that spot.
+      - Page heap faults at the overrunning write, and our crash filter then names it.
+      - Do this on the RTX 3070 PC.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,

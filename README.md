@@ -278,6 +278,8 @@ Everything SETUP produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs) is 
 - **Setup seems stuck:** one file can take a minute; see `logs\build_last.txt`. If nothing moves for many
   minutes, press Enter once.
 - **Black window or crash on start:** check the end of `logs\last_run_err.txt`.
+- **The game closes by itself with no message:** run `REPORT.bat` right away. Its zip includes Windows' own
+  record of the crash (`crash.txt`), which the game's log cannot show.
 - **Uneven frames at 100+ fps in busy areas:** use 50 or 60 fps. On CPUs with two core complexes the game
   pins itself to the one with the largest L3 cache; `DES_AFFINITY=0` turns that off.
 - **Something is briefly black or missing the first time you see it:** its shaders are compiling in the
