@@ -3980,6 +3980,18 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       folder): with timer_font.bin the game-font timer "0:00.0 / Souls x2" at the bottom centre; without it the
       text overlay at the top. make_boss_rush.py ran on Linux (2.4 s) and wrote bossrush/timer_font.bin.
 
+209. **Native Linux / macOS: Storm King beach missing rocks -- fix 64 again, in the draw engine (2026-11-16, user report
+    after a full boss rush on the Steam Deck: "missing level geometry in the storm king fight")**
+    - rsx_draw_engine.c (Vulkan and Metal) queued a draw's DRAW_ARRAYS / DRAW_INDEX_ARRAY packets in
+      dc.arr / dc.idx[ENG_MAX_BATCHES = 256] and dropped the rest silently: every draw over 65,536 vertices or
+      indices lost its tail, as the D3D12 renderer did before fix 64. ENG_MAX_BATCHES 16384 (4M per draw,
+      the same as DC_MAX_BATCHES); everything downstream loops over the counts and grows its buffers.
+    - dc_reset logs the first draw over 256 packets and any over the new limit, once each.
+    - Checked (Steam Deck, linux-native build, play.sh defaults, test save, DES_WARP_AT=140:3,3,995 = the Storm King
+      archstone, god mode): the old build has the rock ridge along the left shore missing; the new one draws it,
+      and logs "a draw with 523 packets". 59.9 fps, no frame over 27 ms in the 50 s window. On main: spliced
+      against main's own runtime patch and compiled; not run on macOS.
+
 ### Where it stands (2026-10-27)
 New game -> Create Profile -> tutorial loads, the opening cutscene plays and gameplay renders the corridor
 with the player at the game's own auto-exposure (fix 21) and full sharpness and fog (fix 22). Open problems:

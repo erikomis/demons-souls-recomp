@@ -11513,10 +11513,24 @@ index c4e4d84..5a56bdd 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 8dff6011..1df542ab 100644
+index 8dff6011..b007bd7b 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
-@@ -109,6 +109,10 @@ typedef struct {
+@@ -46,7 +46,12 @@ extern u32 ppu_vm_size;
+ #define ENG_MAX_PIPELINES  8192
+ #define ENG_PIPELINE_INDEX 16384u        /* open-addressed key index, 2x the table */
+ #define ENG_VP_MEMO        8
+-#define ENG_MAX_BATCHES    256
++/* A draw's DRAW_ARRAYS / DRAW_INDEX_ARRAY packets: one packet covers at most 256 vertices or
++ * indices, so 256 entries cut every draw over 65,536 off silently -- Demon's Souls' Storm King
++ * beach (Shrine 3-3) has such meshes and lost its rock spires (the D3D12 renderer's DC_MAX_BATCHES
++ * had the same limit, NOTES fix 64). 16384 = 4M vertices per draw, as there; everything downstream
++ * loops over the counts and grows its buffers. */
++#define ENG_MAX_BATCHES    16384
+ #define ENG_VERT_STRIDE    (RSX_DSP_NUM_VERTEX_ATTR * 16u)
+ #define ENG_INVALID        0xFFFFFFFFu
+ /* Guest textures larger than this are a misdecoded register, not an image;
+@@ -109,6 +114,10 @@ typedef struct {
      u64 color_serial;       /* g.write_serial of the last colour write, or 0 */
      int guest_dirty;        /* rendered since guest memory last got a copy   */
      u32 last_use;           /* g.frames when last bound, sampled or presented */
@@ -11527,7 +11541,7 @@ index 8dff6011..1df542ab 100644
  } eng_surface;
  
  typedef struct {
-@@ -144,6 +148,9 @@ typedef struct {
+@@ -144,6 +153,9 @@ typedef struct {
      u32 depth;                  /* slices of a 3D texture, else 1 */
      u32 levels;                 /* SET_TEXTURE_FORMAT mipmap count it was built with */
      int rewritten;              /* guest bytes rewritten by the engine itself */
@@ -11537,7 +11551,7 @@ index 8dff6011..1df542ab 100644
  
  } eng_texture;
  
-@@ -706,6 +713,7 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+@@ -706,6 +718,7 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
      s->color_serial = 0;
      s->guest_dirty = 0;
      s->last_use = g.frames;
@@ -11545,7 +11559,7 @@ index 8dff6011..1df542ab 100644
      if (slot == g.n_surfaces) g.n_surfaces++;
      { static u32 logs = 0; if (PS3_LOG_FIRST(logs, 16))
          fprintf(stderr, "[rsx engine] surface %u:0x%08X %ux%u fmt %d%s\n",
-@@ -1168,6 +1176,15 @@ static void eng_deswizzle_3d_slice(u8* dst, const u8* src, u32 w, u32 h, u32 d,
+@@ -1168,6 +1181,15 @@ static void eng_deswizzle_3d_slice(u8* dst, const u8* src, u32 w, u32 h, u32 d,
  /* One hash per cached texture per presented frame. Word-at-a-time FNV over
   * the whole span is deliberately cheap: this is a mutation detector, not a
   * content id (rsx_live_draw.c:2002-2026). */
@@ -11561,7 +11575,7 @@ index 8dff6011..1df542ab 100644
  static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
                                      int* readable)
  {
-@@ -1175,6 +1192,29 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
+@@ -1175,6 +1197,29 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
      if (!src) { *readable = 0; return 0; }
      u64 hash = 1469598103934665603ull;
      u32 i = 0;
@@ -11591,7 +11605,7 @@ index 8dff6011..1df542ab 100644
      for (; i + 8 <= span; i += 8) {
          u64 word;
          memcpy(&word, src + i, sizeof(word));
-@@ -1192,8 +1232,13 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
+@@ -1192,8 +1237,13 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
   * sampled blocks is left to the full hash, which every texture still gets
   * every ENG_TEXHASH_FULL_EVERY frames. */
  #define ENG_TEXHASH_STRIDE      2048u
@@ -11607,7 +11621,7 @@ index 8dff6011..1df542ab 100644
  static u64 eng_texture_sparse_hash(u32 location, u32 offset, u32 span,
                                     int* readable)
  {
-@@ -1219,9 +1264,9 @@ static u64 eng_texture_sparse_hash(u32 location, u32 offset, u32 span,
+@@ -1219,9 +1269,9 @@ static u64 eng_texture_sparse_hash(u32 location, u32 offset, u32 span,
   * hashes of a scene's textures spread over the frames instead of landing on
   * the same one. */
  static int s_texhash_full_always;
@@ -11619,7 +11633,7 @@ index 8dff6011..1df542ab 100644
             (u32)(g.frames - last_full_frame) >= ENG_TEXHASH_FULL_EVERY;
  }
  
-@@ -1315,6 +1360,148 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -1315,6 +1365,148 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
      return handle;
  }
  
@@ -11768,7 +11782,7 @@ index 8dff6011..1df542ab 100644
  /* The cache slot for a texture unit's bytes, keyed on where they are and what
   * the registers say they are. An already-cached entry is re-hashed at most
   * once per presented frame and re-decoded when the guest changed it, which is
-@@ -1375,13 +1562,14 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -1375,13 +1567,14 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
                  hash = ~e->content_hash;
                  e->rewritten = 0;
              } else if (readable && (sparse != e->sparse_hash ||
@@ -11784,7 +11798,7 @@ index 8dff6011..1df542ab 100644
                  /* In place when the backend orders the upload after the draws
                   * that sampled the old bytes; a volume keeps create-and-swap,
                   * and so does a different mip count (the key does not hold it,
-@@ -1399,7 +1587,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -1399,7 +1592,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
              }
          }
          e->last_use_serial = ++g.texture_use_serial;
@@ -11793,7 +11807,7 @@ index 8dff6011..1df542ab 100644
      }
  
      u32 index;
-@@ -1428,7 +1616,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -1428,7 +1621,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
      e.handle = eng_texture_upload(location, offset, fmt, w, h, levels, pitch,
                                    cube, remap, depth, 0u);
      if (e.handle && evicted) g.be->texture_release(g.be->user, evicted);
@@ -11802,7 +11816,7 @@ index 8dff6011..1df542ab 100644
      return e.handle;
  }
  
-@@ -1489,6 +1677,106 @@ static int eng_surface_to_guest(u32 slot)
+@@ -1489,6 +1682,106 @@ static int eng_surface_to_guest(u32 slot)
      return 1;
  }
  
@@ -11909,7 +11923,7 @@ index 8dff6011..1df542ab 100644
  static float* s_depth_rows;
  static u32 s_depth_cap;
  
-@@ -1629,6 +1917,33 @@ static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0,
+@@ -1629,6 +1922,33 @@ static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0,
  
  /* ---- pipelines ----------------------------------------------------------- */
  
@@ -11943,7 +11957,7 @@ index 8dff6011..1df542ab 100644
  static u32 eng_vtex_mask(void)
  {
      u32 mask = 0;
-@@ -1649,7 +1964,7 @@ static u32 eng_unnorm_units(u32 dim[RSX_DSP_NUM_TEXTURES][3])
+@@ -1649,7 +1969,7 @@ static u32 eng_unnorm_units(u32 dim[RSX_DSP_NUM_TEXTURES][3])
      u32 mask = 0;
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
          rsx_dsp_texture t;
@@ -11952,7 +11966,7 @@ index 8dff6011..1df542ab 100644
          dim[u][0] = dim[u][1] = dim[u][2] = 0;
          if (!t.enabled || !(t.format & RSX_TEX_FMT_UNNORM) || !t.width || !t.height)
              continue;
-@@ -1671,7 +1986,7 @@ static u32 eng_volume_mask(void)
+@@ -1671,7 +1991,7 @@ static u32 eng_volume_mask(void)
      u32 mask = 0;
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
          rsx_dsp_texture t;
@@ -11961,7 +11975,7 @@ index 8dff6011..1df542ab 100644
          if (t.enabled && !t.cubemap && t.dimension == 3 && t.depth > 1 && t.width && t.height)
              mask |= 1u << u;
      }
-@@ -1683,7 +1998,7 @@ static u32 eng_cube_mask(void)
+@@ -1683,7 +2003,7 @@ static u32 eng_cube_mask(void)
      u32 mask = 0;
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
          rsx_dsp_texture t;
@@ -11970,7 +11984,7 @@ index 8dff6011..1df542ab 100644
          /* A cube face is square by construction, so a non-square image
           * cannot be one; the fragment program is compiled against this mask
           * and a texturecube slot filled with a 2D texture is a validation
-@@ -1694,20 +2009,170 @@ static u32 eng_cube_mask(void)
+@@ -1694,20 +2014,170 @@ static u32 eng_cube_mask(void)
      return mask;
  }
  
@@ -12144,7 +12158,7 @@ index 8dff6011..1df542ab 100644
      }
  
      /* A zero SET_SHADER_PROGRAM is "none", not "the program at offset 0": the
-@@ -1715,13 +2180,24 @@ static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
+@@ -1715,13 +2185,24 @@ static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
       * never read back as zero. */
      const u8* fp_uc = NULL;
      u32 fp_size = 0;
@@ -12172,7 +12186,7 @@ index 8dff6011..1df542ab 100644
      }
  
      if (out_vp) *out_vp = vp_uc;
-@@ -1739,10 +2215,20 @@ static void eng_vertex_layout(rsx_vertex_layout_plan* layout)
+@@ -1739,10 +2220,20 @@ static void eng_vertex_layout(rsx_vertex_layout_plan* layout)
      const u8* uc = NULL;
      u32 instrs = 0;
      if (eng_guest_programs(&uc, &instrs, NULL, NULL)) {
@@ -12197,7 +12211,7 @@ index 8dff6011..1df542ab 100644
      }
      rsx_vertex_layout_plan_init(layout, mask);
  }
-@@ -1910,6 +2396,17 @@ static u64 eng_fp_debug_hash(const u8* fp_uc, u32 fp_size)
+@@ -1910,6 +2401,17 @@ static u64 eng_fp_debug_hash(const u8* fp_uc, u32 fp_size)
      return fp_uc && fp_size
          ? rsx_fp_structural_hash(fp_uc, fp_size, 1469598103934665603ull) : 0;
  }
@@ -12215,7 +12229,7 @@ index 8dff6011..1df542ab 100644
  
  static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
                              const rsx_be_render_state* rs,
-@@ -1934,27 +2431,60 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1934,27 +2436,60 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      const u32 vtex_mask = eng_vtex_mask();
      /* BRB/CLB outcomes are baked into the program: the branch bits are
       * identity only for a program that tests them. */
@@ -12281,7 +12295,7 @@ index 8dff6011..1df542ab 100644
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
          if (!(gamma_units & (1u << u))) gamma_masks[u] = 0;
      /* Texture sign expansion: SET_TEXTURE_ADDRESS's UNSIGNED_REMAP_BIASED
-@@ -1962,10 +2492,18 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1962,10 +2497,18 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
       * gamma: only units the program samples count. */
      u8 expand_masks[RSX_DSP_NUM_TEXTURES] = {0};
      if (!fixed) for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u) {
@@ -12302,7 +12316,7 @@ index 8dff6011..1df542ab 100644
      for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
          if (!(expand_units & (1u << u))) expand_masks[u] = 0;
  
-@@ -1979,14 +2517,32 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1979,14 +2522,32 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
              unnorm_dim[u][0] = unnorm_dim[u][1] = unnorm_dim[u][2] = 0;
  
      g.fp_constants.count = 0;
@@ -12338,7 +12352,7 @@ index 8dff6011..1df542ab 100644
      const int wpos_scaled = !fixed && (wpos_grid[0] > 1u || wpos_grid[1] > 1u);
  
      /* Identity: the vertex program's own bytes, the fragment program's
-@@ -2001,8 +2557,15 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2001,8 +2562,15 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      } else {
          key = eng_vp_hash(vp_uc, vp_instrs * 16u, key);
          if (vp_branch_bits_used) key = eng_fnv1a(&vp_branch_bits, sizeof vp_branch_bits, key);
@@ -12356,7 +12370,7 @@ index 8dff6011..1df542ab 100644
          const u32 fp_ctrl_key = fp_ctrl & 0x4Eu; /* colour width and fragment depth export */
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
          if (srgb_output) key = eng_fnv1a(&srgb_output, sizeof srgb_output, key);
-@@ -2019,6 +2582,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2019,6 +2587,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          key = eng_fnv1a(&unnorm_mask, sizeof unnorm_mask, key);
          if (unnorm_mask) key = eng_fnv1a(unnorm_dim, sizeof unnorm_dim, key);
          if (wpos_scaled) key = eng_fnv1a(wpos_grid, sizeof wpos_grid, key);
@@ -12364,7 +12378,7 @@ index 8dff6011..1df542ab 100644
      }
      key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
      key = eng_fnv1a(&layout->stride, sizeof layout->stride, key);
-@@ -2040,6 +2604,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2040,6 +2609,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      }
      if (g.n_pipelines >= ENG_MAX_PIPELINES) return 0;
  
@@ -12378,7 +12392,7 @@ index 8dff6011..1df542ab 100644
      u32 handle = 0;
      int vi = 1, fi = 1;
      u32 nconst = 0;
-@@ -2065,6 +2636,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2065,6 +2641,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          if (fi > 0 && wpos_scaled &&
              rsx_fp_apply_wpos_grid(s_ps_hlsl, sizeof s_ps_hlsl, wpos_grid[0], wpos_grid[1]) < 0)
              fi = -1;
@@ -12388,7 +12402,7 @@ index 8dff6011..1df542ab 100644
          if (fi > 0 && rsx_fp_apply_unnorm_scale(s_ps_hlsl, sizeof s_ps_hlsl, unnorm_mask,
                                                  (const u32 (*)[3])unnorm_dim, cube_mask,
                                                  vol_mask) < 0)
-@@ -2080,7 +2654,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -2080,7 +2659,13 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      if (vi > 0 && fi > 0)
          handle = g.be->pipeline_create(g.be->user, s_vs_hlsl, s_ps_hlsl, rs,
                                         layout, layout->stride, rt_fmt, rt_count);
@@ -12403,7 +12417,27 @@ index 8dff6011..1df542ab 100644
      /* RSX_ENGINE_SHADER_DUMP=<existing dir>: each new pipeline's two programs
       * as <dir>/pipe<handle>.vs.hlsl and .ps.hlsl, the handle being the one
       * RSX_ENGINE_PASS_DUMP's index names, and a guest fragment program's own
-@@ -2244,6 +2824,491 @@ static int dc_reserve_indices(u32 count)
+@@ -2137,6 +2722,19 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+ 
+ static void dc_reset(void)
+ {
++    /* The previous draw's packet count: the first draw over 256 packets (what the old limit cut) and
++     * any over the limit itself are logged once each. */
++    {
++        static int s_big, s_over;
++        if (dc.n_packets > 256u && !s_big) {
++            s_big = 1;
++            fprintf(stderr, "[rsx engine] a draw with %u packets (more than 65,536 vertices or indices)\n", dc.n_packets);
++        }
++        if (dc.n_packets > ENG_MAX_BATCHES && !s_over) {
++            s_over = 1;
++            fprintf(stderr, "[rsx engine] a draw with %u packets: only the first %u drawn\n", dc.n_packets, ENG_MAX_BATCHES);
++        }
++    }
+     dc.n_arr = dc.n_idx = dc.n_packets = 0;
+     dc.n_refs = dc.n_source_refs = dc.n_verts = dc.n_cuts = 0;
+     dc.refs_remapped = 0;
+@@ -2244,6 +2842,491 @@ static int dc_reserve_indices(u32 count)
      return 1;
  }
  
@@ -12895,7 +12929,7 @@ index 8dff6011..1df542ab 100644
  /* Turn this group's batches into a reference list, recording a CUT rather
   * than fetching a phantom vertex wherever the restart sentinel appears, then
   * collapse repeated references and fetch each unique vertex once.
-@@ -2326,6 +3391,9 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -2326,6 +3409,9 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
      rsx_vertex_fetch_plan_init(&dc.fetch_plan, &g.rsx, layout, eng_guest_ptr, NULL);
      rsx_vertex_fetch_plan_set_inline(&dc.fetch_plan, &g.rsx, dc.inl, dc.inl_bytes);
      rsx_vertex_fetch_plan_prepare(&dc.fetch_plan, dc.refs, dc.n_refs);
@@ -12905,7 +12939,7 @@ index 8dff6011..1df542ab 100644
      if (!dc_reserve_verts((u64)dc.n_refs * layout->stride)) {
          dc.fetch_ok = 0;
          return;
-@@ -2474,7 +3542,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -2474,7 +3560,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
      u32 feedback[RSX_BE_MAX_COLOR_TARGETS] = {0};
      for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
          rsx_dsp_texture t;
@@ -12914,7 +12948,7 @@ index 8dff6011..1df542ab 100644
          /* A unit left enabled by an earlier draw but not sampled by this
           * program is skipped: resolving it would cost a cache check, and an
           * aliased surface a store to guest memory, for nothing. */
-@@ -2873,9 +3941,9 @@ static void pd_note(const u32* targets, u32 n_targets, u32 zslot,
+@@ -2873,9 +3959,9 @@ static void pd_note(const u32* targets, u32 n_targets, u32 zslot,
      }
      if (s_pd.draws_log) {
          fprintf(s_pd.draws_log, "pass %03u draw %u: pipe %u cmask %08X blend %u %X/%X"
@@ -12926,7 +12960,7 @@ index 8dff6011..1df542ab 100644
          if (rsx_dsp_reg(&g.rsx, M_POLY_OFFSET_FILL) & 1u) {
              const u32 f = rsx_dsp_reg(&g.rsx, M_POLY_OFFSET_FACTOR);
              const u32 b = rsx_dsp_reg(&g.rsx, M_POLY_OFFSET_BIAS);
-@@ -3022,10 +4090,76 @@ static void eng_log_rect_clear(const char* what, const u32 rc[4], u32 w, u32 h)
+@@ -3022,10 +4108,76 @@ static void eng_log_rect_clear(const char* what, const u32 rc[4], u32 w, u32 h)
                  what, rc[0], rc[1], rc[2], rc[3], w, h);
  }
  
@@ -13003,7 +13037,7 @@ index 8dff6011..1df542ab 100644
      /* Mixed geometry sources have no defined concatenation here. Reject the
       * whole group instead of drawing partial/misordered geometry. */
      if (dc.n_immediate && (dc.n_arr || dc.n_idx || dc.inl_bytes ||
-@@ -3051,11 +4185,30 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -3051,11 +4203,30 @@ static void sink_end(void* user, const rsx_dispatch* r)
  
      rsx_vertex_layout_plan layout;
      eng_vertex_layout(&layout);
@@ -13034,7 +13068,7 @@ index 8dff6011..1df542ab 100644
      if (rebuild) {
          if (!eng_topology_rebuild(prim, dc.refs_remapped, &indexed)) return;
          n_draw = indexed
-@@ -3093,6 +4246,16 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -3093,6 +4264,16 @@ static void sink_end(void* user, const rsx_dispatch* r)
                                            &fp_hash);
      if (!pipeline) return;
      if (fp_hash && eng_debug_fp(fp_hash, pipeline)) return;
@@ -13051,7 +13085,7 @@ index 8dff6011..1df542ab 100644
  
      /* Textures before any pipeline or target binding: a cache refresh can
       * replace a resource, and the backend is free to submit while doing it. */
-@@ -3110,7 +4273,11 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -3110,7 +4291,11 @@ static void sink_end(void* user, const rsx_dispatch* r)
      const u32 vtex_mask = sink_bind_vertex_textures(eng_vtex_mask(), vtextures,
                                                      vsamplers);
  
@@ -13063,7 +13097,7 @@ index 8dff6011..1df542ab 100644
          if (!dc_reserve_indices(n_draw)) return;
          rsx_draw_engine_write_topology_indices(
              prim, dc.n_source_refs, dc.cuts, dc.n_cuts,
-@@ -3225,12 +4392,23 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -3225,12 +4410,23 @@ static void sink_end(void* user, const rsx_dispatch* r)
      }
  
      const u32 uploaded = indexed ? dc.n_verts : n_draw;
@@ -13087,7 +13121,7 @@ index 8dff6011..1df542ab 100644
  
      if (rs.color_mask) eng_surfaces_wrote(targets, n_targets);
      if (zslot != ENG_INVALID && rs.depth_test && rs.depth_write) {
-@@ -3375,10 +4553,14 @@ static void eng_present(u32 buffer_id)
+@@ -3375,10 +4571,14 @@ static void eng_present(u32 buffer_id)
                      i, g.surfaces[i].location, g.surfaces[i].offset,
                      g.surfaces[i].w, g.surfaces[i].h, g.surfaces[i].handle);
      }
@@ -13102,7 +13136,7 @@ index 8dff6011..1df542ab 100644
      g.last_guest_draws = g.guest_draws;
      g.guest_draws = 0;
  }
-@@ -3392,6 +4574,25 @@ static void sink_flip(void* user, const rsx_dispatch* r, u32 arg)
+@@ -3392,6 +4592,25 @@ static void sink_flip(void* user, const rsx_dispatch* r, u32 arg)
  
  /* ---- public API ---------------------------------------------------------- */
  
@@ -13128,7 +13162,7 @@ index 8dff6011..1df542ab 100644
  void rsx_draw_engine_set_backend(const rsx_draw_backend* backend)
  {
      g.be = backend;
-@@ -3460,6 +4661,7 @@ void rsx_draw_engine_shutdown(void)
+@@ -3460,6 +4679,7 @@ void rsx_draw_engine_shutdown(void)
      if (!g.be) return;
      if (g.ready && g.be->submit_and_wait)
          g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_SHUTDOWN);
@@ -13136,7 +13170,7 @@ index 8dff6011..1df542ab 100644
      for (u32 i = 0; i < g.n_textures; i++)
          if (g.textures[i].handle) g.be->texture_release(g.be->user, g.textures[i].handle);
      for (u32 i = 0; i < g.n_pipelines; i++)
-@@ -3478,15 +4680,50 @@ void rsx_draw_engine_shutdown(void)
+@@ -3478,15 +4698,50 @@ void rsx_draw_engine_shutdown(void)
      free(dc.refs); free(dc.cuts); free(dc.verts); free(dc.immediate);
      rsx_vertex_remap_destroy(&dc.ref_remap);
      memset(&dc, 0, sizeof dc);
@@ -13187,7 +13221,7 @@ index 8dff6011..1df542ab 100644
      /* The subchannel is a binding slot, not an engine selector, and a title
       * whose SPU-built command lists bind NV4097 elsewhere would otherwise
       * store its state in the wrong register bank.  Standard NV4097 methods
-@@ -3494,9 +4731,61 @@ void rsx_draw_engine_method(u32 method, u32 arg)
+@@ -3494,9 +4749,61 @@ void rsx_draw_engine_method(u32 method, u32 arg)
       * (0xE9xx, 0xEBxx) encode the subchannel bits as part of the address;
       * preserve them with the wider mask. */
      u32 m = (method >= 0xE000u) ? (method & 0xFFFCu) : (method & 0x1FFCu);
