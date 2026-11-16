@@ -18,6 +18,9 @@ screenshots. Bug reports with a REPORT.bat zip are best as a GitHub issue. Thank
 - **No online play yet.** Multiplayer comes once the game is optimised.
 - **Plays smoothly on Windows, macOS and Linux.** The **Steam Deck** is playable too: not perfectly optimised
   yet, but very good in most areas. The full development log is [docs/NOTES.md](docs/NOTES.md).
+- **Android (arm64) is in an early phase.** It boots into the game and plays at 30 fps on a Pixel 10 Pro XL,
+  with a controller or touch controls. The main target is the AYN Thor, which I don't own yet, so it is
+  untested there. See [Android](#android-experimental).
 
 Hit a stutter or crash? Press **F8** when it happens and run `REPORT.bat` afterwards
 ([details](#reporting-stutters-and-crashes)).
@@ -118,6 +121,26 @@ You need about **14 GB** free.
 
 `mac/launcher/` has a desktop app that does all of this without a terminal (see its README). Controls,
 settings and what is still missing: [docs/MACOS.md](docs/MACOS.md).
+
+### Android (experimental)
+
+**Early phase.** An arm64 build on the same Vulkan renderer as the native Linux build, packed as an APK.
+It boots into the game and plays: on a Pixel 10 Pro XL (Android 17) it loads a save and holds 30 fps in game,
+with a Bluetooth controller or the on-screen touch controls. The handheld it is meant for, the **AYN Thor**,
+is untested because I don't own one yet, and other phones are untested too. No release: you build the APK
+yourself, on a Linux PC, from your own disc. **Never share the APK**: it contains the game's code.
+
+1. Run the native Linux steps first (`linux/native/build.sh venv game decrypt toolkit lift`): they make the
+   game files and the recompiled code from your disc image.
+2. Install the Android SDK with NDK r28 and a JDK 17, then run `android/build_deps.sh` (SDL2 + glslang for
+   arm64), `android/build_so.sh` (the game, ~10 minutes on an 8-core PC) and `android/build_apk.sh install`
+   (with the phone connected over USB, USB debugging on).
+3. `android/push_game.sh` copies the game files (about 8 GB) to the phone. Then start
+   *Demon's Souls (ps3recomp)* from the app drawer.
+
+It starts at 30 fps, with no movies, straight to the title screen. Not there yet: 60 fps, movies, the
+on-screen keyboard (the character is named "Slayer"), and rumble. Details, measurements and the open points:
+[docs/ANDROID.md](docs/ANDROID.md).
 
 ## Updating
 
@@ -258,6 +281,7 @@ patches/                     ps3recomp-local.patch (runtime, on ps3recomp @ 4e8f
 tools/                       disc extraction, SPU lifting, perf report, mod installer, model tool
 docs/NOTES.md                development log: every fix, why, and how it was measured
 linux/, mac/                 Linux / Steam Deck kit and macOS build (docs/LINUX.md, docs/MACOS.md)
+android/                     Android (arm64) build: APK project, entry point, build scripts (docs/ANDROID.md)
 ```
 
 Everything SETUP produces (`game/`, `port/`, `deps/`, `.venv/`, saves, logs) is git-ignored.

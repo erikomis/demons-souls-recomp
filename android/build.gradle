@@ -1,0 +1,5 @@
+// The APK around libmain.so (android/build_so.sh) and SDL2's own Java side (org.libsdl.app, from SDL 2.30's
+// android-project). android/build_apk.sh builds it.
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}
