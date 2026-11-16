@@ -66,7 +66,21 @@ what it says and run SETUP.bat again: finished steps are skipped.
 
 ### Linux / Steam Deck
 
-The Windows build runs through Proton (Steam's compatibility layer), built on your PC from your disc image.
+**Recommended: the native Linux build, with its own launcher.** The game as a Linux program drawn with Vulkan, with no Proton.
+On the Steam Deck five of the seven archstones hold 60 fps; the two heaviest spots (Boletarian Palace 1-1 and
+Latria's second archstone) run at 55-56, and Boletaria around 48 mid-fight
+([frame rates](docs/LINUX_NATIVE.md#steam-deck-frame-rates)).
+- **Install:** run `linux/native/install.sh` from a `git clone` (or from the release's Linux ZIP; the launcher's
+  Update button needs the clone). It opens a one-click installer window: your disc image, its disc key, then
+  Install.
+- **Play:** `python3 linux/native/launcher.py` opens the native launcher, which is confirmed to work great. It
+  keeps your settings, updates and rebuilds, adds the game to the applications menu, and **Add to Steam** makes a
+  shortcut for game mode (a controller works the launcher). `linux/native/play.sh` starts the game directly.
+
+Details: [docs/LINUX_NATIVE.md](docs/LINUX_NATIVE.md).
+
+**Alternative: the Windows build through Proton** (Steam's compatibility layer), built on your PC from your disc image.
+Use it if the native build does not work for you.
 It plays on Ubuntu 24.04 and the Steam Deck; the Deck is not perfectly optimised yet, but very good in most areas. You need a
 Vulkan GPU driver, about **25 GB** free, and an internet connection for the first run.
 
@@ -86,19 +100,6 @@ Settings are the same switches as on Windows, e.g. `DES_FPS=60 ./DemonsSoulsReco
 non-Steam game, with *Start in* set to `~/DemonsSoulsRecomp` and no forced Proton version. **From a git
 checkout** instead: install Python 3.10+, git, and clang + lld 17 or newer, then run
 `sh linux/setup.sh /path/to/image.iso` and `sh linux/play.sh`. Troubleshooting: [docs/LINUX.md](docs/LINUX.md).
-
-**Native Linux build, with its own launcher:** the game as a Linux program drawn with Vulkan, with no Proton.
-On the Steam Deck five of the seven archstones hold 60 fps; the two heaviest spots (Boletarian Palace 1-1 and
-Latria's second archstone) run at 55-56, and Boletaria around 48 mid-fight
-([frame rates](docs/LINUX_NATIVE.md#steam-deck-frame-rates)).
-- **Install:** run `linux/native/install.sh` from a `git clone` (or from the release's Linux ZIP; the launcher's
-  Update button needs the clone). It opens a one-click installer window: your disc image, its disc key, then
-  Install.
-- **Play:** `python3 linux/native/launcher.py` opens the native launcher, which is confirmed to work great. It
-  keeps your settings, updates and rebuilds, adds the game to the applications menu, and **Add to Steam** makes a
-  shortcut for game mode (a controller works the launcher). `linux/native/play.sh` starts the game directly.
-
-Details: [docs/LINUX_NATIVE.md](docs/LINUX_NATIVE.md).
 
 ### macOS (Apple silicon)
 
