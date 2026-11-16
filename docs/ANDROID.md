@@ -25,9 +25,6 @@ driver "PowerVR D-Series Vulkan Driver" 25.3@6908880 (conformance 1.4.5.0).
   status 0, battery 27 C, no fan.
 - Background and back (home key, 20 s, back): the same process carries on, the surface and swapchain made
   again, sound back at its normal queue (~31 ms), 30 fps.
-- Keys work (SDL's keyboard -> the pad, `input.toml`): `adb shell input keyevent --longpress KEYCODE_ENTER`
-  is START (a plain keyevent is down and up within one event pump: the game never sees it), KEYCODE_E
-  cross, KEYCODE_DPAD_* the D-pad.
 - The game folder pushed by adb: 7.9 GB in 2 min 47 s (USB, ~49 MB/s).
 - Found and fixed on the device: files adb pushes are the shell user's (folders drwxrws---), which the app
   cannot open (push_game.sh now opens them up); SDL asked for any orientation (the window is resizable;
@@ -63,6 +60,19 @@ M0, measured on a Ryzen 7 5800X (16 threads, 32 GB), NDK r28c, `CMAKE_BUILD_TYPE
 | APK | 323 MB; both libraries stored uncompressed, 16 KB aligned (`zipalign -c -P 16`) |
 
 `libmain.so` exports one symbol, `SDL_main`; its LOAD segments are 16 KB aligned (`-z max-page-size=16384`).
+
+## Controls
+
+- **A controller** (Bluetooth or USB): SDL's game controller, on the game's pad port 0. Tested: an Xbox
+  Series X pad over Bluetooth on the Pixel (no rumble: Android gives SDL none for it there).
+- **Touch** (`android/app/src/main/java/io/github/timboat/desrecomp/TouchControls.java`), drawn over the
+  game while no controller is connected: a floating left stick (a thumb anywhere in the lower left), the
+  camera (a drag anywhere on the right half that is not a button), ✕ ○ □ △ and R3 (lock on) at the lower
+  right, L1 / L2 and R1 / R2 in the top corners, a D-pad on the left, SELECT / START at the top. Its state
+  goes to cellPad's port 0 (`ps3_pad_touch_set`, merged after the keyboard as the keyboard is with a pad),
+  so touch, a controller and a keyboard can be used together. Tested on the Pixel.
+- **Keys** (a keyboard, or adb): `input.toml`'s layout; `adb shell input keyevent --longpress KEYCODE_ENTER`
+  is START (a plain keyevent is down and up within one event pump: the game never sees it).
 
 ## Run
 
@@ -110,5 +120,4 @@ adb shell cat /sdcard/Android/data/io.github.timboat.desrecomp/files/logs/last_r
   keep their state; Android may still end the process if it needs the memory.
 - The letterbox does not move the image overlay (the boss rush timer): it is placed over the whole screen.
 - The compositor rotates every frame (preTransform IDENTITY); pre-rotating in the backend would save that.
-- Touch has no mapping: a controller (USB / Bluetooth, through SDL) or a keyboard is needed. Controller untried.
 - After SDL_main returns, the app's process stays (SDLActivity); `adb shell am force-stop` before a new run.

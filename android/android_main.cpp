@@ -16,6 +16,7 @@
 // DES_SKIP_INTRO=1. A thread logs the process's peak and current resident memory (VmHWM / VmRSS) every
 // 10 s to the game log and to logcat (tag "DeS").
 #include <android/log.h>
+#include <jni.h>
 #include <SDL.h>
 
 #include <dirent.h>
@@ -31,7 +32,15 @@
 
 #include <string>
 
-int ds_boot_main(int argc, char** argv);   // boot_main.cpp's main (C++ linkage: main=ds_boot_main)
+int ds_boot_main(int argc, char** argv);
+extern "C" void ps3_pad_touch_set(uint32_t buttons, uint32_t sticks);   // cellPad.c: port 0's touch source
+
+// The on-screen controls (TouchControls.java) hand their state over here on every change: the PS3 button
+// mask (CELL_PAD_CTRL_*) and the two sticks packed lx | ly << 8 | rx << 16 | ry << 24 (128 = centre).
+extern "C" __attribute__((visibility("default"))) JNIEXPORT void JNICALL
+Java_io_github_timboat_desrecomp_TouchControls_nativeTouchPad(JNIEnv*, jclass, jint buttons, jint sticks) {
+    ps3_pad_touch_set((uint32_t)buttons, (uint32_t)sticks);
+}   // boot_main.cpp's main (C++ linkage: main=ds_boot_main)
 
 #define TAG "DeS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
