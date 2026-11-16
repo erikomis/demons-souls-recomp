@@ -16,8 +16,8 @@ screenshots. Bug reports with a REPORT.bat zip are best as a GitHub issue. Thank
 - **60 fps** is recommended (50 on a 100 Hz screen). 30, uncapped and any custom rate work too. Above 60 fps
   there are still known bugs, such as the sound drifting out of sync.
 - **No online play yet.** Multiplayer comes once the game is optimised.
-- **Performance:** mostly smooth on high-end PCs; work on lower-end PCs and the Steam Deck is ongoing. The full
-  development log is [docs/NOTES.md](docs/NOTES.md).
+- **Plays smoothly on Windows, macOS and Linux.** The **Steam Deck** is playable too: not perfectly optimised
+  yet, but very good in most areas. The full development log is [docs/NOTES.md](docs/NOTES.md).
 
 Hit a stutter or crash? Press **F8** when it happens and run `REPORT.bat` afterwards
 ([details](#reporting-stutters-and-crashes)).
@@ -67,7 +67,7 @@ what it says and run SETUP.bat again: finished steps are skipped.
 ### Linux / Steam Deck
 
 The Windows build runs through Proton (Steam's compatibility layer), built on your PC from your disc image.
-It plays on Ubuntu 24.04 and the Steam Deck; the Deck is not smooth yet and loads are slow. You need a
+It plays on Ubuntu 24.04 and the Steam Deck; the Deck is not perfectly optimised yet, but very good in most areas. You need a
 Vulkan GPU driver, about **25 GB** free, and an internet connection for the first run.
 
 1. Download `DemonsSoulsRecomp-Setup-x86_64.AppImage` from the newest
@@ -97,8 +97,8 @@ play with `python3 linux/native/launcher.py` (a launcher window) or `linux/nativ
 
 ### macOS (Apple silicon)
 
-A native arm64 build on Metal (by erikomis). **It is playable, but very behind on updates:** most of the
-Windows and Linux features are missing. The Mac version will be worked on once Windows and Linux are finished.
+A native arm64 build on Metal (by erikomis). **It plays smoothly**, but it is behind on updates: some of the
+Windows and Linux features are missing.
 You need about **14 GB** free.
 
 1. Install Apple's command-line tools (`xcode-select --install`), then with [Homebrew](https://brew.sh):
