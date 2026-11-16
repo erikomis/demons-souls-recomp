@@ -37,3 +37,14 @@
 *.self
 *.sprx
 __pycache__/
+
+# Android: the APK and its build are made from your own disc -- never commit or publish them
+*.apk
+*.aab
+android/app/build/
+android/app/jniLibs/
+android/.cxx/
+android/.gradle/
+android/build/
+android/local.properties
+des.ini

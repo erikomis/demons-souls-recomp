@@ -80,8 +80,9 @@ endif()
 if(MSVC AND CMAKE_C_COMPILER_ID MATCHES "Clang")
     add_compile_options(/clang:-falign-functions=64 /clang:-falign-loops=64)
 endif()
-# The native Linux build (clang driver) gets the same alignment.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+# The native Linux build (clang driver) gets the same alignment, and so does Android (the NDK's clang;
+# CMAKE_SYSTEM_NAME is "Android" there).
+if((CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID) AND CMAKE_C_COMPILER_ID MATCHES "Clang")
     add_compile_options(-falign-functions=64 -falign-loops=64)
 endif()
 
@@ -93,6 +94,13 @@ endif()
 # imported one arrives without SDL2, pthreads, the Metal frameworks or the
 # Winsock/XInput imports -- the link then fails on every platform for a
 # different reason. add_subdirectory hands all of that over with the target.
+# Android: the game is a shared library SDLActivity loads, so only SDL_main (android/android_main.cpp)
+# is exported; everything else, the runtime library's objects included, stays hidden.
+if(ANDROID)
+    set(CMAKE_C_VISIBILITY_PRESET hidden)
+    set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+    set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+endif()
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
 
@@ -202,7 +210,10 @@ else()
     set(DS_RUNNER main.cpp)
 endif()
 
-add_executable(${PROJECT_NAME}
+# Android: a shared library (libmain.so, the name SDLActivity loads) instead of an executable, entered
+# through SDL_main in android/android_main.cpp, which sets up the environment play.sh would and calls the
+# runner's main -- renamed ds_boot_main there so SDL_main is the only entry point.
+set(DS_SOURCES
     ${DS_RUNNER}
     stubs.cpp
     ds_guest_setjmp.cpp   # fix 101: guest setjmp/longjmp through host setjmp/longjmp
@@ -212,6 +223,13 @@ add_executable(${PROJECT_NAME}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
+if(ANDROID)
+    add_library(${PROJECT_NAME} SHARED "${CMAKE_CURRENT_SOURCE_DIR}/../android/android_main.cpp" ${DS_SOURCES})
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME main)
+    set_source_files_properties(${DS_RUNNER} PROPERTIES COMPILE_DEFINITIONS "main=ds_boot_main")
+else()
+    add_executable(${PROJECT_NAME} ${DS_SOURCES})
+endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include
 # directory (and their flags) to those TUs alone: adding it to the whole target
@@ -281,6 +299,15 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ps3recomp_runtime
 )
+
+# Android: liblog (__android_log_print) and libandroid; 16 KB pages (Android 15+ devices may run with
+# them, and Play requires it); no undefined symbols left for the loader to find at run time.
+if(ANDROID)
+    find_package(SDL2 REQUIRED)   # android_main.cpp: SDL_AndroidGetExternalStoragePath
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 android log)
+    target_link_options(${PROJECT_NAME} PRIVATE
+        -Wl,-z,max-page-size=16384 -Wl,--no-undefined -Wl,--exclude-libs,ALL)
+endif()
 
 # The runtime is C++, and on Apple also Objective-C. Letting CMake infer the
 # link language from the generated C would leave the C++ standard library out.
@@ -398,7 +425,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
-install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
 
 # ---------------------------------------------------------------------------
 # The window launcher (macOS)
