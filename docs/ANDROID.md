@@ -5,7 +5,26 @@ drawn by the same Vulkan backend as the native Linux build ([LINUX_NATIVE.md](LI
 on a Linux PC with the NDK; the APK is made from your own disc and stays on your machines, debug-signed.
 **Never publish the APK**: it contains the game's lifted code.
 
-**Status (2026-11-16):** builds and packs (M0). Not yet run on a device.
+**Status (2026-11-16):** builds and packs (M0); boots to PRESS START on a Pixel 10 Pro XL (M1/M2).
+
+## First device run: Pixel 10 Pro XL
+
+Tensor G5, Android 17 (API 37), 16 GB, 4 KB pages. PowerVR D-Series DXT-48-1536 MC1, Vulkan 1.4.317,
+driver "PowerVR D-Series Vulkan Driver" 25.3@6908880 (conformance 1.4.5.0).
+
+- Boots to the title screen ("PRESS START BUTTON", textures and fonts right) at a steady 30.0 fps, game
+  time 1.000 s per real second; sound at its rate, no underruns. No driver crash, no signal trouble.
+- `[vm] guest memory at 0x7a20000000` (the 3.5 GB MAP_NORESERVE reservation works under bionic).
+- Peak memory at the title screen: VmHWM 604-609 MB. (Native Linux x86-64, same settings, RTX 3070: about
+  1,970 MB at the title and 2,280 MB at most in game -- a save loaded, warps to Boletaria, Latria and the
+  Valley -- figures that include what the NVIDIA driver maps into the process.)
+- `textureCompressionBC` is false, BC1/2/3 are sampleable per format: DXT textures on. No depthBounds.
+- The game folder pushed by adb: 7.9 GB in 2 min 47 s (USB, ~49 MB/s).
+- Found and fixed on the device: files adb pushes are the shell user's (folders drwxrws---), which the app
+  cannot open (push_game.sh now opens them up); SDL asked for any orientation (the window is resizable;
+  now landscape only, SDL_HINT_ORIENTATIONS); the picture came out turned 90 degrees with preTransform =
+  currentTransform (now IDENTITY on Android, the compositor rotates; VK_SUBOPTIMAL_KHR at present is
+  expected then and no longer rebuilds the swapchain every frame).
 
 ## Build
 
@@ -64,11 +83,15 @@ adb shell cat /sdcard/Android/data/io.github.timboat.desrecomp/files/logs/last_r
   - The toolkit's CMake stops when glslang is missing on Android (the game would draw black).
 - `timespec_get` needs API 29, the minimum here (`ANDROID_PLATFORM=29`).
 
-## Known open points (not tried on a device yet)
+## Known open points
 
 - The aarch64 Linux signal / context code in `win32_compat.c` has never run; on Android its handlers sit
   behind ART's libsigchain, and the thread-park signal (`SIGRTMIN + 4`) may clash with one ART uses.
 - SDL's window and event pump run on the vblank ticker thread, not SDL_main's.
-- The window's surface goes away when the app goes to the background (SDL_APP_WILLENTERBACKGROUND /
-  DIDENTERFOREGROUND are not handled yet); the swapchain's `preTransform = currentTransform` may show a
-  rotated picture; no letterbox.
+- In the background the game stops (SDL blocks the thread that pumps its events) while its sound queue
+  keeps growing (13.9 s after a minute), and Android may then end the process: coming back starts the game
+  anew. SDL_APP_WILLENTERBACKGROUND / DIDENTERFOREGROUND are not handled yet.
+- No letterbox: the 16:9 picture is stretched to the phone's 20:9.
+- The compositor rotates every frame (preTransform IDENTITY); pre-rotating in the backend would save that.
+- No input tried yet (touch has no mapping; a controller over USB / Bluetooth should go through SDL).
+- After SDL_main returns, the app's process stays (SDLActivity); `adb shell am force-stop` before a new run.

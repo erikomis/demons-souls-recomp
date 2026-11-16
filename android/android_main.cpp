@@ -190,6 +190,10 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int, char**) {
         }
     }
     if (getenv("PS3RECOMP_SPIRV_CACHE")) mkdirs(getenv("PS3RECOMP_SPIRV_CACHE"));
+    // Landscape only. The backend's window is resizable, and SDL then asks Android for any orientation
+    // (SCREEN_ORIENTATION_FULL_USER), which overrides the manifest's sensorLandscape: the Pixel showed the
+    // title screen in portrait.
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 
     fprintf(stderr, "[android] files %s, DES_FPS=%s\n", F.c_str(), getenv("DES_FPS") ? getenv("DES_FPS") : "30");
     pthread_t th;

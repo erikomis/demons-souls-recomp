@@ -25,4 +25,10 @@ echo "copying $SRC -> $DST/game (about 8 GB: 5-15 minutes over USB 3)"
 "$ADB" push --sync "$SRC/." "$DST/game/"
 "$ADB" push -q "$DES_ROOT/linux/native/input.toml" "$DST/input.toml"
 [ -f "$here/des.ini" ] && "$ADB" push -q "$here/des.ini" "$DST/des.ini"
+# adb creates what it pushes as the shell user, folders drwxrws--- (group ext_data_rw): the app's own uid is
+# neither, and reads its folder straight from the disk (not through the FUSE layer), so it could not open
+# them (Permission denied on EBOOT.elf; Pixel 10, Android 17). Open them to everyone: only the app and adb
+# can reach this folder anyway.
+"$ADB" shell chmod -R a+rwX "$DST/game" "$DST/input.toml"
+[ -f "$here/des.ini" ] && "$ADB" shell chmod a+rw "$DST/des.ini"
 echo "done: $DST"
