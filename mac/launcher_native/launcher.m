@@ -753,7 +753,9 @@ enum { K_SLOT = 1000 };   // a Controls slot button's tag: K_SLOT + action * 2 +
     long hz = NSScreen.mainScreen.maximumFramesPerSecond;
     if (_fps.indexOfSelectedItem == 1) _fpsHint.stringValue = @"The game's original frame rate.";
     else if (_fps.indexOfSelectedItem >= 2)
-        _fpsHint.stringValue = [NSString stringWithFormat:@"Above 60 nothing paces frames to the screen yet: it can look uneven. Your screen: %ld Hz.", hz];
+        _fpsHint.stringValue = _fps.indexOfSelectedItem == 3
+            ? @"As fast as the Mac runs it. Not paced to the screen: it can look uneven."
+            : [NSString stringWithFormat:@"Smooth where the Mac holds it and it divides your screen's %ld Hz; heavy areas drop to an even lower rate.", hz];
     else if (hz % 60 == 0)
         _fpsHint.stringValue = [NSString stringWithFormat:@"Twice the original, at real game speed. Your screen goes up to %ld Hz, a multiple of 60.", hz];
     else

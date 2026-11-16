@@ -3714,6 +3714,38 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
      - Not done: present pacing above 60 (frames go to the window as they finish), the game-speed swings,
        HighGraphics' own time. Not checked: a picture comparison after the texture hashing change beyond the
        tour's runs finishing without renderer errors; menus and movies above 60.
+303. **macOS: frame pacing -- the game's clock on the screen's refreshes, frames held for theirs (2026-11-15, MacBook M2 Pro, 120 Hz):**
+     - User: pacing so that above 60 looks smooth. Measured first (new in the window host's stats line: how
+       many refreshes each shown frame was up, from the drawables' presented times): at 60 fps on the 120 Hz
+       screen only 67-80% of frames were up 2 refreshes, the rest in 1 + 3 pairs (raw gaps over 200 frames:
+       134 x 16.7 ms, 33 x 8.3 ms, 33 x 25.0 ms), in stretches as the guest's free-running 120 Hz vblank clock
+       drifted across the display's. So 60 was uneven too. At 120 fps in Stonefang 99.5% were up 1.
+     - Fix, three parts (rsx_host_surface.h, tools/host_window/host_window.m, rsx_metal_backend.m; one
+       stand-in in rsx_live_draw.c):
+       (1) The window host writes the vblank of every frame it shows (the drawable's presented time) and the
+       refresh period measured between them into the shared control page; rsx_live_draw_display_vblank on
+       macOS returns them, so boot_main's existing display lock (fixes 53 / 102) runs the guest's vblank ticks
+       on the real refresh grid. Nothing shown for 0.25 s = no grid, the ticker free-runs.
+       (2) Alone that was worse (39% uneven with ticks on the vblank itself: frames then arrive right at a
+       deadline). The host also reports where in a refresh interval frames arrive (circular mean over about
+       half a second); the game shifts the grid it hands the ticker by a third of the error per report until
+       they arrive at the aim (PS3RECOMP_METAL_PACE_TARGET, default 0.55 of an interval, 0.05 when the host
+       holds frames for an even number of refreshes). Fixed phases measured at 60 fps: 0 -> 38.8% uneven,
+       0.25 -> 24.9, 0.5 -> 2.8, 0.75 -> 19.5; the steered version 3.6% at 0.55.
+       (3) The host holds each frame for its refresh: when the game publishes a whole number K >= 2 of
+       refreshes apart (60 fps on 120 Hz: 2), a frame is presented at the vblank K after the last one's
+       (presentDrawable:atTime:), not at the next one; a frame too late for that goes out at once and the
+       cadence restarts. K = 1 (120 fps on 120 Hz, or no whole ratio) is shown as it comes.
+     - Result (sandbox, 120 s runs, last 30 s): 60 fps at the Boletarian Palace start 99.6% of frames up
+       exactly 2 refreshes (0.4% uneven, most of that single long frames); at 2x 98.6% against 96.2% unpaced
+       in the same session. 120 fps in Stonefang 99.5% up 1 with or without it (already even when held). 120
+       fps mode at the Palace start, where the game makes about 74: it settles on 60 with 90.5% up 2.
+     - Cost: publish-to-screen delay at 60 fps 19.0 -> 24.0 ms on average (the hold), at 120 fps 23.9 -> 25.0.
+     - LD_VBLANK_LOCK=0 (clock), PS3RECOMP_METAL_PACE=0 (steering), HOST_WINDOW_PACE=0 (hold) turn the parts
+       off; PS3RECOMP_METAL_PACE_LOG=1 logs the steering.
+     - Not done: rates that do not divide the screen's (72, 90, unlimited) stay uneven -- that needs a variable
+       refresh the windowed layer does not get. Not checked: a 60 Hz external screen, moving the window to
+       another screen mid-game, by eye (all of this is from presented times), fights and menus.
 
 150. **Branch dispq-batch, opt-in: the SPU dispatcher takes the rest of a fetched queue line without re-reserving
      (DES_DISPQ_BATCH=1); 1-1 walk 24.7 -> 29.2 real pictures a second with frame skip off (2026-11-12, GTX 1070

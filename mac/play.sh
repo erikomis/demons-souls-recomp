@@ -16,7 +16,10 @@
 #   DES_FPS=60|30|unlimited|<31-240>   the frame rate (default 60, as PLAY.bat on a desktop: the port's
 #                     60 fps patch with 120 Hz vblanks and the guest clock at 200 %; 30 = the console's
 #                     own rate; unlimited = as fast as the Mac runs it, a number = that cap, both set
-#                     up as PLAY.bat does. Above 60 nothing paces the frames to the screen yet)
+#                     up as PLAY.bat does). The game's clock runs on the screen's refreshes and the
+#                     window holds each frame for its refresh (NOTES fix 303): a rate the Mac holds
+#                     that divides the screen's (60 or 120 on a 120 Hz screen) is shown evenly;
+#                     unlimited is not paced
 #   DES_MOVIES=0|1    the movies (MPEG-2) are decoded by FFmpeg, loaded at run time: on by default when
 #                     its libavcodec is found (Homebrew's, or PS3RECOMP_FFMPEG_AVCODEC / _AVUTIL), off
 #                     without it -- the opening movie never ends with no decoder. "brew install ffmpeg"
