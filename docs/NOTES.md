@@ -3470,6 +3470,14 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
       compare with the macOS build at the same spot, which applies the flags.
     - Also not applied on Windows: the texture LOD bias (SET_TEXTURE_FILTER bits 12:0). If it is added, it goes
       into sampler_key at bits 51-63 (anisotropy uses 48-50).
+207. **GPU power smoothing warms the boot too (LD_GPU_WARM, 2026-11-15):**
+    - Report: the same PC powered off at once in another title's port on this runtime, with LD_GPU_WARM on: the
+      warm thread had filled no gaps, because it only ran within 250 ms of a Present and the game was still
+      booting (no frame shown yet). Long loads that stop presenting had the same hole.
+    - Fix (rsx_live_draw.c ld_warm_thread): it runs whenever the renderer is up and the game window exists and is
+      not minimised, frames or not; a minimised or closed window still stops it unless frames are being presented.
+    - Checked (sandbox copy, LD_GPU_WARM=2 LD_GPU_TS=1, 45 s from start): the first one-second line already shows
+      853 ms of warm chunks, then 960-1000 ms in every second while the game itself used 0.1% of the GPU.
 - **Test runs vs the user's game:** a test helper's `taskkill /F /IM DemonsSoulsRecomp.exe` killed the
   user's PLAY_DEMONS_SOULS.bat session (exit code 1). Test runs now live in DemonsSouls\testenv (own
   gamedata/saves and hdd0/hdd1, cwd there), end only their own process, run with AUDIO_MUTE=1,
