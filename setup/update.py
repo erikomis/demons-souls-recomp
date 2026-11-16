@@ -41,7 +41,11 @@ def latest():
                                                'User-Agent': 'DemonsSoulsRecomp-updater'})
     with urllib.request.urlopen(req, timeout=30) as r:
         rel = json.load(r)
-    a = next(a for a in rel['assets'] if a['name'].startswith('DemonsSoulsRecomp-') and a['name'].endswith('.zip'))
+    # Releases have one download per platform: DemonsSoulsRecomp-<tag>-Windows.zip is this one (the Mac and Linux
+    # ZIPs are named DemonsSoulsRecomp_<tag>-macOS / -Linux so that older copies of this file, which take the first
+    # "DemonsSoulsRecomp-*.zip", never pick them). Before that there was one ZIP, DemonsSoulsRecomp-<tag>.zip.
+    ours = [a for a in rel['assets'] if a['name'].startswith('DemonsSoulsRecomp-') and a['name'].endswith('.zip')]
+    a = next((a for a in ours if a['name'].endswith('-Windows.zip')), None) or next(iter(ours))
     return rel['tag_name'], a, rel.get('body') or ''
 
 

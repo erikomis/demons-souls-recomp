@@ -1,4 +1,4 @@
-# Release download: the tools ZIP with DemonsSoulsLauncher.exe already in it.
+# Release downloads: one ZIP per platform (Windows with DemonsSoulsLauncher.exe already in it, macOS, Linux).
 # It holds no game code: the game is still built on each player's PC from their own disc (SETUP.bat).
 # The launcher is this repo's own program (project/launcher), built here so the exe carries no paths or
 # names from anyone's PC. Runs when a release is published, or by hand for an existing tag.
@@ -47,40 +47,64 @@ jobs:
           $deps
           if ($deps -match 'VCRUNTIME|MSVCP|api-ms-win-crt') { throw "the launcher links the dynamic C runtime" }
 
-      - name: Tools ZIP with the launcher in it
+      - name: One ZIP per platform (Windows with the launcher in it, macOS, Linux)
         shell: pwsh
         run: |
-          $zip = "DemonsSoulsRecomp-$env:TAG.zip"
-          git archive --format=zip "--prefix=DemonsSoulsRecomp-$env:TAG/" -o $zip HEAD   # HEAD = the tag checked out above
+          git archive --format=zip --prefix=src/ -o src.zip HEAD   # HEAD = the tag checked out above
           if ($LASTEXITCODE) { exit 1 }
           @'
-          # The launcher goes in, and every file is dated a day back: ZIP times have no time zone, and
-          # this runner's UTC times unpacked hours in the FUTURE west of UTC, which sent CMake into a
-          # re-run loop (ninja: "manifest 'build.ninja' still dirty after 100 tries").
+          # Three downloads, each only what its platform uses (the shared tools, patches, project and docs in all):
+          #   DemonsSoulsRecomp-<tag>-Windows.zip   no linux/ or mac/; DemonsSoulsLauncher.exe added
+          #   DemonsSoulsRecomp_<tag>-macOS.zip     no linux/ and no .bat files
+          #   DemonsSoulsRecomp_<tag>-Linux.zip     no mac/ (except mac/setup_steps.py, which linux/native/build.sh
+          #                                         runs) and no .bat files
+          # The launcher's "Check for updates" (setup/update.py) takes a "DemonsSoulsRecomp-*.zip"; older copies take
+          # the FIRST such name, so only the Windows ZIP may start that way (hence the "_" in the other two).
+          # Every file is dated a day back: ZIP times have no time zone, and this runner's UTC times unpacked hours
+          # in the FUTURE west of UTC, which sent CMake into a re-run loop ("build.ninja still dirty after 100 tries").
           import datetime, os, zipfile
           tag = os.environ['TAG']
-          name = 'DemonsSoulsRecomp-%s.zip' % tag
           when = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).timetuple()[:6]
-          src = zipfile.ZipFile(name)
-          entries = [(i, src.read(i)) for i in src.infolist()]
-          src.close()
-          entries.append((zipfile.ZipInfo('DemonsSoulsRecomp-%s/DemonsSoulsLauncher.exe' % tag),
-                          open('out/DemonsSoulsLauncher.exe', 'rb').read()))
-          # which release this is: the launcher shows it, and Check for updates compares it (setup/update.py)
-          entries.append((zipfile.ZipInfo('DemonsSoulsRecomp-%s/VERSION' % tag), (tag + '\n').encode()))
-          with zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED) as z:
-              for old, data in entries:
-                  i = zipfile.ZipInfo(old.filename, date_time=when)
-                  i.external_attr = old.external_attr      # keeps the Linux scripts executable
-                  i.compress_type = zipfile.ZIP_STORED if old.filename.endswith('/') else zipfile.ZIP_DEFLATED
-                  z.writestr(i, data)
-              names = z.namelist()
-          bad = [n for n in names if n.lower().endswith(('.elf', '.self', '.sprx', '.sdat', '.pam', '.dcx', '.iso', '.dkey'))]
-          assert not bad, bad
-          assert any(n.endswith('/DemonsSoulsLauncher.exe') for n in names)
-          print(len(names), 'files, dated', when)
-          '@ | Set-Content add_launcher.py
-          python add_launcher.py
+          src = zipfile.ZipFile('src.zip')
+          files = [(i.filename[len('src/'):], i, src.read(i)) for i in src.infolist() if not i.is_dir()]
+          launcher = open('out/DemonsSoulsLauncher.exe', 'rb').read()
+          def is_bat(p): return '/' not in p and p.lower().endswith('.bat')
+          plats = {
+              'Windows': ('DemonsSoulsRecomp-%s-Windows.zip' % tag,
+                          lambda p: not p.startswith(('linux/', 'mac/'))),
+              'macOS':   ('DemonsSoulsRecomp_%s-macOS.zip' % tag,
+                          lambda p: not p.startswith('linux/') and not is_bat(p)),
+              'Linux':   ('DemonsSoulsRecomp_%s-Linux.zip' % tag,
+                          lambda p: (not p.startswith('mac/') or p == 'mac/setup_steps.py') and not is_bat(p)),
+          }
+          for plat, (name, keep) in plats.items():
+              top = 'DemonsSoulsRecomp-%s-%s/' % (tag, plat)
+              out = [(rel, i.external_attr, data) for rel, i, data in files if keep(rel)]
+              if plat == 'Windows':
+                  out.append(('DemonsSoulsLauncher.exe', 0, launcher))
+              out.append(('VERSION', 0, (tag + '\n').encode()))   # the launcher shows it; updates compare it
+              with zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED) as z:
+                  for rel, attr, data in out:
+                      i = zipfile.ZipInfo(top + rel, date_time=when)
+                      i.external_attr = attr                      # keeps the Linux / Mac scripts executable
+                      i.compress_type = zipfile.ZIP_DEFLATED
+                      z.writestr(i, data)
+                  names = z.namelist()
+              bad = [n for n in names if n.lower().endswith(('.elf', '.self', '.sprx', '.sdat', '.pam', '.dcx', '.iso', '.dkey'))]
+              assert not bad, bad
+              rel = [n[len(top):] for n in names]
+              must = {'Windows': ['SETUP.bat', 'BUILD.bat', 'PLAY.bat', 'DemonsSoulsLauncher.exe', 'setup/update.py'],
+                      'macOS':   ['mac/install.sh', 'mac/play.sh', 'setup/setup.py'],
+                      'Linux':   ['linux/native/install.sh', 'linux/native/play.sh', 'linux/play.sh', 'linux/setup.sh',
+                                  'mac/setup_steps.py', 'setup/setup.py']}[plat]
+              missing = [m for m in must + ['patches/ps3recomp-local.patch', 'patches/lifted-code.patch', 'VERSION']
+                         if m not in rel]
+              assert not missing, (plat, missing)
+              wrong = {'Windows': ('linux/', 'mac/'), 'macOS': ('linux/',), 'Linux': ('mac/launcher',)}[plat]
+              assert not [r for r in rel if r.startswith(wrong)], plat
+              print('%-8s %-45s %5d files, dated %s' % (plat, name, len(names), when))
+          '@ | Set-Content platform_zips.py
+          python platform_zips.py
           if ($LASTEXITCODE) { exit 1 }
 
       - name: Attach to the release
@@ -88,5 +112,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload $env:TAG "DemonsSoulsRecomp-$env:TAG.zip" --clobber
+          gh release upload $env:TAG "DemonsSoulsRecomp-$env:TAG-Windows.zip" "DemonsSoulsRecomp_$env:TAG-macOS.zip" "DemonsSoulsRecomp_$env:TAG-Linux.zip" --clobber
           if ($LASTEXITCODE) { exit 1 }

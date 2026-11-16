@@ -16,7 +16,7 @@ continues where it stopped.
 
 Run from a checkout (python3 linux/native/installer.py, or linux/native/install.sh, which also gets Tk
 for Python if it is missing). Run on its own -- just this file -- it first clones the port (git) into the
-folder it shows, branch DES_SOURCES_BRANCH (default linux-native) of DES_SOURCES_URL.
+folder it shows, branch DES_SOURCES_BRANCH (default main) of DES_SOURCES_URL.
 """
 import os
 import re
@@ -30,7 +30,7 @@ import time
 
 REDUMP_PAGE = 'http://redump.org/disc/16199/'   # Demon's Souls (USA), BLUS-30443: its "Disc Key" line
 SOURCES_URL = os.environ.get('DES_SOURCES_URL', 'https://github.com/timboat/demons-souls-recomp')
-SOURCES_BRANCH = os.environ.get('DES_SOURCES_BRANCH', 'linux-native')
+SOURCES_BRANCH = os.environ.get('DES_SOURCES_BRANCH', 'main')
 BOX = 'des-build'
 NEED_GB = 30
 

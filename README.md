@@ -36,13 +36,16 @@ Hit a stutter or crash? Press **F8** when it happens and run `REPORT.bat` afterw
   Git, or Visual Studio 2022 (*Desktop development with C++*) + LLVM 17+ is used instead.
 - A plain folder path: no `[ ]` or `&`.
 
-**Linux / Steam Deck** and **macOS (Apple silicon):** see their install guides below
-([Linux](#linux--steam-deck), [macOS](#macos-apple-silicon)).
+**Each release has one download per system:** `DemonsSoulsRecomp-<version>-Windows.zip`,
+`DemonsSoulsRecomp_<version>-Linux.zip` (plus the Linux setup AppImage) and `DemonsSoulsRecomp_<version>-macOS.zip`,
+each with only what that system uses. **Linux / Steam Deck** and **macOS (Apple silicon):** see their install guides
+below ([Linux](#linux--steam-deck), [macOS](#macos-apple-silicon)).
 
 ## Build it (one time)
 
-1. Download the newest **[release](https://github.com/timboat/demons-souls-recomp/releases/latest)** ZIP (or
-   `git clone`) and unpack it, e.g. to `C:\Games\DemonsSouls`.
+1. Download **`DemonsSoulsRecomp-<version>-Windows.zip`** from the newest
+   **[release](https://github.com/timboat/demons-souls-recomp/releases/latest)** (or `git clone`) and unpack it,
+   e.g. to `C:\Games\DemonsSouls`.
 2. Start **`DemonsSoulsLauncher.exe`**, press **PLAY**, and answer **Yes** to run `SETUP.bat`.
 3. Give it your disc image: drag it into the window and press Enter. If it needs the disc key, SETUP opens
    Redump's page; copy the "Disc Key" line and paste it with **Ctrl+V**. **Enter** takes the suggested
@@ -67,8 +70,9 @@ The Windows build runs through Proton (Steam's compatibility layer), built on yo
 It plays on Ubuntu 24.04 and the Steam Deck; the Deck is not smooth yet and loads are slow. You need a
 Vulkan GPU driver, about **25 GB** free, and an internet connection for the first run.
 
-1. Download `DemonsSoulsRecomp-Setup-x86_64.AppImage`: GitHub → **Actions** → *Linux AppImage* → the newest
-   run → **Artifacts** (a zip with the AppImage inside). Make it executable (`chmod +x`, or right-click →
+1. Download `DemonsSoulsRecomp-Setup-x86_64.AppImage` from the newest
+   [release](https://github.com/timboat/demons-souls-recomp/releases/latest) (between releases: GitHub →
+   **Actions** → *Linux AppImage* → the newest run → **Artifacts**). Make it executable (`chmod +x`, or right-click →
    Properties → Permissions → *Is executable*). On a Steam Deck, do this in desktop mode.
 2. Run it. It asks for your disc image (a file picker, or drag the file in), then the disc key if needed,
    and runs the same six steps as SETUP.bat into `~/DemonsSoulsRecomp` (`DS_HOME=/other/folder` puts it
@@ -86,7 +90,8 @@ checkout** instead: install Python 3.10+, git, and clang + lld 17 or newer, then
 **Native Linux build (experimental):** the game as a Linux program drawn with Vulkan, with no Proton. On
 the Steam Deck five of the seven archstones hold 60 fps; the two heaviest spots (Boletarian Palace 1-1 and Latria's
 second archstone) run at 55-56, and Boletaria around 48 mid-fight ([frame rates](docs/LINUX_NATIVE.md#steam-deck-frame-rates)). Build it with
-`linux/native/install.sh` (a one-click installer window: your disc image, its disc key, then Install), and
+`linux/native/install.sh` from a `git clone` (or from the release's Linux ZIP; the launcher's Update
+button needs the clone) (a one-click installer window: your disc image, its disc key, then Install), and
 play with `python3 linux/native/launcher.py` (a launcher window) or `linux/native/play.sh`. So far it is tested on the Steam Deck only:
 [docs/LINUX_NATIVE.md](docs/LINUX_NATIVE.md).
 
@@ -98,7 +103,7 @@ You need about **14 GB** free.
 
 1. Install Apple's command-line tools (`xcode-select --install`), then with [Homebrew](https://brew.sh):
    `brew install cmake ninja sdl2 glslang spirv-cross ffmpeg python@3.12` (FFmpeg is for the movies).
-2. Get this repo (`git clone`, or the release ZIP) and, in its folder, run
+2. Get this repo (`git clone`, or the release's `DemonsSoulsRecomp_<version>-macOS.zip`) and, in its folder, run
    `DES_ISO="/path/to/Demon's Souls (USA).iso" mac/install.sh`. A Redump image also needs
    `DES_KEY=<32 hex digits or the .dkey file>`. It extracts the game, decrypts the EBOOT, recompiles and
    builds; after a failure or a quit, run it again and it continues where it stopped.

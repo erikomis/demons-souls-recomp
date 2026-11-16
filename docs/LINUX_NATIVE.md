@@ -61,7 +61,7 @@ run at 55-56 standing and walking; Boletaria drops to around 48 in a fight (abov
 ## Install (one click)
 
 ```sh
-git clone -b linux-native https://github.com/timboat/demons-souls-recomp
+git clone https://github.com/timboat/demons-souls-recomp
 demons-souls-recomp/linux/native/install.sh
 ```
 
