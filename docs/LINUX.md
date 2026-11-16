@@ -13,8 +13,8 @@ Windows, it takes **your own disc image** and builds the port on your PC.
 
 The port itself stays a Windows program (its renderer is Direct3D 12). On Linux it is built with the
 same compiler as on Windows and runs through **Proton** (the same layer Steam uses for Windows games),
-whose vkd3d-proton turns Direct3D 12 into Vulkan. A true native Linux build would need the renderer
-rewritten for Vulkan; that is not planned for now.
+whose vkd3d-proton turns Direct3D 12 into Vulkan. There is now also a **native Linux build** with its own
+Vulkan renderer and no Proton (faster on the Steam Deck): see [LINUX_NATIVE.md](LINUX_NATIVE.md).
 
 ## What you need
 

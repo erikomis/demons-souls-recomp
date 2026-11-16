@@ -10389,25 +10389,10 @@ index 89d54bf..d626d4a 100644
      return slot;
  }
 diff --git a/libs/system/cellSaveData.c b/libs/system/cellSaveData.c
-index 1fb1b12..7330f7b 100644
+index 1fb1b12..49b37b9 100644
 --- a/libs/system/cellSaveData.c
 +++ b/libs/system/cellSaveData.c
-@@ -30,6 +30,14 @@
- #ifdef st_ctime
- #  undef st_ctime
- #endif
-+/* A host stat's modification time in seconds, under the names each platform keeps after the undefs above. */
-+#ifdef _WIN32
-+#  define HOST_MTIME_SEC(st) ((st).st_mtime)
-+#elif defined(__APPLE__)
-+#  define HOST_MTIME_SEC(st) ((st).st_mtimespec.tv_sec)
-+#else
-+#  define HOST_MTIME_SEC(st) ((st).st_mtim.tv_sec)
-+#endif
- 
- #ifdef _WIN32
- #  include <windows.h>
-@@ -38,6 +46,7 @@
+@@ -38,6 +38,7 @@
  #  define HOST_MKDIR(p) _mkdir(p)
  #  define HOST_STAT     _stat64
  #  define HOST_STAT_T   struct __stat64
@@ -10415,7 +10400,7 @@ index 1fb1b12..7330f7b 100644
  #else
  #  include <unistd.h>
  #  include <dirent.h>
-@@ -45,6 +54,12 @@
+@@ -45,6 +46,12 @@
  #  define HOST_MKDIR(p) mkdir(p, 0755)
  #  define HOST_STAT     stat
  #  define HOST_STAT_T   struct stat
@@ -10428,7 +10413,7 @@ index 1fb1b12..7330f7b 100644
  #endif
  
  /* ---------------------------------------------------------------------------
-@@ -84,9 +99,12 @@ static void ensure_dirs(const char* path)
+@@ -84,9 +91,12 @@ static void ensure_dirs(const char* path)
      HOST_MKDIR(tmp);
  }
  
@@ -10441,7 +10426,7 @@ index 1fb1b12..7330f7b 100644
      snprintf(buf, buf_size, "%s/%s", s_save_root, dirName);
  #ifdef _WIN32
      for (char* p = buf; *p; p++) {
-@@ -137,6 +155,89 @@ static int dir_has_save(const char* path)
+@@ -137,6 +147,89 @@ static int dir_has_save(const char* path)
      return HOST_STAT(sfo, &st) == 0;
  }
  
@@ -10531,7 +10516,7 @@ index 1fb1b12..7330f7b 100644
  
  /* ---------------------------------------------------------------------------
   * Guest-callback marshalling
-@@ -1259,6 +1360,15 @@ s32 cellSaveDataAutoSave2(u32 version, const char* dirName,
+@@ -1259,6 +1352,15 @@ s32 cellSaveDataAutoSave2(u32 version, const char* dirName,
                             CellSaveDataFileCallback funcFile,
                             u32 container, void* userdata)
  {
@@ -10547,7 +10532,7 @@ index 1fb1b12..7330f7b 100644
      dirName = savedata_host_str(dirName);
      printf("[cellSaveData] AutoSave2(version=%u, dir='%s')\n",
             version, dirName ? dirName : "<null>");
-@@ -1276,7 +1386,7 @@ s32 cellSaveDataAutoSave2(u32 version, const char* dirName,
+@@ -1276,7 +1378,7 @@ s32 cellSaveDataAutoSave2(u32 version, const char* dirName,
       * carries the same defect for each of them. Fixing those needs list/file
       * marshalling that dispatch_func_stat does not do yet, so they are left
       * alone until a title actually reaches one. */
@@ -29804,7 +29789,7 @@ index 35052c6..f44e444 100644
  #define VMX_FUN(name, expr, flush_in, nanmode) \
  VMX_INL void name(VMX_D, VMX_B, uint32_t vscr) { const uint8_t* b = (const uint8_t*)b_; uint8_t r[16]; \
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb0..b538d1a 100644
+index a55afb0..a2ccff6 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -42,6 +42,11 @@
@@ -30209,20 +30194,25 @@ index a55afb0..b538d1a 100644
              cellGcm_rsx_process_fifo();
          }
          /* YDKJ_INJECT_Q3: the main thread polls q3 (load/state-complete) each frame but
-@@ -538,7 +750,11 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -538,7 +750,17 @@ static DWORD WINAPI vblank_ticker(LPVOID)
              if(++s_q3 % 8 == 0){ int r=sys_event_queue_inject(qid, 0x1234, 0, 0, 0);
                static int _n=0; if(_n++<12) fprintf(stderr,"[INJQ3] injected q%u event rc=%d\n",qid,r); } }
          if (rsx_ok) {
--            if (rsx_pump_messages() != 0) { rsx_ok = 0; }
 +            /* The window was closed (or SIGINT / SIGTERM, which SDL turns into the same quit event): end the game
 +             * the way the console's Quit Game does -- ps3_host_quit asks it to exit, lets a save in flight finish,
 +             * then exits. Rendering and this pump go on meanwhile, so the window keeps answering the desktop
 +             * (stopping both left a live game behind a dead window that the desktop offered to kill). */
++#ifdef _WIN32
++            /* Windows: the window procedure already armed rsx_exit_guard (a hard exit 3 s after the close), so
++             * asking the game to quit here would only start that work just before the kill: stop rendering. */
+             if (rsx_pump_messages() != 0) { rsx_ok = 0; }
++#else
 +            if (rsx_pump_messages() != 0) ps3_host_quit("window closed");
++#endif
              if (getenv("YDKJ_PACETRACE")) {
                  static ULONGLONG s_win=0; static int s_pf=0, s_pres=0; static ULONGLONG s_presms=0;
                  s_pf += fired; s_pres++;
-@@ -934,45 +1150,45 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,45 +1156,45 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -30297,7 +30287,7 @@ index a55afb0..b538d1a 100644
          } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
-@@ -1083,8 +1299,96 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
+@@ -1083,8 +1305,96 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
  }
  #endif
  
@@ -30394,7 +30384,7 @@ index a55afb0..b538d1a 100644
      /* <PPU ELF> [--username NAME] [--psnr host[:port]], flags in any order. */
      const char* elf = NULL;
      const char* username = NULL;
-@@ -1106,6 +1410,7 @@ int main(int argc, char** argv)
+@@ -1106,6 +1416,7 @@ int main(int argc, char** argv)
  
  #ifdef _WIN32
  #pragma comment(lib, "winmm.lib")
@@ -30402,7 +30392,7 @@ index a55afb0..b538d1a 100644
      timeBeginPeriod(1);   /* 1ms timer resolution: the default ~15.6ms granularity
                             * inflates every sub-15ms wait (the game's event polls,
                             * usleeps) and throttled the whole title. */
-@@ -1136,8 +1441,26 @@ int main(int argc, char** argv)
+@@ -1136,8 +1447,26 @@ int main(int argc, char** argv)
      /* Reserve the full 4 GB guest space; pages commit on first touch via the VEH. */
      AddVectoredExceptionHandler(1, guard_report_veh);  /* diagnose 0x80000001 silent deaths */
      AddVectoredExceptionHandler(1, vm_commit_veh);
@@ -30430,7 +30420,7 @@ index a55afb0..b538d1a 100644
  #else
      vm_base = (uint8_t*)calloc(1, 0xE0000000u);
      ppu_vm_size = 0xE0000000u;
-@@ -1242,7 +1565,8 @@ int main(int argc, char** argv)
+@@ -1242,7 +1571,8 @@ int main(int argc, char** argv)
  #ifdef _WIN32
      fprintf(stderr, "[boot] MAIN guest thread tid=%lu\n", (unsigned long)GetCurrentThreadId());
  #endif
