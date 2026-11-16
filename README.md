@@ -180,7 +180,7 @@ Saves go to `gamedata/`, and logs to `logs/`; they grow ~600 MB an hour, and the
 ### Boss rush mode
 
 *Game: Boss rush* in the launcher (or `DES_BOSS_RUSH=1 linux/play.sh`, or `DES_BOSS_RUSH=1 linux/native/play.sh` for
-the native Linux build; not on macOS yet). Make a new character:
+the native Linux build, `DES_BOSS_RUSH=1 mac/play.sh` on a Mac). Make a new character:
 you skip the tutorial and start in the Nexus in soul form, with 7,000 souls and every trader there. Boldwin also
 sells every weapon and shield, every armour piece and ring, every upgrade material, Turpentine and Firebombs,
 priced by tier: the best weapons 40,000-75,000, top armour sets 30,000-50,000, rings 5,000-50,000, and items normal
