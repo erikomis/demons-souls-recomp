@@ -102,6 +102,10 @@ for s in $steps; do
         say "build (cmake + ninja: port/build_mac)"
         need_venv
         [ -f "$DES_ROOT/port/.lifted" ] || fail "nothing lifted yet (port/recompiled): run the lift step first"
+        # A source update can change either patch without changing the build scripts.
+        # Apply it before compiling, just as setup/build.py does on Windows.
+        "$VPY" -u "$here/setup_steps.py" sync ||
+            fail "the generated sources need updating: run mac/rebuild.sh toolkit lift build"
         mkdir -p "$DES_ROOT/hdd0" "$DES_ROOT/hdd1" "$DES_ROOT/no_flash" "$DES_ROOT/logs"
         # DS_AVX2=OFF: on arm64 the SPU and VMX helpers take their exact scalar paths
         cmake -S "$DES_ROOT/project" -B "$DES_BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Fast -DDS_BOOT_HARNESS=ON -DDS_AVX2=OFF \

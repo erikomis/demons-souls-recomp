@@ -7,6 +7,7 @@ import { PICK_IDS, RebuildProgress } from "./progress";
 import { initSaves, refresh as refreshSaves, render as renderSaves } from "./saves";
 import { initUpdates, refreshUpdates, renderUpdates } from "./update";
 import { initLog, renderLog, showLog } from "./gamelog";
+import { initMods, refreshMods, renderMods } from "./mods";
 import { initTrophies, refreshTrophies, renderTrophies } from "./trophies";
 import { flashSaved, human } from "./ui";
 
@@ -20,6 +21,12 @@ export interface Settings {
   charName: string;
   skipIntro: boolean;
   windowSize: string;
+  windowMode: string;
+  display: string;
+  vsync: boolean;
+  resScale: string;
+  upscale: string;
+  gameWindowIcon: boolean;
   gameIcon: boolean;
   aa: string;
   sharpen: number;
@@ -28,6 +35,13 @@ export interface Settings {
   gamma: number;
   vibrance: number;
   contrast: number;
+  vignette: number;
+  grain: number;
+  lutPath: string;
+  lutStrength: number;
+  lutPreset: string;
+  mods: string[];
+  modsDump: boolean;
   inputMode: string;
   mouse: boolean;
   mouseSens: number;
@@ -183,6 +197,10 @@ function showView(view: string, tab?: string) {
   document.querySelectorAll<HTMLElement>(".nav").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
   document.querySelector("main")!.scrollTop = 0;
   if (view === "home") refreshStatus();
+  if (view === "graphics") {
+    refreshScreens();
+    refreshMods();
+  }
   if (view === "performance") refreshShaderCache();
   if (view === "game") {
     refreshGame();
@@ -380,6 +398,23 @@ function syncPreset() {
   $<HTMLSelectElement>("preset").value = currentPreset();
 }
 
+// ---- screens (PS3_DISPLAY) --------------------------------------------------------
+let screens: string[] = [];
+async function refreshScreens() {
+  screens = await invoke<string[]>("list_screens").catch(() => []);
+  fillScreens();
+}
+/** The main screen (the default), the connected ones, and the saved one when it is not
+ * connected now. */
+function fillScreens() {
+  const sel = $<HTMLSelectElement>("display");
+  sel.replaceChildren(new Option(t("settings.screenMain"), ""));
+  for (const n of screens) sel.append(new Option(n, n));
+  const cur = settings.display;
+  if (cur && !screens.includes(cur)) sel.append(new Option(t("settings.screenMissing", { name: cur }), cur));
+  sel.value = cur;
+}
+
 // ---- what the build supports ------------------------------------------------------
 /** A control whose variable the build does not read says so and is disabled:
  * `data-feature` names the variable, or several as A|B when any of them will do.
@@ -440,6 +475,14 @@ function bindSettings() {
   bindCheck("mouse-capture", "mouseCapture");
   bindCheck("rumble-on", "rumble");
   bindCheck("audio-mute", "audioMute");
+  bindCheck("vsync", "vsync");
+  bindCheck("game-window-icon", "gameWindowIcon");
+  bindCheck("mods-dump", "modsDump");
+  bindSelect("window-mode", "windowMode");
+  bindSelect("display", "display");
+  bindSelect("res-scale", "resScale");
+  bindSelect("upscale", "upscale");
+  bindSelect("lut-preset", "lutPreset");
   bindSelect("fps-rate", "fps");
   bindSelect("q-fps-rate", "fps");
   bindSelect("input-mode", "inputMode");
@@ -453,6 +496,28 @@ function bindSettings() {
   bindRange("gamma", "gamma", (v) => v.toFixed(2));
   bindRange("vibrance", "vibrance", (v) => (Math.abs(v) < 0.005 ? t("settings.off") : `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`));
   bindRange("contrast", "contrast", (v) => (Math.abs(v - 1) < 0.005 ? t("settings.off") : `${Math.round(v * 100)}%`));
+  const pct = (v: number) => (v > 0.005 ? `${Math.round(v * 100)}%` : t("settings.off"));
+  bindRange("vignette", "vignette", pct);
+  bindRange("grain", "grain", pct);
+  bindRange("lut-strength", "lutStrength", (v) => `${Math.round(v * 100)}%`);
+  const lutSync = () => {
+    $("lut-file").textContent = settings.lutPath ? tilde(settings.lutPath) : t("settings.lutNone");
+  };
+  syncers.push(lutSync);
+  lutSync();
+  $("lut-pick").addEventListener("click", async () => {
+    const p = await open({ title: t("settings.lut"), filters: [{ name: "PNG", extensions: ["png"] }] });
+    if (typeof p === "string") {
+      settings.lutPath = p;
+      syncAll();
+      persist();
+    }
+  });
+  $("lut-clear").addEventListener("click", () => {
+    settings.lutPath = "";
+    syncAll();
+    persist();
+  });
   bindRange("mouse-sens", "mouseSens", (v) => `${v.toFixed(2)}×`);
   bindRange("mouse-dz", "mouseDeadzone", (v) => String(v));
   bindRange("rumble-strength", "rumbleStrength", (v) => `${v}%`);
@@ -519,6 +584,12 @@ const DEFAULTS: Partial<Settings> = {
   movies: true,
   skipIntro: false,
   windowSize: "",
+  windowMode: "windowed",
+  display: "",
+  vsync: true,
+  resScale: "",
+  upscale: "",
+  gameWindowIcon: true,
   gameIcon: false,
   aa: "",
   sharpen: 0,
@@ -527,6 +598,13 @@ const DEFAULTS: Partial<Settings> = {
   gamma: 1,
   vibrance: 0,
   contrast: 1,
+  vignette: 0,
+  grain: 0,
+  lutPath: "",
+  lutStrength: 1,
+  lutPreset: "",
+  mods: [],
+  modsDump: false,
   inputMode: "both",
   mouse: true,
   mouseSens: 1,
@@ -554,6 +632,8 @@ function syncDependent() {
   $<HTMLInputElement>("gamma").disabled = !settings.gammaOverride;
   for (const id of ["mouse-sens", "mouse-invert", "mouse-invert-x", "mouse-dz", "mouse-capture"]) $<HTMLInputElement>(id).disabled = !settings.mouse;
   $<HTMLInputElement>("rumble-strength").disabled = !settings.rumble;
+  $<HTMLInputElement>("lut-strength").disabled = !settings.lutPath && !settings.lutPreset;
+  $<HTMLButtonElement>("lut-clear").disabled = !settings.lutPath;
   for (const id of ["ffmpeg-avcodec", "ffmpeg-avutil", "pick-avcodec", "pick-avutil"]) ($(id) as HTMLInputElement).disabled = !settings.movies;
   lockFeatures();
 }
@@ -596,6 +676,8 @@ function applyLang(l: Lang) {
   renderGame();
   renderControls();
   renderTrophies();
+  renderMods();
+  fillScreens();
   renderFeatures();
   renderSaves();
   renderReport();
@@ -1692,6 +1774,13 @@ async function main() {
   bindSettings();
   renderStepsPick();
   initControls();
+  initMods({
+    enabled: () => settings.mods ?? [],
+    setEnabled: (names) => {
+      settings.mods = names;
+      persist();
+    },
+  });
   initLog();
   initSaves({
     keep: () => settings.saveBackupsKeep ?? 10,

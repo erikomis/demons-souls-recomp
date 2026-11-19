@@ -108,7 +108,16 @@ Settings for `mac/play.sh` on its own, as environment variables:
 | `PS3_INPUT_MAP=<file>` | another key layout |
 | `PS3_INPUT_MODE=controller` or `keyboard` | only that input; the default takes both |
 | `DES_SIZE=<w>x<h>` | the window's size (default 1280x720) |
-| `DES_RES_SCALE=1.5`, `2`, `3` | the internal resolution: the game is drawn at that many times 1280x720 and scaled to the window (default 1; quarter steps from 1 to 4). An M2 Pro holds 60 fps at the Boletarian Palace start at 1x, 2x and 3x (NOTES fix 301). `PS3RECOMP_METAL_RES_SHADOWS=1` scales the shadow maps too |
+| `DES_RES_SCALE=1.5`, `2`, `3` | the internal resolution: the game is drawn at that many times 1280x720, and the picture reaches the window at that size too (the launcher's surfaces are made that large) (default 1; quarter steps from 1 to 4). An M2 Pro holds 60 fps at the Boletarian Palace start at 1x, 2x and 3x (NOTES fix 301). `PS3RECOMP_METAL_RES_SHADOWS=1` scales the shadow maps too |
+| `PS3_UPSCALE=metalfx` | MetalFX spatial upscaling (macOS 13+) of the game's picture to the window's pixel size instead of a bilinear stretch; without MetalFX, one log line and the plain stretch |
+| `PS3_WINDOW_MODE=windowed`, `fullscreen`, `borderless` | how the window opens: macOS full screen (a Space of its own), or covering the screen in place with the menu bar and Dock hidden. Cmd+F leaves or enters it |
+| `PS3_DISPLAY=<n>` or `<name>` | the screen: 1 = the one with the menu bar, or (part of) its name as System Settings shows it |
+| `PS3_VSYNC=0` | show a frame as soon as it is copied (may tear); the game's pacing does not change |
+| `PS3_WINDOW_ICON=<file>` or `none` | the Dock icon |
+| `PS3_LUT=<png>`, `PS3_LUT_PRESET=warm`, `cool`, `film`, `vivid`, `PS3_LUT_STRENGTH=<0-1>` | a colour LUT (ReShade's PNG strip) or a built-in look over the picture |
+| `PS3_VIGNETTE=<0-1>`, `PS3_GRAIN=<0-1>` | vignette and film grain |
+| `PS3_MODS=<pack>,<pack>`, `PS3_MODS_DIR=<dir>`, `PS3_MODS_DUMP=<dir>` | texture replacement packs (folders of PNGs named by texture key, in `PS3_MODS_DIR`); `PS3_MODS_DUMP` writes the game's colour textures with their keys, to make one |
+| `DES_BUILD=<dir>` | play another build folder than `port/build_mac` |
 | `DES_LOG_DIR=<dir>` | where the two logs go (default `logs/`) |
 | `DES_GAME=game_remaster` | the PC Remaster mod's copy instead of `game/` |
 | `DES_BOSS_RUSH=1` | boss rush mode: its own copy of the game (`game_bossrush`, hard links) and its own saves (`bossrush/`); `DES_BR_SOULS=2`, `3`, `5` or `10` multiplies the souls (the launcher picks 2x unless you choose) |
@@ -151,6 +160,24 @@ In menus the mouse is a pointer: moving it over an item selects it, left click c
 back, the wheel moves the cursor, and the side buttons or PageUp / PageDown are L1 / R1. While the keyboard or
 mouse is what you used last, the game's button icons show the keys and mouse buttons (`textures/kbm`, drawn
 from your copy of the game by `mac/rebuild.sh build`). `LD_TEX_KBM=0` keeps the PS3 icons.
+
+## Native regression tests
+
+After the toolkit step, run `mac/test.sh`. It builds and runs the synthetic CPU/runtime
+regressions in `port/build_mac_tests`; no game files or saves are needed. The command checks
+that the SDK matches this checkout's runtime patch before testing it. Python 3.10 or newer,
+CMake, Ninja and the Xcode command-line tools are required.
+
+An existing patched SDK can be selected with `PS3RECOMP_DIR=/path/to/ps3recomp mac/test.sh`.
+CTest filters are forwarded, for example `mac/test.sh -R 'spu_elf|spu_job'`.
+For memory and undefined-behavior checks, use a separate build:
+
+```sh
+DES_TEST_SANITIZERS=ON DES_TEST_BUILD=port/build_mac_tests_sanitized mac/test.sh
+```
+
+These tests cover manufactured SPU images, job descriptors, synchronization and import
+failures. Gameplay stability, frame times and rendering still need testing with the game.
 
 ## Mac-specific fixes so far (in `patches/`)
 

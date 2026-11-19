@@ -3793,6 +3793,38 @@ Don't run ps3recomp tools with `-P`/`-I`: they import sibling modules from their
        refresh the windowed layer does not get. Not checked: a 60 Hz external screen, moving the window to
        another screen mid-game, by eye (all of this is from presented times), fights and menus.
 
+304. **macOS: the internal resolution reaches the window; MetalFX, window modes, colour LUTs, texture packs; SPU,
+     SPURS and Metal fixes; native regression tests (2026-11-19, branch macos-perf-2 merged over fixes 300-303):**
+     - Internal resolution on the window launcher: fix 300 renders at the scale, but the host surfaces were asked
+       for at the guest's size (host_attach(s_width, s_height)), and tools/host_window makes what it is asked for,
+       so the present point-sampled 2560x1440 down to 1280x720 and the window stretched that. The display surfaces
+       (host surfaces, the backend's own drawable, the headless target) are now res_px() of the guest's size, with
+       the scale from rsx_draw_engine_res_scale_wanted(), so the picture leaves at the internal size. The scale
+       itself is fix 300's (per target, shadow maps at the guest's size, ZPASS and readback at guest pixels).
+     - The polygon offset's slope term is multiplied by the target's scale at encode: it multiplies the depth
+       change per pixel, which a target rs times finer has rs times less of (decals and other offset geometry
+       kept half their offset at 2x).
+     - PS3_UPSCALE=metalfx (MetalFX spatial, macOS 13+, loaded at run time), PS3_WINDOW_MODE / PS3_DISPLAY /
+       PS3_VSYNC / PS3_WINDOW_ICON (tools/host_window and the backend's window), PS3_LUT / PS3_LUT_PRESET /
+       PS3_LUT_STRENGTH / PS3_VIGNETTE / PS3_GRAIN (a present pass built only when one is on), PS3_MODS /
+       PS3_MODS_DIR / PS3_MODS_DUMP (texture packs through the backend's image_load / image_save; Mac and Linux).
+       The keyboard / mouse icons (fix 134) are separate and unchanged. mac/launcher drives them and now passes
+       DES_RES_SCALE (and clears LD_RES_SCALE) instead of its own variable.
+     - SPU / SPURS: WAIT_SIGNAL consumes its bit under the lock-line lock and rechecks through an epoch, so a
+       signal between the test and the sleep is not slept through; the taskset shutdown and parked registries
+       grow and are read under a lock (a fixed 64-entry table stopped tracking later tasksets), keeping fix 120's
+       exported memo and fix 114's commit-interest marks; SPU ELF and SPURS job descriptors are bounds-checked
+       before anything is copied; csflt / cuflt in NEON with the SPU's truncation and extended range; ordinary
+       lifted programs unwind on stop. ds_guest_setjmp.cpp's stack grows instead of dropping the oldest entry.
+     - Metal: pipeline compiles drain before teardown and a released pipeline is never published by a late
+       compile; samplers indexed by key instead of a linear scan (1M lookups 43 -> 2.6 ms).
+     - mac/test.sh: 30 synthetic regressions (no game files), optionally under ASan / UBSan.
+     - Checked: mac/test.sh 29 of 30 (test_subchannels embeds the SDK's engine suite, whose check "a write between
+       the sampled blocks is noticed by the full hash (0 frames)" fails on main alone since fix 302's 16-frame full
+       hash); the SDK's test_metal_poly_offset 276 / 276 (it needed stubs for fix 134's icons and the report
+       store to link); mac/launcher cargo test 70 / 70. Not checked on this merge: the game itself (2x on the
+       window, MetalFX at 2x, texture packs, long sessions).
+
 150. **Branch dispq-batch, opt-in: the SPU dispatcher takes the rest of a fetched queue line without re-reserving
      (DES_DISPQ_BATCH=1); 1-1 walk 24.7 -> 29.2 real pictures a second with frame skip off (2026-11-12, GTX 1070
      Max-Q laptop, i7-8750H):**
