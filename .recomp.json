@@ -1,0 +1,25 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Demon's Souls",
+  "system": "PS3",
+  "type": "recomp",
+  "original": {
+    "serial": "BLUS30443"
+  },
+  "status": "playable",
+  "targets": [
+    "Windows",
+    "Linux",
+    "macOS",
+    "Steam Deck",
+    "Android"
+  ],
+  "toolchain": "ps3recomp",
+  "notes": "The upstream README reports the whole game playable on desktop platforms; Android is experimental. Online play is not available. This fork has no releases of its own.",
+  "links": [
+    {
+      "label": "Upstream project",
+      "url": "https://github.com/timboat/demons-souls-recomp"
+    }
+  ]
+}

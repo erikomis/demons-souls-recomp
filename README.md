@@ -10,6 +10,12 @@ on a PS3 runtime and a Direct3D 12 renderer. It is not an emulator.
 **Community Discord:** [discord.gg/gTvrZZ75G](https://discord.gg/gTvrZZ75G) for questions, setup help and
 screenshots. Bug reports with a REPORT.bat zip are best as a GitHub issue. Thanks to MrSuS60 for having me in their Discord, and a special thanks to zackage7 who has been an immense help in testing and polishing.
 
+## Project metadata
+
+Project metadata for directories and tools lives in [`.recomp.json`](.recomp.json),
+following the [recomp.board specification](https://recomp.fyi/spec). Keep it
+updated when the project status, supported game version or target platforms change.
+
 ## Status
 
 - **The whole game is playable**, with sound, music and movies, on keyboard + mouse or an Xbox controller.
